@@ -71442,16 +71442,3 @@ window.addEventListener("resize", () => {
 
 const ifcLoader = new IFCLoader();
 ifcLoader.setWasmPath("../");
-
-const asdf = 'https://www.dl.dropboxusercontent.com/s/g78evr7nq39omm7/479l7.ifc';
-
-window.addEventListener('DOMContentLoaded', (event) => {
-
-  fetch(asdf)
-  .then(res => res.blob()) // Gets the response and returns it as a blob
-  .then(blob => {
-    let objectURL = URL.createObjectURL(blob);
-    ifcLoader.load(objectURL, (geometry) => scene.add(geometry));
-});
-
-});
