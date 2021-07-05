@@ -80,3 +80,5 @@ window.addEventListener("resize", () => {
 
 const ifcLoader = new IFCLoader();
 ifcLoader.setWasmPath("../");
+
+ifcLoader.load("../models/01.ifc", (result)=> scene.add(result));
