@@ -71444,3 +71444,14 @@ const ifcLoader = new IFCLoader();
 ifcLoader.setWasmPath("../");
 
 ifcLoader.load("../models/01.ifc", (result)=> scene.add(result));
+
+const input = document.getElementById("file-input");
+input.addEventListener(
+  "change",
+  (changed) => {
+    var ifcURL = URL.createObjectURL(changed.target.files[0]);
+    console.log(ifcURL);
+    ifcLoader.load(ifcURL, (geometry) => scene.add(geometry));
+  },
+  false
+);
