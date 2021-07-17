@@ -77,17 +77,11 @@ window.addEventListener("resize", () => {
 });
 
 //Sets up the IFC loading
-
 const ifcLoader = new IFCLoader();
-ifcLoader.setWasmPath("../");
+ifcLoader.ifcManager.setWasmPath("../");
+const url = "https://raw.githubusercontent.com/IFCjs/test-ifc-files/main/Revit/TESTED_Simple_project_01.ifc";
 
-const input = document.getElementById("file-input");
-input.addEventListener(
-  "change",
-  (changed) => {
-    var ifcURL = URL.createObjectURL(changed.target.files[0]);
-    console.log(ifcURL);
-    ifcLoader.load(ifcURL, (geometry) => scene.add(geometry));
-  },
-  false
-);
+function loadIfc(url) {
+  console.log("Hei");
+  ifcLoader.load(url, (ifcModel) => scene.add(ifcModel.mesh));
+}

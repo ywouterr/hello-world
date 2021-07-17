@@ -19,6 +19,6 @@
     "@rollup/plugin-node-resolve": "^11.2.1",
     "dat.gui": "^0.7.7",
     "three": "^0.128.0",
-    "web-ifc-three": "0.0.25"
+    "web-ifc-three": "0.0.32"
   }
 }
