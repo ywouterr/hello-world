@@ -68014,13 +68014,8 @@ window.addEventListener("resize", () => {
 });
 
 //Sets up the IFC loading
+
 const ifcLoader = new IFCLoader();
 ifcLoader.ifcManager.setWasmPath("../");
 
-window.addEventListener("message", (event) => {
-  console.log(event);
-  const blob = new Blob([event.data], {type: 'text/plain'});
-  const file = new File([blob], "ifc");
-  const ifcUrl = URL.createObjectURL(file);
-  ifcLoader.load(ifcUrl, (ifcModel) => scene.add(ifcModel.mesh));
-}, false);
+ifcLoader.load("../ifc/01.ifc", (result)=> scene.add(result.mesh));
