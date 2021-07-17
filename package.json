@@ -4,8 +4,8 @@
   "description": "-",
   "main": "app.js",
   "scripts": {
-    "build": "rollup -c scenes/introduction/rollup.config.js",
-    "watch": "rollup -w -c scenes/introduction/rollup.config.js"
+    "build": "rollup -c scenes/helloworld/rollup.config.js",
+    "watch": "rollup -w -c scenes/helloworld/rollup.config.js"
   },
   "author": "",
   "license": "ISC",
