@@ -71480,28 +71480,46 @@ ifcLoader.load("../../IFC/01.ifc", (ifcModel) => {
 
 
 // Sets up optimized picking
-ifcLoader.ifcManager.setupThreeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast);
+ifcLoader.ifcManager.setupThreeMeshBVH(
+    computeBoundsTree,
+    disposeBoundsTree,
+    acceleratedRaycast);
 
-//Sets up picking
 const raycaster = new Raycaster();
 raycaster.firstHitOnly = true;
 const mouse = new Vector2();
 
 function cast(event) {
+
+    // Computes the position of the mouse on the screen
     const bounds = threeCanvas.getBoundingClientRect();
-    mouse.x = ((event.clientX - bounds.left) / (bounds.right - bounds.left)) * 2 - 1;
-    mouse.y = -((event.clientY - bounds.top) / (bounds.bottom - bounds.top)) * 2 + 1;
+
+    const x1 = event.clientX - bounds.left;
+    const x2 = bounds.right - bounds.left;
+    mouse.x = (x1 / x2) * 2 - 1;
+
+    const y1 = event.clientY - bounds.top;
+    const y2 = bounds.bottom - bounds.top;
+    mouse.y = -(y1 / y2) * 2 + 1;
+
+    // Places it on the camera pointing to the mouse
     raycaster.setFromCamera(mouse, camera);
+
+    // Casts a ray
     return raycaster.intersectObjects(ifcModels);
 }
+
+const output = document.getElementById("id-output");
 
 function pick(event) {
     const found = cast(event)[0];
     if (found) {
         const index = found.faceIndex;
         const geometry = found.object.geometry;
-        const id = ifcLoader.ifcManager.getExpressId(geometry, index);
+        const ifc = ifcLoader.ifcManager;
+        const id = ifc.getExpressId(geometry, index);
         console.log(id);
+        output.innerHTML = id;
     }
 }
 
