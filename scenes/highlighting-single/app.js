@@ -126,7 +126,7 @@ function cast(event) {
 const mat = new MeshLambertMaterial({
     transparent: true,
     opacity: 0.6,
-    color: 0xff00ff,
+    color: 0xff88ff,
     depthTest: false
 })
 
