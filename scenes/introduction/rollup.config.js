@@ -1,11 +1,11 @@
 import resolve from '@rollup/plugin-node-resolve';
 
 export default {
-  input: 'scenes/introduction/app.js',
+  input: 'app.js',
   output: [
     {
       format: 'esm',
-      file: 'scenes/introduction/bundle.js'
+      file: 'bundle.js'
     },
   ],
   plugins: [
