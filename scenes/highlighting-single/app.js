@@ -130,27 +130,32 @@ const mat = new MeshLambertMaterial({
     depthTest: false
 })
 
+let currentModel = -1;
+const ifc = ifcLoader.ifcManager;
+
 function pick(event) {
     const found = cast(event)[0];
     if (found) {
 
         // Gets model ID
-        const modelID = found.object.modelID;
+        currentModel = found.object.modelID;
 
         // Gets Express ID
         const index = found.faceIndex;
         const geometry = found.object.geometry;
-        const ifc = ifcLoader.ifcManager;
         const id = ifc.getExpressId(geometry, index);
 
         // Creates subset
         ifcLoader.ifcManager.createSubset({
-            modelID: modelID,
+            modelID: currentModel,
             ids: [id],
             material: mat,
             scene: scene,
             removePrevious: true
         })
+    } else {
+        // Remove previous highlight
+        ifc.removeSubset(currentModel, scene, mat);
     }
 }
 
