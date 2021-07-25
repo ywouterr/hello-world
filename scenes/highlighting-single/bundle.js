@@ -71517,15 +71517,16 @@ const mat = new MeshLambertMaterial({
     depthTest: false
 });
 
-let currentModel = -1;
 const ifc = ifcLoader.ifcManager;
+// Reference to the previous selection
+let highlightModel = { id: - 1};
 
-function pick(event) {
+function highlight(event, material, model) {
     const found = cast(event)[0];
     if (found) {
 
         // Gets model ID
-        currentModel = found.object.modelID;
+        model.id = found.object.modelID;
 
         // Gets Express ID
         const index = found.faceIndex;
@@ -71534,16 +71535,16 @@ function pick(event) {
 
         // Creates subset
         ifcLoader.ifcManager.createSubset({
-            modelID: currentModel,
+            modelID: model.id,
             ids: [id],
-            material: mat,
+            material: material,
             scene: scene,
             removePrevious: true
         });
     } else {
         // Remove previous highlight
-        ifc.removeSubset(currentModel, scene, mat);
+        ifc.removeSubset(model.id, scene, material);
     }
 }
 
-window.onmousemove = pick;
+window.onmousemove = (event) => highlight(event, mat, highlightModel);
