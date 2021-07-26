@@ -88,6 +88,11 @@ const ifcLoader = new IFCLoader();
 ifcLoader.ifcManager.setWasmPath("../../");
 ifcLoader.load("../../IFC/01.ifc", (ifcModel) => {
     ifcModels.push(ifcModel.mesh);
+    ifcModel.mesh.material = new MeshLambertMaterial({
+        transparent: true,
+        opacity: 0.1,
+        color: 0x77aaff
+    });
     scene.add(ifcModel.mesh)
 });
 
@@ -122,25 +127,9 @@ function cast(event) {
     return raycaster.intersectObjects(ifcModels);
 }
 
-// Creates subset materials
-const preselectMat = new MeshLambertMaterial({
-    transparent: true,
-    opacity: 0.6,
-    color: 0xff88ff,
-    depthTest: false
-})
-
-const selectMat = new MeshLambertMaterial({
-    transparent: true,
-    opacity: 0.6,
-    color: 0xff00ff,
-    depthTest: false
-})
-
 const ifc = ifcLoader.ifcManager;
-// References to the previous selections
-const highlightModel = { id: - 1};
-const selectModel = { id: - 1};
+// Reference to the previous selection
+let highlightModel = { id: - 1};
 
 function highlight(event, material, model) {
     const found = cast(event)[0];
@@ -168,7 +157,6 @@ function highlight(event, material, model) {
     }
 }
 
-window.onmousemove = (event) => highlight(event, preselectMat, highlightModel);
 
-window.ondblclick = (event) => highlight(event, selectMat, selectModel);
+window.onmousemove = (event) => highlight(event, undefined, highlightModel);
 
