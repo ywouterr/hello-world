@@ -71472,8 +71472,8 @@ window.addEventListener("resize", () => {
 //Sets up the IFC loading
 const ifcModels = [];
 const ifcLoader = new IFCLoader();
-ifcLoader.ifcManager.setWasmPath("../../");
-ifcLoader.load("../../IFC/01.ifc", (ifcModel) => {
+ifcLoader.ifcManager.setWasmPath("../../../");
+ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
     ifcModels.push(ifcModel.mesh);
     scene.add(ifcModel.mesh);
 });
@@ -71526,8 +71526,8 @@ const selectMat = new MeshLambertMaterial({
 
 const ifc = ifcLoader.ifcManager;
 // References to the previous selections
-let highlightModel = { id: - 1};
-let selectModel = { id: - 1};
+const highlightModel = { id: - 1};
+const selectModel = { id: - 1};
 
 function highlight(event, material, model) {
     const found = cast(event)[0];

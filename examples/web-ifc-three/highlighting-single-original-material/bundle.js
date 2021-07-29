@@ -71472,8 +71472,8 @@ window.addEventListener("resize", () => {
 //Sets up the IFC loading
 const ifcModels = [];
 const ifcLoader = new IFCLoader();
-ifcLoader.ifcManager.setWasmPath("../../");
-ifcLoader.load("../../IFC/01.ifc", (ifcModel) => {
+ifcLoader.ifcManager.setWasmPath("../../../");
+ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
     ifcModels.push(ifcModel.mesh);
     ifcModel.mesh.material = new MeshLambertMaterial({
         transparent: true,
@@ -71513,14 +71513,6 @@ function cast(event) {
     // Casts a ray
     return raycaster.intersectObjects(ifcModels);
 }
-
-// Creates subset material
-new MeshLambertMaterial({
-    transparent: true,
-    opacity: 0.6,
-    color: 0xff88ff,
-    depthTest: false
-});
 
 const ifc = ifcLoader.ifcManager;
 // Reference to the previous selection
