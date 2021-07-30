@@ -15,13 +15,13 @@ async function LoadFile(filename)
 }
 
 async function OpenIfc(filename) {
-    const ifcData = fs.readFileSync(filename).toString();
+    const ifcData = fs.readFileSync(filename);
     await ifcapi.Init();
     return ifcapi.OpenModel(ifcData);
 }
 
 function GetAllItems(modelID, excludeGeometry = true) {
-    const allItems = {}
+    const allItems = {};
     const lines = ifcapi.GetAllLines(modelID);
     getAllItemsFromLines(modelID, lines, allItems, excludeGeometry);
     return allItems;
@@ -30,13 +30,18 @@ function GetAllItems(modelID, excludeGeometry = true) {
 function getAllItemsFromLines(modelID, lines, allItems, excludeGeometry) {
     for(let i = 1; i <= lines.size(); i++) {
         try {
-            const itemID = lines.get(i);
-            const props = ifcapi.GetLine(modelID, itemID);
-            props.type = props.__proto__.constructor.name;
-            if(excludeGeometry && geometryTypes.has(props.type)) continue;
-            allItems[itemID] = props;
+            saveProperties(modelID, lines, allItems, excludeGeometry, i);
         } catch (e) {
             console.log(e);
         }
+    }
+}
+
+function saveProperties(modelID, lines, allItems, excludeGeometry, index) {
+    const itemID = lines.get(index);
+    const props = ifcapi.GetLine(modelID, itemID);
+    props.type = props.__proto__.constructor.name;
+    if(!excludeGeometry || !geometryTypes.has(props.type)) {
+        allItems[itemID] = props;
     }
 }
