@@ -81,7 +81,7 @@ const ifcLoader = new IFCLoader();
   input.addEventListener(
     "change",
     (changed) => {
-      var ifcURL = URL.createObjectURL(changed.target.files[0]);
+      const ifcURL = URL.createObjectURL(changed.target.files[0]);
       ifcLoader.load(ifcURL, (ifcModel) => scene.add(ifcModel.mesh));
     },
     false
