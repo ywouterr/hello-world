@@ -36267,7 +36267,7 @@ var IfcAPI = class {
  var WasmPath = "";
 
 const ifcapi = new IfcAPI();
-ifcapi.SetWasmPath("../../../");
+ifcapi.SetWasmPath("../../../../");
 
 const button = document.getElementById("file-opener-button");
 button.addEventListener('click', () => input.click());

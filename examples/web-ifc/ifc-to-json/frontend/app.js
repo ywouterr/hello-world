@@ -2,7 +2,7 @@ import {geometryTypes} from "./geometry-types";
 import {IfcAPI} from "web-ifc/web-ifc-api";
 
 const ifcapi = new IfcAPI();
-ifcapi.SetWasmPath("../../../");
+ifcapi.SetWasmPath("../../../../");
 
 const button = document.getElementById("file-opener-button");
 button.addEventListener('click', () => input.click());
