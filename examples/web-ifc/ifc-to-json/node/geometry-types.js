@@ -1,4 +1,4 @@
-export const geometryTypes = new Set([
+module.exports.geometryTypes = new Set([
     "IfcCartesianPoint",
     "IfcArbitraryClosedProfileDef",
     "IfcDirection",

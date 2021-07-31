@@ -4,7 +4,7 @@ const fs = require("fs");
 
 const ifcapi = new WebIFC.IfcAPI();
 
-LoadFile("../../../IFC/01.ifc");
+LoadFile("../../../IFC/02.ifc");
 
 async function LoadFile(filename)
 {
