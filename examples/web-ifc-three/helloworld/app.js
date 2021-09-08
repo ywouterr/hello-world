@@ -76,6 +76,7 @@ window.addEventListener("resize", () => {
 
 //Sets up the IFC loading
 const ifcLoader = new IFCLoader();
+ifcLoader.ifcManager.setWasmPath("../../../");
 
   const input = document.getElementById("file-input");
   input.addEventListener(

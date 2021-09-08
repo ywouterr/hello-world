@@ -3,7 +3,7 @@
  * Copyright 2010-2021 Three.js Authors
  * SPDX-License-Identifier: MIT
  */
-const REVISION = '128';
+const REVISION = '132';
 const MOUSE = { LEFT: 0, MIDDLE: 1, RIGHT: 2, ROTATE: 0, DOLLY: 1, PAN: 2 };
 const TOUCH = { ROTATE: 0, PAN: 1, DOLLY_PAN: 2, DOLLY_ROTATE: 3 };
 const CullFaceNone = 0;
@@ -89,6 +89,7 @@ const RGBFormat = 1022;
 const RGBAFormat = 1023;
 const LuminanceFormat = 1024;
 const LuminanceAlphaFormat = 1025;
+const RGBEFormat = RGBAFormat;
 const DepthFormat = 1026;
 const DepthStencilFormat = 1027;
 const RedFormat = 1028;
@@ -139,8 +140,6 @@ const SRGB8_ALPHA8_ASTC_10x10_Format = 37851;
 const SRGB8_ALPHA8_ASTC_12x10_Format = 37852;
 const SRGB8_ALPHA8_ASTC_12x12_Format = 37853;
 const TrianglesDrawMode = 0;
-const TriangleStripDrawMode = 1;
-const TriangleFanDrawMode = 2;
 const LinearEncoding = 3000;
 const sRGBEncoding = 3001;
 const GammaEncoding = 3007;
@@ -298,12 +297,6 @@ function lerp( x, y, t ) {
 function isPowerOfTwo( value ) {
 
 	return ( value & ( value - 1 ) ) === 0 && value !== 0;
-
-}
-
-function ceilPowerOfTwo( value ) {
-
-	return Math.pow( 2, Math.ceil( Math.log( value ) / Math.LN2 ) );
 
 }
 
@@ -1242,6 +1235,8 @@ class Texture extends EventDispatcher {
 
 		this.version = 0;
 		this.onUpdate = null;
+
+		this.isRenderTargetTexture = false;
 
 	}
 
@@ -2202,7 +2197,7 @@ Vector4.prototype.isVector4 = true;
 */
 class WebGLRenderTarget extends EventDispatcher {
 
-	constructor( width, height, options ) {
+	constructor( width, height, options = {} ) {
 
 		super();
 
@@ -2215,16 +2210,13 @@ class WebGLRenderTarget extends EventDispatcher {
 
 		this.viewport = new Vector4( 0, 0, width, height );
 
-		options = options || {};
-
 		this.texture = new Texture( undefined, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.format, options.type, options.anisotropy, options.encoding );
+		this.texture.isRenderTargetTexture = true;
 
-		this.texture.image = {};
-		this.texture.image.width = width;
-		this.texture.image.height = height;
-		this.texture.image.depth = 1;
+		this.texture.image = { width: width, height: height, depth: 1 };
 
 		this.texture.generateMipmaps = options.generateMipmaps !== undefined ? options.generateMipmaps : false;
+		this.texture.internalFormat = options.internalFormat !== undefined ? options.internalFormat : null;
 		this.texture.minFilter = options.minFilter !== undefined ? options.minFilter : LinearFilter;
 
 		this.depthBuffer = options.depthBuffer !== undefined ? options.depthBuffer : true;
@@ -2281,6 +2273,7 @@ class WebGLRenderTarget extends EventDispatcher {
 		this.viewport.copy( source.viewport );
 
 		this.texture = source.texture.clone();
+		this.texture.image = { ...this.texture.image }; // See #20328.
 
 		this.depthBuffer = source.depthBuffer;
 		this.stencilBuffer = source.stencilBuffer;
@@ -2299,6 +2292,30 @@ class WebGLRenderTarget extends EventDispatcher {
 }
 
 WebGLRenderTarget.prototype.isWebGLRenderTarget = true;
+
+class WebGLMultisampleRenderTarget extends WebGLRenderTarget {
+
+	constructor( width, height, options ) {
+
+		super( width, height, options );
+
+		this.samples = 4;
+
+	}
+
+	copy( source ) {
+
+		super.copy.call( this, source );
+
+		this.samples = source.samples;
+
+		return this;
+
+	}
+
+}
+
+WebGLMultisampleRenderTarget.prototype.isWebGLMultisampleRenderTarget = true;
 
 class Quaternion {
 
@@ -3831,25 +3848,11 @@ class Box3 {
 
 	getCenter( target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Box3: .getCenter() target is now required' );
-			target = new Vector3();
-
-		}
-
 		return this.isEmpty() ? target.set( 0, 0, 0 ) : target.addVectors( this.min, this.max ).multiplyScalar( 0.5 );
 
 	}
 
 	getSize( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Box3: .getSize() target is now required' );
-			target = new Vector3();
-
-		}
 
 		return this.isEmpty() ? target.set( 0, 0, 0 ) : target.subVectors( this.max, this.min );
 
@@ -3938,13 +3941,6 @@ class Box3 {
 
 		// This can potentially have a divide by zero if the box
 		// has a size dimension of 0.
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Box3: .getParameter() target is now required' );
-			target = new Vector3();
-
-		}
 
 		return target.set(
 			( point.x - this.min.x ) / ( this.max.x - this.min.x ),
@@ -4075,13 +4071,6 @@ class Box3 {
 
 	clampPoint( point, target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Box3: .clampPoint() target is now required' );
-			target = new Vector3();
-
-		}
-
 		return target.copy( point ).clamp( this.min, this.max );
 
 	}
@@ -4095,13 +4084,6 @@ class Box3 {
 	}
 
 	getBoundingSphere( target ) {
-
-		if ( target === undefined ) {
-
-			console.error( 'THREE.Box3: .getBoundingSphere() target is now required' );
-			//target = new Sphere(); // removed to avoid cyclic dependency
-
-		}
 
 		this.getCenter( target.center );
 
@@ -4341,13 +4323,6 @@ class Sphere {
 
 		const deltaLengthSq = this.center.distanceToSquared( point );
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Sphere: .clampPoint() target is now required' );
-			target = new Vector3();
-
-		}
-
 		target.copy( point );
 
 		if ( deltaLengthSq > ( this.radius * this.radius ) ) {
@@ -4362,13 +4337,6 @@ class Sphere {
 	}
 
 	getBoundingBox( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Sphere: .getBoundingBox() target is now required' );
-			target = new Box3();
-
-		}
 
 		if ( this.isEmpty() ) {
 
@@ -4497,13 +4465,6 @@ class Ray {
 
 	at( t, target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Ray: .at() target is now required' );
-			target = new Vector3();
-
-		}
-
 		return target.copy( this.direction ).multiplyScalar( t ).add( this.origin );
 
 	}
@@ -4525,13 +4486,6 @@ class Ray {
 	}
 
 	closestPointToPoint( point, target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Ray: .closestPointToPoint() target is now required' );
-			target = new Vector3();
-
-		}
 
 		target.subVectors( point, this.origin );
 
@@ -5639,13 +5593,13 @@ class Matrix4 {
 
 	}
 
-	makeShear( x, y, z ) {
+	makeShear( xy, xz, yx, yz, zx, zy ) {
 
 		this.set(
 
-			1, y, z, 0,
-			x, 1, z, 0,
-			x, y, 1, 0,
+			1, yx, zx, 0,
+			xy, 1, zy, 0,
+			xz, yz, 1, 0,
 			0, 0, 0, 1
 
 		);
@@ -5914,12 +5868,12 @@ class Euler {
 
 	}
 
-	set( x, y, z, order ) {
+	set( x, y, z, order = this._order ) {
 
 		this._x = x;
 		this._y = y;
 		this._z = z;
-		this._order = order || this._order;
+		this._order = order;
 
 		this._onChangeCallback();
 
@@ -5946,7 +5900,7 @@ class Euler {
 
 	}
 
-	setFromRotationMatrix( m, order, update ) {
+	setFromRotationMatrix( m, order = this._order, update = true ) {
 
 		// assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)
 
@@ -5954,8 +5908,6 @@ class Euler {
 		const m11 = te[ 0 ], m12 = te[ 4 ], m13 = te[ 8 ];
 		const m21 = te[ 1 ], m22 = te[ 5 ], m23 = te[ 9 ];
 		const m31 = te[ 2 ], m32 = te[ 6 ], m33 = te[ 10 ];
-
-		order = order || this._order;
 
 		switch ( order ) {
 
@@ -6075,7 +6027,7 @@ class Euler {
 
 		this._order = order;
 
-		if ( update !== false ) this._onChangeCallback();
+		if ( update === true ) this._onChangeCallback();
 
 		return this;
 
@@ -6089,9 +6041,9 @@ class Euler {
 
 	}
 
-	setFromVector3( v, order ) {
+	setFromVector3( v, order = this._order ) {
 
-		return this.set( v.x, v.y, v.z, order || this._order );
+		return this.set( v.x, v.y, v.z, order );
 
 	}
 
@@ -6220,18 +6172,18 @@ class Layers {
 
 let _object3DId = 0;
 
-const _v1$4 = new /*@__PURE__*/ Vector3();
-const _q1 = new /*@__PURE__*/ Quaternion();
-const _m1$1 = new /*@__PURE__*/ Matrix4();
-const _target = new /*@__PURE__*/ Vector3();
+const _v1$4 = /*@__PURE__*/ new Vector3();
+const _q1 = /*@__PURE__*/ new Quaternion();
+const _m1$1 = /*@__PURE__*/ new Matrix4();
+const _target = /*@__PURE__*/ new Vector3();
 
-const _position$3 = new /*@__PURE__*/ Vector3();
-const _scale$2 = new /*@__PURE__*/ Vector3();
-const _quaternion$2 = new /*@__PURE__*/ Quaternion();
+const _position$3 = /*@__PURE__*/ new Vector3();
+const _scale$2 = /*@__PURE__*/ new Vector3();
+const _quaternion$2 = /*@__PURE__*/ new Quaternion();
 
-const _xAxis = new /*@__PURE__*/ Vector3( 1, 0, 0 );
-const _yAxis = new /*@__PURE__*/ Vector3( 0, 1, 0 );
-const _zAxis = new /*@__PURE__*/ Vector3( 0, 0, 1 );
+const _xAxis = /*@__PURE__*/ new Vector3( 1, 0, 0 );
+const _yAxis = /*@__PURE__*/ new Vector3( 0, 1, 0 );
+const _zAxis = /*@__PURE__*/ new Vector3( 0, 0, 1 );
 
 const _addedEvent = { type: 'added' };
 const _removedEvent = { type: 'removed' };
@@ -6578,6 +6530,20 @@ class Object3D extends EventDispatcher {
 
 	}
 
+	removeFromParent() {
+
+		const parent = this.parent;
+
+		if ( parent !== null ) {
+
+			parent.remove( this );
+
+		}
+
+		return this;
+
+	}
+
 	clear() {
 
 		for ( let i = 0; i < this.children.length; i ++ ) {
@@ -6658,13 +6624,6 @@ class Object3D extends EventDispatcher {
 
 	getWorldPosition( target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Object3D: .getWorldPosition() target is now required' );
-			target = new Vector3();
-
-		}
-
 		this.updateWorldMatrix( true, false );
 
 		return target.setFromMatrixPosition( this.matrixWorld );
@@ -6672,13 +6631,6 @@ class Object3D extends EventDispatcher {
 	}
 
 	getWorldQuaternion( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Object3D: .getWorldQuaternion() target is now required' );
-			target = new Quaternion();
-
-		}
 
 		this.updateWorldMatrix( true, false );
 
@@ -6690,13 +6642,6 @@ class Object3D extends EventDispatcher {
 
 	getWorldScale( target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Object3D: .getWorldScale() target is now required' );
-			target = new Vector3();
-
-		}
-
 		this.updateWorldMatrix( true, false );
 
 		this.matrixWorld.decompose( _position$3, _quaternion$2, target );
@@ -6706,13 +6651,6 @@ class Object3D extends EventDispatcher {
 	}
 
 	getWorldDirection( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Object3D: .getWorldDirection() target is now required' );
-			target = new Vector3();
-
-		}
 
 		this.updateWorldMatrix( true, false );
 
@@ -6924,7 +6862,29 @@ class Object3D extends EventDispatcher {
 
 		}
 
-		if ( this.isMesh || this.isLine || this.isPoints ) {
+		if ( this.isScene ) {
+
+			if ( this.background ) {
+
+				if ( this.background.isColor ) {
+
+					object.background = this.background.toJSON();
+
+				} else if ( this.background.isTexture ) {
+
+					object.background = this.background.toJSON( meta ).uuid;
+
+				}
+
+			}
+
+			if ( this.environment && this.environment.isTexture ) {
+
+				object.environment = this.environment.toJSON( meta ).uuid;
+
+			}
+
+		} else if ( this.isMesh || this.isLine || this.isPoints ) {
 
 			object.geometry = serialize( meta.geometries, this.geometry );
 
@@ -7121,228 +7081,6 @@ Object3D.DefaultMatrixAutoUpdate = true;
 
 Object3D.prototype.isObject3D = true;
 
-const _vector1 = /*@__PURE__*/ new Vector3();
-const _vector2$1 = /*@__PURE__*/ new Vector3();
-const _normalMatrix = /*@__PURE__*/ new Matrix3();
-
-class Plane {
-
-	constructor( normal = new Vector3( 1, 0, 0 ), constant = 0 ) {
-
-		// normal is assumed to be normalized
-
-		this.normal = normal;
-		this.constant = constant;
-
-	}
-
-	set( normal, constant ) {
-
-		this.normal.copy( normal );
-		this.constant = constant;
-
-		return this;
-
-	}
-
-	setComponents( x, y, z, w ) {
-
-		this.normal.set( x, y, z );
-		this.constant = w;
-
-		return this;
-
-	}
-
-	setFromNormalAndCoplanarPoint( normal, point ) {
-
-		this.normal.copy( normal );
-		this.constant = - point.dot( this.normal );
-
-		return this;
-
-	}
-
-	setFromCoplanarPoints( a, b, c ) {
-
-		const normal = _vector1.subVectors( c, b ).cross( _vector2$1.subVectors( a, b ) ).normalize();
-
-		// Q: should an error be thrown if normal is zero (e.g. degenerate plane)?
-
-		this.setFromNormalAndCoplanarPoint( normal, a );
-
-		return this;
-
-	}
-
-	copy( plane ) {
-
-		this.normal.copy( plane.normal );
-		this.constant = plane.constant;
-
-		return this;
-
-	}
-
-	normalize() {
-
-		// Note: will lead to a divide by zero if the plane is invalid.
-
-		const inverseNormalLength = 1.0 / this.normal.length();
-		this.normal.multiplyScalar( inverseNormalLength );
-		this.constant *= inverseNormalLength;
-
-		return this;
-
-	}
-
-	negate() {
-
-		this.constant *= - 1;
-		this.normal.negate();
-
-		return this;
-
-	}
-
-	distanceToPoint( point ) {
-
-		return this.normal.dot( point ) + this.constant;
-
-	}
-
-	distanceToSphere( sphere ) {
-
-		return this.distanceToPoint( sphere.center ) - sphere.radius;
-
-	}
-
-	projectPoint( point, target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Plane: .projectPoint() target is now required' );
-			target = new Vector3();
-
-		}
-
-		return target.copy( this.normal ).multiplyScalar( - this.distanceToPoint( point ) ).add( point );
-
-	}
-
-	intersectLine( line, target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Plane: .intersectLine() target is now required' );
-			target = new Vector3();
-
-		}
-
-		const direction = line.delta( _vector1 );
-
-		const denominator = this.normal.dot( direction );
-
-		if ( denominator === 0 ) {
-
-			// line is coplanar, return origin
-			if ( this.distanceToPoint( line.start ) === 0 ) {
-
-				return target.copy( line.start );
-
-			}
-
-			// Unsure if this is the correct method to handle this case.
-			return null;
-
-		}
-
-		const t = - ( line.start.dot( this.normal ) + this.constant ) / denominator;
-
-		if ( t < 0 || t > 1 ) {
-
-			return null;
-
-		}
-
-		return target.copy( direction ).multiplyScalar( t ).add( line.start );
-
-	}
-
-	intersectsLine( line ) {
-
-		// Note: this tests if a line intersects the plane, not whether it (or its end-points) are coplanar with it.
-
-		const startSign = this.distanceToPoint( line.start );
-		const endSign = this.distanceToPoint( line.end );
-
-		return ( startSign < 0 && endSign > 0 ) || ( endSign < 0 && startSign > 0 );
-
-	}
-
-	intersectsBox( box ) {
-
-		return box.intersectsPlane( this );
-
-	}
-
-	intersectsSphere( sphere ) {
-
-		return sphere.intersectsPlane( this );
-
-	}
-
-	coplanarPoint( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Plane: .coplanarPoint() target is now required' );
-			target = new Vector3();
-
-		}
-
-		return target.copy( this.normal ).multiplyScalar( - this.constant );
-
-	}
-
-	applyMatrix4( matrix, optionalNormalMatrix ) {
-
-		const normalMatrix = optionalNormalMatrix || _normalMatrix.getNormalMatrix( matrix );
-
-		const referencePoint = this.coplanarPoint( _vector1 ).applyMatrix4( matrix );
-
-		const normal = this.normal.applyMatrix3( normalMatrix ).normalize();
-
-		this.constant = - referencePoint.dot( normal );
-
-		return this;
-
-	}
-
-	translate( offset ) {
-
-		this.constant -= offset.dot( this.normal );
-
-		return this;
-
-	}
-
-	equals( plane ) {
-
-		return plane.normal.equals( this.normal ) && ( plane.constant === this.constant );
-
-	}
-
-	clone() {
-
-		return new this.constructor().copy( this );
-
-	}
-
-}
-
-Plane.prototype.isPlane = true;
-
 const _v0$1 = /*@__PURE__*/ new Vector3();
 const _v1$3 = /*@__PURE__*/ new Vector3();
 const _v2$2 = /*@__PURE__*/ new Vector3();
@@ -7366,13 +7104,6 @@ class Triangle {
 	}
 
 	static getNormal( a, b, c, target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Triangle: .getNormal() target is now required' );
-			target = new Vector3();
-
-		}
 
 		target.subVectors( c, b );
 		_v0$1.subVectors( a, b );
@@ -7404,13 +7135,6 @@ class Triangle {
 		const dot12 = _v1$3.dot( _v2$2 );
 
 		const denom = ( dot00 * dot11 - dot01 * dot01 );
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Triangle: .getBarycoord() target is now required' );
-			target = new Vector3();
-
-		}
 
 		// collinear or singular triangle
 		if ( denom === 0 ) {
@@ -7508,13 +7232,6 @@ class Triangle {
 
 	getMidpoint( target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Triangle: .getMidpoint() target is now required' );
-			target = new Vector3();
-
-		}
-
 		return target.addVectors( this.a, this.b ).add( this.c ).multiplyScalar( 1 / 3 );
 
 	}
@@ -7526,13 +7243,6 @@ class Triangle {
 	}
 
 	getPlane( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Triangle: .getPlane() target is now required' );
-			target = new Plane();
-
-		}
 
 		return target.setFromCoplanarPoints( this.a, this.b, this.c );
 
@@ -7569,13 +7279,6 @@ class Triangle {
 	}
 
 	closestPointToPoint( p, target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Triangle: .closestPointToPoint() target is now required' );
-			target = new Vector3();
-
-		}
 
 		const a = this.a, b = this.b, c = this.c;
 		let v, w;
@@ -7666,91 +7369,109 @@ class Triangle {
 
 let materialId = 0;
 
-function Material() {
+class Material extends EventDispatcher {
 
-	Object.defineProperty( this, 'id', { value: materialId ++ } );
+	constructor() {
 
-	this.uuid = generateUUID();
+		super();
 
-	this.name = '';
-	this.type = 'Material';
+		Object.defineProperty( this, 'id', { value: materialId ++ } );
 
-	this.fog = true;
+		this.uuid = generateUUID();
 
-	this.blending = NormalBlending;
-	this.side = FrontSide;
-	this.vertexColors = false;
+		this.name = '';
+		this.type = 'Material';
 
-	this.opacity = 1;
-	this.transparent = false;
+		this.fog = true;
 
-	this.blendSrc = SrcAlphaFactor;
-	this.blendDst = OneMinusSrcAlphaFactor;
-	this.blendEquation = AddEquation;
-	this.blendSrcAlpha = null;
-	this.blendDstAlpha = null;
-	this.blendEquationAlpha = null;
+		this.blending = NormalBlending;
+		this.side = FrontSide;
+		this.vertexColors = false;
 
-	this.depthFunc = LessEqualDepth;
-	this.depthTest = true;
-	this.depthWrite = true;
+		this.opacity = 1;
+		this.format = RGBAFormat;
+		this.transparent = false;
 
-	this.stencilWriteMask = 0xff;
-	this.stencilFunc = AlwaysStencilFunc;
-	this.stencilRef = 0;
-	this.stencilFuncMask = 0xff;
-	this.stencilFail = KeepStencilOp;
-	this.stencilZFail = KeepStencilOp;
-	this.stencilZPass = KeepStencilOp;
-	this.stencilWrite = false;
+		this.blendSrc = SrcAlphaFactor;
+		this.blendDst = OneMinusSrcAlphaFactor;
+		this.blendEquation = AddEquation;
+		this.blendSrcAlpha = null;
+		this.blendDstAlpha = null;
+		this.blendEquationAlpha = null;
 
-	this.clippingPlanes = null;
-	this.clipIntersection = false;
-	this.clipShadows = false;
+		this.depthFunc = LessEqualDepth;
+		this.depthTest = true;
+		this.depthWrite = true;
 
-	this.shadowSide = null;
+		this.stencilWriteMask = 0xff;
+		this.stencilFunc = AlwaysStencilFunc;
+		this.stencilRef = 0;
+		this.stencilFuncMask = 0xff;
+		this.stencilFail = KeepStencilOp;
+		this.stencilZFail = KeepStencilOp;
+		this.stencilZPass = KeepStencilOp;
+		this.stencilWrite = false;
 
-	this.colorWrite = true;
+		this.clippingPlanes = null;
+		this.clipIntersection = false;
+		this.clipShadows = false;
 
-	this.precision = null; // override the renderer's default precision for this material
+		this.shadowSide = null;
 
-	this.polygonOffset = false;
-	this.polygonOffsetFactor = 0;
-	this.polygonOffsetUnits = 0;
+		this.colorWrite = true;
 
-	this.dithering = false;
+		this.precision = null; // override the renderer's default precision for this material
 
-	this.alphaTest = 0;
-	this.alphaToCoverage = false;
-	this.premultipliedAlpha = false;
+		this.polygonOffset = false;
+		this.polygonOffsetFactor = 0;
+		this.polygonOffsetUnits = 0;
 
-	this.visible = true;
+		this.dithering = false;
 
-	this.toneMapped = true;
+		this.alphaToCoverage = false;
+		this.premultipliedAlpha = false;
 
-	this.userData = {};
+		this.visible = true;
 
-	this.version = 0;
+		this.toneMapped = true;
 
-}
+		this.userData = {};
 
-Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), {
+		this.version = 0;
 
-	constructor: Material,
+		this._alphaTest = 0;
 
-	isMaterial: true,
+	}
 
-	onBuild: function ( /* shaderobject, renderer */ ) {},
+	get alphaTest() {
 
-	onBeforeCompile: function ( /* shaderobject, renderer */ ) {},
+		return this._alphaTest;
 
-	customProgramCacheKey: function () {
+	}
+
+	set alphaTest( value ) {
+
+		if ( this._alphaTest > 0 !== value > 0 ) {
+
+			this.version ++;
+
+		}
+
+		this._alphaTest = value;
+
+	}
+
+	onBuild( /* shaderobject, renderer */ ) {}
+
+	onBeforeCompile( /* shaderobject, renderer */ ) {}
+
+	customProgramCacheKey() {
 
 		return this.onBeforeCompile.toString();
 
-	},
+	}
 
-	setValues: function ( values ) {
+	setValues( values ) {
 
 		if ( values === undefined ) return;
 
@@ -7799,9 +7520,9 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 
 		}
 
-	},
+	}
 
-	toJSON: function ( meta ) {
+	toJSON( meta ) {
 
 		const isRoot = ( meta === undefined || typeof meta === 'string' );
 
@@ -7833,11 +7554,13 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 		if ( this.roughness !== undefined ) data.roughness = this.roughness;
 		if ( this.metalness !== undefined ) data.metalness = this.metalness;
 
-		if ( this.sheen && this.sheen.isColor ) data.sheen = this.sheen.getHex();
+		if ( this.sheenTint && this.sheenTint.isColor ) data.sheenTint = this.sheenTint.getHex();
 		if ( this.emissive && this.emissive.isColor ) data.emissive = this.emissive.getHex();
 		if ( this.emissiveIntensity && this.emissiveIntensity !== 1 ) data.emissiveIntensity = this.emissiveIntensity;
 
 		if ( this.specular && this.specular.isColor ) data.specular = this.specular.getHex();
+		if ( this.specularIntensity !== undefined ) data.specularIntensity = this.specularIntensity;
+		if ( this.specularTint && this.specularTint.isColor ) data.specularTint = this.specularTint.getHex();
 		if ( this.shininess !== undefined ) data.shininess = this.shininess;
 		if ( this.clearcoat !== undefined ) data.clearcoat = this.clearcoat;
 		if ( this.clearcoatRoughness !== undefined ) data.clearcoatRoughness = this.clearcoatRoughness;
@@ -7907,6 +7630,8 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 
 		if ( this.emissiveMap && this.emissiveMap.isTexture ) data.emissiveMap = this.emissiveMap.toJSON( meta ).uuid;
 		if ( this.specularMap && this.specularMap.isTexture ) data.specularMap = this.specularMap.toJSON( meta ).uuid;
+		if ( this.specularIntensityMap && this.specularIntensityMap.isTexture ) data.specularIntensityMap = this.specularIntensityMap.toJSON( meta ).uuid;
+		if ( this.specularTintMap && this.specularTintMap.isTexture ) data.specularTintMap = this.specularTintMap.toJSON( meta ).uuid;
 
 		if ( this.envMap && this.envMap.isTexture ) {
 
@@ -7926,6 +7651,13 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 
 		}
 
+		if ( this.transmission !== undefined ) data.transmission = this.transmission;
+		if ( this.transmissionMap && this.transmissionMap.isTexture ) data.transmissionMap = this.transmissionMap.toJSON( meta ).uuid;
+		if ( this.thickness !== undefined ) data.thickness = this.thickness;
+		if ( this.thicknessMap && this.thicknessMap.isTexture ) data.thicknessMap = this.thicknessMap.toJSON( meta ).uuid;
+		if ( this.attenuationDistance !== undefined ) data.attenuationDistance = this.attenuationDistance;
+		if ( this.attenuationTint !== undefined ) data.attenuationTint = this.attenuationTint.getHex();
+
 		if ( this.size !== undefined ) data.size = this.size;
 		if ( this.shadowSide !== null ) data.shadowSide = this.shadowSide;
 		if ( this.sizeAttenuation !== undefined ) data.sizeAttenuation = this.sizeAttenuation;
@@ -7935,6 +7667,7 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 		if ( this.vertexColors ) data.vertexColors = true;
 
 		if ( this.opacity < 1 ) data.opacity = this.opacity;
+		if ( this.format !== RGBAFormat ) data.format = this.format;
 		if ( this.transparent === true ) data.transparent = this.transparent;
 
 		data.depthFunc = this.depthFunc;
@@ -7974,10 +7707,6 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 		if ( this.wireframeLinecap !== 'round' ) data.wireframeLinecap = this.wireframeLinecap;
 		if ( this.wireframeLinejoin !== 'round' ) data.wireframeLinejoin = this.wireframeLinejoin;
 
-		if ( this.morphTargets === true ) data.morphTargets = true;
-		if ( this.morphNormals === true ) data.morphNormals = true;
-		if ( this.skinning === true ) data.skinning = true;
-
 		if ( this.flatShading === true ) data.flatShading = this.flatShading;
 
 		if ( this.visible === false ) data.visible = false;
@@ -8016,15 +7745,15 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 
 		return data;
 
-	},
+	}
 
-	clone: function () {
+	clone() {
 
 		return new this.constructor().copy( this );
 
-	},
+	}
 
-	copy: function ( source ) {
+	copy( source ) {
 
 		this.name = source.name;
 
@@ -8035,6 +7764,7 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 		this.vertexColors = source.vertexColors;
 
 		this.opacity = source.opacity;
+		this.format = source.format;
 		this.transparent = source.transparent;
 
 		this.blendSrc = source.blendSrc;
@@ -8101,25 +7831,23 @@ Material.prototype = Object.assign( Object.create( EventDispatcher.prototype ), 
 
 		return this;
 
-	},
+	}
 
-	dispose: function () {
+	dispose() {
 
 		this.dispatchEvent( { type: 'dispose' } );
 
 	}
 
-} );
-
-Object.defineProperty( Material.prototype, 'needsUpdate', {
-
-	set: function ( value ) {
+	set needsUpdate( value ) {
 
 		if ( value === true ) this.version ++;
 
 	}
 
-} );
+}
+
+Material.prototype.isMaterial = true;
 
 const _colorKeywords = { 'aliceblue': 0xF0F8FF, 'antiquewhite': 0xFAEBD7, 'aqua': 0x00FFFF, 'aquamarine': 0x7FFFD4, 'azure': 0xF0FFFF,
 	'beige': 0xF5F5DC, 'bisque': 0xFFE4C4, 'black': 0x000000, 'blanchedalmond': 0xFFEBCD, 'blue': 0x0000FF, 'blueviolet': 0x8A2BE2,
@@ -8509,13 +8237,6 @@ class Color {
 
 		// h,s,l ranges are in 0.0 - 1.0
 
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Color: .getHSL() target is now required' );
-			target = { h: 0, s: 0, l: 0 };
-
-		}
-
 		const r = this.r, g = this.g, b = this.b;
 
 		const max = Math.max( r, g, b );
@@ -8755,9 +8476,6 @@ Color.prototype.b = 1;
  *
  *  wireframe: <boolean>,
  *  wireframeLinewidth: <float>,
- *
- *  skinning: <bool>,
- *  morphTargets: <bool>
  * }
  */
 
@@ -8793,9 +8511,6 @@ class MeshBasicMaterial extends Material {
 		this.wireframeLinecap = 'round';
 		this.wireframeLinejoin = 'round';
 
-		this.skinning = false;
-		this.morphTargets = false;
-
 		this.setValues( parameters );
 
 	}
@@ -8828,9 +8543,6 @@ class MeshBasicMaterial extends Material {
 		this.wireframeLinecap = source.wireframeLinecap;
 		this.wireframeLinejoin = source.wireframeLinejoin;
 
-		this.skinning = source.skinning;
-		this.morphTargets = source.morphTargets;
-
 		return this;
 
 	}
@@ -8839,8 +8551,8 @@ class MeshBasicMaterial extends Material {
 
 MeshBasicMaterial.prototype.isMeshBasicMaterial = true;
 
-const _vector$9 = new /*@__PURE__*/ Vector3();
-const _vector2 = new /*@__PURE__*/ Vector2();
+const _vector$9 = /*@__PURE__*/ new Vector3();
+const _vector2$1 = /*@__PURE__*/ new Vector2();
 
 class BufferAttribute {
 
@@ -8864,9 +8576,9 @@ class BufferAttribute {
 
 		this.version = 0;
 
-		this.onUploadCallback = function () {};
-
 	}
+
+	onUploadCallback() {}
 
 	set needsUpdate( value ) {
 
@@ -9029,10 +8741,10 @@ class BufferAttribute {
 
 			for ( let i = 0, l = this.count; i < l; i ++ ) {
 
-				_vector2.fromBufferAttribute( this, i );
-				_vector2.applyMatrix3( m );
+				_vector2$1.fromBufferAttribute( this, i );
+				_vector2$1.applyMatrix3( m );
 
-				this.setXY( i, _vector2.x, _vector2.y );
+				this.setXY( i, _vector2$1.x, _vector2$1.y );
 
 			}
 
@@ -9290,12 +9002,12 @@ function arrayMax( array ) {
 
 let _id = 0;
 
-const _m1 = new /*@__PURE__*/ Matrix4();
-const _obj = new /*@__PURE__*/ Object3D();
-const _offset = new /*@__PURE__*/ Vector3();
-const _box$1 = new /*@__PURE__*/ Box3();
-const _boxMorphTargets = new /*@__PURE__*/ Box3();
-const _vector$8 = new /*@__PURE__*/ Vector3();
+const _m1 = /*@__PURE__*/ new Matrix4();
+const _obj = /*@__PURE__*/ new Object3D();
+const _offset = /*@__PURE__*/ new Vector3();
+const _box$1 = /*@__PURE__*/ new Box3();
+const _boxMorphTargets = /*@__PURE__*/ new Box3();
+const _vector$8 = /*@__PURE__*/ new Vector3();
 
 class BufferGeometry extends EventDispatcher {
 
@@ -9447,6 +9159,16 @@ class BufferGeometry extends EventDispatcher {
 			this.computeBoundingSphere();
 
 		}
+
+		return this;
+
+	}
+
+	applyQuaternion( q ) {
+
+		_m1.makeRotationFromQuaternion( q );
+
+		this.applyMatrix4( _m1 );
 
 		return this;
 
@@ -9732,12 +9454,6 @@ class BufferGeometry extends EventDispatcher {
 			}
 
 		}
-
-	}
-
-	computeFaceNormals() {
-
-		// backwards compatibility
 
 	}
 
@@ -10075,7 +9791,15 @@ class BufferGeometry extends EventDispatcher {
 
 			for ( let i = 0, l = indices.length; i < l; i ++ ) {
 
-				index = indices[ i ] * itemSize;
+				if ( attribute.isInterleavedBufferAttribute ) {
+
+					index = indices[ i ] * attribute.data.stride + attribute.offset;
+
+				} else {
+
+					index = indices[ i ] * itemSize;
+
+				}
 
 				for ( let j = 0; j < itemSize; j ++ ) {
 
@@ -10731,7 +10455,7 @@ function checkBufferGeometryIntersection( object, material, raycaster, ray, posi
 
 	const morphInfluences = object.morphTargetInfluences;
 
-	if ( material.morphTargets && morphPosition && morphInfluences ) {
+	if ( morphPosition && morphInfluences ) {
 
 		_morphA.set( 0, 0, 0 );
 		_morphB.set( 0, 0, 0 );
@@ -10770,7 +10494,7 @@ function checkBufferGeometryIntersection( object, material, raycaster, ray, posi
 
 	}
 
-	if ( object.isSkinnedMesh && material.skinning ) {
+	if ( object.isSkinnedMesh ) {
 
 		object.boneTransform( a, _vA$1 );
 		object.boneTransform( b, _vB$1 );
@@ -10977,6 +10701,12 @@ class BoxGeometry extends BufferGeometry {
 
 	}
 
+	static fromJSON( data ) {
+
+		return new BoxGeometry( data.width, data.height, data.depth, data.widthSegments, data.heightSegments, data.depthSegments );
+
+	}
+
 }
 
 /**
@@ -11059,11 +10789,7 @@ var default_fragment = "void main() {\n\tgl_FragColor = vec4( 1.0, 0.0, 0.0, 1.0
  *  wireframe: <boolean>,
  *  wireframeLinewidth: <float>,
  *
- *  lights: <bool>,
- *
- *  skinning: <bool>,
- *  morphTargets: <bool>,
- *  morphNormals: <bool>
+ *  lights: <bool>
  * }
  */
 
@@ -11089,10 +10815,6 @@ class ShaderMaterial extends Material {
 		this.fog = false; // set to use scene fog
 		this.lights = false; // set to use scene lights
 		this.clipping = false; // set to use user-defined clipping planes
-
-		this.skinning = false; // set to use skinning attribute streams
-		this.morphTargets = false; // set to use morph targets
-		this.morphNormals = false; // set to use morph normals
 
 		this.extensions = {
 			derivatives: false, // set to use derivatives
@@ -11144,11 +10866,6 @@ class ShaderMaterial extends Material {
 
 		this.lights = source.lights;
 		this.clipping = source.clipping;
-
-		this.skinning = source.skinning;
-
-		this.morphTargets = source.morphTargets;
-		this.morphNormals = source.morphNormals;
 
 		this.extensions = Object.assign( {}, source.extensions );
 
@@ -11283,13 +11000,6 @@ class Camera extends Object3D {
 	}
 
 	getWorldDirection( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'THREE.Camera: .getWorldDirection() target is now required' );
-			target = new Vector3();
-
-		}
 
 		this.updateWorldMatrix( true, false );
 
@@ -11666,18 +11376,6 @@ class CubeTexture extends Texture {
 
 		super( images, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding );
 
-		// Why CubeTexture._needsFlipEnvMap is necessary:
-		//
-		// By convention -- likely based on the RenderMan spec from the 1990's -- cube maps are specified by WebGL (and three.js)
-		// in a coordinate system in which positive-x is to the right when looking up the positive-z axis -- in other words,
-		// in a left-handed coordinate system. By continuing this convention, preexisting cube maps continued to render correctly.
-
-		// three.js uses a right-handed coordinate system. So environment maps used in three.js appear to have px and nx swapped
-		// and the flag _needsFlipEnvMap controls this conversion. The flip is not required (and thus _needsFlipEnvMap is set to false)
-		// when using WebGLCubeRenderTarget.texture as a cube texture.
-
-		this._needsFlipEnvMap = true;
-
 		this.flipY = false;
 
 	}
@@ -11714,7 +11412,16 @@ class WebGLCubeRenderTarget extends WebGLRenderTarget {
 
 		options = options || {};
 
+		// By convention -- likely based on the RenderMan spec from the 1990's -- cube maps are specified by WebGL (and three.js)
+		// in a coordinate system in which positive-x is to the right when looking up the positive-z axis -- in other words,
+		// in a left-handed coordinate system. By continuing this convention, preexisting cube maps continued to render correctly.
+
+		// three.js uses a right-handed coordinate system. So environment maps used in three.js appear to have px and nx swapped
+		// and the flag isRenderTargetTexture controls this conversion. The flip is not required when using WebGLCubeRenderTarget.texture
+		// as a cube texture (this is detected when isRenderTargetTexture is set to true for cube textures).
+
 		this.texture = new CubeTexture( undefined, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.format, options.type, options.anisotropy, options.encoding );
+		this.texture.isRenderTargetTexture = true;
 
 		this.texture.generateMipmaps = options.generateMipmaps !== undefined ? options.generateMipmaps : false;
 		this.texture.minFilter = options.minFilter !== undefined ? options.minFilter : LinearFilter;
@@ -11834,28 +11541,206 @@ class WebGLCubeRenderTarget extends WebGLRenderTarget {
 
 WebGLCubeRenderTarget.prototype.isWebGLCubeRenderTarget = true;
 
-class DataTexture extends Texture {
+const _vector1 = /*@__PURE__*/ new Vector3();
+const _vector2 = /*@__PURE__*/ new Vector3();
+const _normalMatrix = /*@__PURE__*/ new Matrix3();
 
-	constructor( data, width, height, format, type, mapping, wrapS, wrapT, magFilter, minFilter, anisotropy, encoding ) {
+class Plane {
 
-		super( null, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding );
+	constructor( normal = new Vector3( 1, 0, 0 ), constant = 0 ) {
 
-		this.image = { data: data || null, width: width || 1, height: height || 1 };
+		// normal is assumed to be normalized
 
-		this.magFilter = magFilter !== undefined ? magFilter : NearestFilter;
-		this.minFilter = minFilter !== undefined ? minFilter : NearestFilter;
+		this.normal = normal;
+		this.constant = constant;
 
-		this.generateMipmaps = false;
-		this.flipY = false;
-		this.unpackAlignment = 1;
+	}
 
-		this.needsUpdate = true;
+	set( normal, constant ) {
+
+		this.normal.copy( normal );
+		this.constant = constant;
+
+		return this;
+
+	}
+
+	setComponents( x, y, z, w ) {
+
+		this.normal.set( x, y, z );
+		this.constant = w;
+
+		return this;
+
+	}
+
+	setFromNormalAndCoplanarPoint( normal, point ) {
+
+		this.normal.copy( normal );
+		this.constant = - point.dot( this.normal );
+
+		return this;
+
+	}
+
+	setFromCoplanarPoints( a, b, c ) {
+
+		const normal = _vector1.subVectors( c, b ).cross( _vector2.subVectors( a, b ) ).normalize();
+
+		// Q: should an error be thrown if normal is zero (e.g. degenerate plane)?
+
+		this.setFromNormalAndCoplanarPoint( normal, a );
+
+		return this;
+
+	}
+
+	copy( plane ) {
+
+		this.normal.copy( plane.normal );
+		this.constant = plane.constant;
+
+		return this;
+
+	}
+
+	normalize() {
+
+		// Note: will lead to a divide by zero if the plane is invalid.
+
+		const inverseNormalLength = 1.0 / this.normal.length();
+		this.normal.multiplyScalar( inverseNormalLength );
+		this.constant *= inverseNormalLength;
+
+		return this;
+
+	}
+
+	negate() {
+
+		this.constant *= - 1;
+		this.normal.negate();
+
+		return this;
+
+	}
+
+	distanceToPoint( point ) {
+
+		return this.normal.dot( point ) + this.constant;
+
+	}
+
+	distanceToSphere( sphere ) {
+
+		return this.distanceToPoint( sphere.center ) - sphere.radius;
+
+	}
+
+	projectPoint( point, target ) {
+
+		return target.copy( this.normal ).multiplyScalar( - this.distanceToPoint( point ) ).add( point );
+
+	}
+
+	intersectLine( line, target ) {
+
+		const direction = line.delta( _vector1 );
+
+		const denominator = this.normal.dot( direction );
+
+		if ( denominator === 0 ) {
+
+			// line is coplanar, return origin
+			if ( this.distanceToPoint( line.start ) === 0 ) {
+
+				return target.copy( line.start );
+
+			}
+
+			// Unsure if this is the correct method to handle this case.
+			return null;
+
+		}
+
+		const t = - ( line.start.dot( this.normal ) + this.constant ) / denominator;
+
+		if ( t < 0 || t > 1 ) {
+
+			return null;
+
+		}
+
+		return target.copy( direction ).multiplyScalar( t ).add( line.start );
+
+	}
+
+	intersectsLine( line ) {
+
+		// Note: this tests if a line intersects the plane, not whether it (or its end-points) are coplanar with it.
+
+		const startSign = this.distanceToPoint( line.start );
+		const endSign = this.distanceToPoint( line.end );
+
+		return ( startSign < 0 && endSign > 0 ) || ( endSign < 0 && startSign > 0 );
+
+	}
+
+	intersectsBox( box ) {
+
+		return box.intersectsPlane( this );
+
+	}
+
+	intersectsSphere( sphere ) {
+
+		return sphere.intersectsPlane( this );
+
+	}
+
+	coplanarPoint( target ) {
+
+		return target.copy( this.normal ).multiplyScalar( - this.constant );
+
+	}
+
+	applyMatrix4( matrix, optionalNormalMatrix ) {
+
+		const normalMatrix = optionalNormalMatrix || _normalMatrix.getNormalMatrix( matrix );
+
+		const referencePoint = this.coplanarPoint( _vector1 ).applyMatrix4( matrix );
+
+		const normal = this.normal.applyMatrix3( normalMatrix ).normalize();
+
+		this.constant = - referencePoint.dot( normal );
+
+		return this;
+
+	}
+
+	translate( offset ) {
+
+		this.constant -= offset.dot( this.normal );
+
+		return this;
+
+	}
+
+	equals( plane ) {
+
+		return plane.normal.equals( this.normal ) && ( plane.constant === this.constant );
+
+	}
+
+	clone() {
+
+		return new this.constructor().copy( this );
 
 	}
 
 }
 
-DataTexture.prototype.isDataTexture = true;
+Plane.prototype.isPlane = true;
 
 const _sphere$2 = /*@__PURE__*/ new Sphere();
 const _vector$7 = /*@__PURE__*/ new Vector3();
@@ -12133,6 +12018,10 @@ function WebGLAttributes( gl, capabilities ) {
 
 			type = 5121;
 
+		} else if ( array instanceof Uint8ClampedArray ) {
+
+			type = 5121;
+
 		}
 
 		return {
@@ -12327,15 +12216,23 @@ class PlaneGeometry extends BufferGeometry {
 
 	}
 
+	static fromJSON( data ) {
+
+		return new PlaneGeometry( data.width, data.height, data.widthSegments, data.heightSegments );
+
+	}
+
 }
 
 var alphamap_fragment = "#ifdef USE_ALPHAMAP\n\tdiffuseColor.a *= texture2D( alphaMap, vUv ).g;\n#endif";
 
 var alphamap_pars_fragment = "#ifdef USE_ALPHAMAP\n\tuniform sampler2D alphaMap;\n#endif";
 
-var alphatest_fragment = "#ifdef ALPHATEST\n\tif ( diffuseColor.a < ALPHATEST ) discard;\n#endif";
+var alphatest_fragment = "#ifdef USE_ALPHATEST\n\tif ( diffuseColor.a < alphaTest ) discard;\n#endif";
 
-var aomap_fragment = "#ifdef USE_AOMAP\n\tfloat ambientOcclusion = ( texture2D( aoMap, vUv2 ).r - 1.0 ) * aoMapIntensity + 1.0;\n\treflectedLight.indirectDiffuse *= ambientOcclusion;\n\t#if defined( USE_ENVMAP ) && defined( STANDARD )\n\t\tfloat dotNV = saturate( dot( geometry.normal, geometry.viewDir ) );\n\t\treflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.specularRoughness );\n\t#endif\n#endif";
+var alphatest_pars_fragment = "#ifdef USE_ALPHATEST\n\tuniform float alphaTest;\n#endif";
+
+var aomap_fragment = "#ifdef USE_AOMAP\n\tfloat ambientOcclusion = ( texture2D( aoMap, vUv2 ).r - 1.0 ) * aoMapIntensity + 1.0;\n\treflectedLight.indirectDiffuse *= ambientOcclusion;\n\t#if defined( USE_ENVMAP ) && defined( STANDARD )\n\t\tfloat dotNV = saturate( dot( geometry.normal, geometry.viewDir ) );\n\t\treflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.roughness );\n\t#endif\n#endif";
 
 var aomap_pars_fragment = "#ifdef USE_AOMAP\n\tuniform sampler2D aoMap;\n\tuniform float aoMapIntensity;\n#endif";
 
@@ -12343,7 +12240,7 @@ var begin_vertex = "vec3 transformed = vec3( position );";
 
 var beginnormal_vertex = "vec3 objectNormal = vec3( normal );\n#ifdef USE_TANGENT\n\tvec3 objectTangent = vec3( tangent.xyz );\n#endif";
 
-var bsdfs = "vec2 integrateSpecularBRDF( const in float dotNV, const in float roughness ) {\n\tconst vec4 c0 = vec4( - 1, - 0.0275, - 0.572, 0.022 );\n\tconst vec4 c1 = vec4( 1, 0.0425, 1.04, - 0.04 );\n\tvec4 r = roughness * c0 + c1;\n\tfloat a004 = min( r.x * r.x, exp2( - 9.28 * dotNV ) ) * r.x + r.y;\n\treturn vec2( -1.04, 1.04 ) * a004 + r.zw;\n}\nfloat punctualLightIntensityToIrradianceFactor( const in float lightDistance, const in float cutoffDistance, const in float decayExponent ) {\n#if defined ( PHYSICALLY_CORRECT_LIGHTS )\n\tfloat distanceFalloff = 1.0 / max( pow( lightDistance, decayExponent ), 0.01 );\n\tif( cutoffDistance > 0.0 ) {\n\t\tdistanceFalloff *= pow2( saturate( 1.0 - pow4( lightDistance / cutoffDistance ) ) );\n\t}\n\treturn distanceFalloff;\n#else\n\tif( cutoffDistance > 0.0 && decayExponent > 0.0 ) {\n\t\treturn pow( saturate( -lightDistance / cutoffDistance + 1.0 ), decayExponent );\n\t}\n\treturn 1.0;\n#endif\n}\nvec3 BRDF_Diffuse_Lambert( const in vec3 diffuseColor ) {\n\treturn RECIPROCAL_PI * diffuseColor;\n}\nvec3 F_Schlick( const in vec3 specularColor, const in float dotLH ) {\n\tfloat fresnel = exp2( ( -5.55473 * dotLH - 6.98316 ) * dotLH );\n\treturn ( 1.0 - specularColor ) * fresnel + specularColor;\n}\nvec3 F_Schlick_RoughnessDependent( const in vec3 F0, const in float dotNV, const in float roughness ) {\n\tfloat fresnel = exp2( ( -5.55473 * dotNV - 6.98316 ) * dotNV );\n\tvec3 Fr = max( vec3( 1.0 - roughness ), F0 ) - F0;\n\treturn Fr * fresnel + F0;\n}\nfloat G_GGX_Smith( const in float alpha, const in float dotNL, const in float dotNV ) {\n\tfloat a2 = pow2( alpha );\n\tfloat gl = dotNL + sqrt( a2 + ( 1.0 - a2 ) * pow2( dotNL ) );\n\tfloat gv = dotNV + sqrt( a2 + ( 1.0 - a2 ) * pow2( dotNV ) );\n\treturn 1.0 / ( gl * gv );\n}\nfloat G_GGX_SmithCorrelated( const in float alpha, const in float dotNL, const in float dotNV ) {\n\tfloat a2 = pow2( alpha );\n\tfloat gv = dotNL * sqrt( a2 + ( 1.0 - a2 ) * pow2( dotNV ) );\n\tfloat gl = dotNV * sqrt( a2 + ( 1.0 - a2 ) * pow2( dotNL ) );\n\treturn 0.5 / max( gv + gl, EPSILON );\n}\nfloat D_GGX( const in float alpha, const in float dotNH ) {\n\tfloat a2 = pow2( alpha );\n\tfloat denom = pow2( dotNH ) * ( a2 - 1.0 ) + 1.0;\n\treturn RECIPROCAL_PI * a2 / pow2( denom );\n}\nvec3 BRDF_Specular_GGX( const in IncidentLight incidentLight, const in vec3 viewDir, const in vec3 normal, const in vec3 specularColor, const in float roughness ) {\n\tfloat alpha = pow2( roughness );\n\tvec3 halfDir = normalize( incidentLight.direction + viewDir );\n\tfloat dotNL = saturate( dot( normal, incidentLight.direction ) );\n\tfloat dotNV = saturate( dot( normal, viewDir ) );\n\tfloat dotNH = saturate( dot( normal, halfDir ) );\n\tfloat dotLH = saturate( dot( incidentLight.direction, halfDir ) );\n\tvec3 F = F_Schlick( specularColor, dotLH );\n\tfloat G = G_GGX_SmithCorrelated( alpha, dotNL, dotNV );\n\tfloat D = D_GGX( alpha, dotNH );\n\treturn F * ( G * D );\n}\nvec2 LTC_Uv( const in vec3 N, const in vec3 V, const in float roughness ) {\n\tconst float LUT_SIZE = 64.0;\n\tconst float LUT_SCALE = ( LUT_SIZE - 1.0 ) / LUT_SIZE;\n\tconst float LUT_BIAS = 0.5 / LUT_SIZE;\n\tfloat dotNV = saturate( dot( N, V ) );\n\tvec2 uv = vec2( roughness, sqrt( 1.0 - dotNV ) );\n\tuv = uv * LUT_SCALE + LUT_BIAS;\n\treturn uv;\n}\nfloat LTC_ClippedSphereFormFactor( const in vec3 f ) {\n\tfloat l = length( f );\n\treturn max( ( l * l + f.z ) / ( l + 1.0 ), 0.0 );\n}\nvec3 LTC_EdgeVectorFormFactor( const in vec3 v1, const in vec3 v2 ) {\n\tfloat x = dot( v1, v2 );\n\tfloat y = abs( x );\n\tfloat a = 0.8543985 + ( 0.4965155 + 0.0145206 * y ) * y;\n\tfloat b = 3.4175940 + ( 4.1616724 + y ) * y;\n\tfloat v = a / b;\n\tfloat theta_sintheta = ( x > 0.0 ) ? v : 0.5 * inversesqrt( max( 1.0 - x * x, 1e-7 ) ) - v;\n\treturn cross( v1, v2 ) * theta_sintheta;\n}\nvec3 LTC_Evaluate( const in vec3 N, const in vec3 V, const in vec3 P, const in mat3 mInv, const in vec3 rectCoords[ 4 ] ) {\n\tvec3 v1 = rectCoords[ 1 ] - rectCoords[ 0 ];\n\tvec3 v2 = rectCoords[ 3 ] - rectCoords[ 0 ];\n\tvec3 lightNormal = cross( v1, v2 );\n\tif( dot( lightNormal, P - rectCoords[ 0 ] ) < 0.0 ) return vec3( 0.0 );\n\tvec3 T1, T2;\n\tT1 = normalize( V - N * dot( V, N ) );\n\tT2 = - cross( N, T1 );\n\tmat3 mat = mInv * transposeMat3( mat3( T1, T2, N ) );\n\tvec3 coords[ 4 ];\n\tcoords[ 0 ] = mat * ( rectCoords[ 0 ] - P );\n\tcoords[ 1 ] = mat * ( rectCoords[ 1 ] - P );\n\tcoords[ 2 ] = mat * ( rectCoords[ 2 ] - P );\n\tcoords[ 3 ] = mat * ( rectCoords[ 3 ] - P );\n\tcoords[ 0 ] = normalize( coords[ 0 ] );\n\tcoords[ 1 ] = normalize( coords[ 1 ] );\n\tcoords[ 2 ] = normalize( coords[ 2 ] );\n\tcoords[ 3 ] = normalize( coords[ 3 ] );\n\tvec3 vectorFormFactor = vec3( 0.0 );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 0 ], coords[ 1 ] );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 1 ], coords[ 2 ] );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 2 ], coords[ 3 ] );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 3 ], coords[ 0 ] );\n\tfloat result = LTC_ClippedSphereFormFactor( vectorFormFactor );\n\treturn vec3( result );\n}\nvec3 BRDF_Specular_GGX_Environment( const in vec3 viewDir, const in vec3 normal, const in vec3 specularColor, const in float roughness ) {\n\tfloat dotNV = saturate( dot( normal, viewDir ) );\n\tvec2 brdf = integrateSpecularBRDF( dotNV, roughness );\n\treturn specularColor * brdf.x + brdf.y;\n}\nvoid BRDF_Specular_Multiscattering_Environment( const in GeometricContext geometry, const in vec3 specularColor, const in float roughness, inout vec3 singleScatter, inout vec3 multiScatter ) {\n\tfloat dotNV = saturate( dot( geometry.normal, geometry.viewDir ) );\n\tvec3 F = F_Schlick_RoughnessDependent( specularColor, dotNV, roughness );\n\tvec2 brdf = integrateSpecularBRDF( dotNV, roughness );\n\tvec3 FssEss = F * brdf.x + brdf.y;\n\tfloat Ess = brdf.x + brdf.y;\n\tfloat Ems = 1.0 - Ess;\n\tvec3 Favg = specularColor + ( 1.0 - specularColor ) * 0.047619;\tvec3 Fms = FssEss * Favg / ( 1.0 - Ems * Favg );\n\tsingleScatter += FssEss;\n\tmultiScatter += Fms * Ems;\n}\nfloat G_BlinnPhong_Implicit( ) {\n\treturn 0.25;\n}\nfloat D_BlinnPhong( const in float shininess, const in float dotNH ) {\n\treturn RECIPROCAL_PI * ( shininess * 0.5 + 1.0 ) * pow( dotNH, shininess );\n}\nvec3 BRDF_Specular_BlinnPhong( const in IncidentLight incidentLight, const in GeometricContext geometry, const in vec3 specularColor, const in float shininess ) {\n\tvec3 halfDir = normalize( incidentLight.direction + geometry.viewDir );\n\tfloat dotNH = saturate( dot( geometry.normal, halfDir ) );\n\tfloat dotLH = saturate( dot( incidentLight.direction, halfDir ) );\n\tvec3 F = F_Schlick( specularColor, dotLH );\n\tfloat G = G_BlinnPhong_Implicit( );\n\tfloat D = D_BlinnPhong( shininess, dotNH );\n\treturn F * ( G * D );\n}\nfloat GGXRoughnessToBlinnExponent( const in float ggxRoughness ) {\n\treturn ( 2.0 / pow2( ggxRoughness + 0.0001 ) - 2.0 );\n}\nfloat BlinnExponentToGGXRoughness( const in float blinnExponent ) {\n\treturn sqrt( 2.0 / ( blinnExponent + 2.0 ) );\n}\n#if defined( USE_SHEEN )\nfloat D_Charlie(float roughness, float NoH) {\n\tfloat invAlpha = 1.0 / roughness;\n\tfloat cos2h = NoH * NoH;\n\tfloat sin2h = max(1.0 - cos2h, 0.0078125);\treturn (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / (2.0 * PI);\n}\nfloat V_Neubelt(float NoV, float NoL) {\n\treturn saturate(1.0 / (4.0 * (NoL + NoV - NoL * NoV)));\n}\nvec3 BRDF_Specular_Sheen( const in float roughness, const in vec3 L, const in GeometricContext geometry, vec3 specularColor ) {\n\tvec3 N = geometry.normal;\n\tvec3 V = geometry.viewDir;\n\tvec3 H = normalize( V + L );\n\tfloat dotNH = saturate( dot( N, H ) );\n\treturn specularColor * D_Charlie( roughness, dotNH ) * V_Neubelt( dot(N, V), dot(N, L) );\n}\n#endif";
+var bsdfs = "vec3 BRDF_Lambert( const in vec3 diffuseColor ) {\n\treturn RECIPROCAL_PI * diffuseColor;\n}\nvec3 F_Schlick( const in vec3 f0, const in float f90, const in float dotVH ) {\n\tfloat fresnel = exp2( ( - 5.55473 * dotVH - 6.98316 ) * dotVH );\n\treturn f0 * ( 1.0 - fresnel ) + ( f90 * fresnel );\n}\nfloat V_GGX_SmithCorrelated( const in float alpha, const in float dotNL, const in float dotNV ) {\n\tfloat a2 = pow2( alpha );\n\tfloat gv = dotNL * sqrt( a2 + ( 1.0 - a2 ) * pow2( dotNV ) );\n\tfloat gl = dotNV * sqrt( a2 + ( 1.0 - a2 ) * pow2( dotNL ) );\n\treturn 0.5 / max( gv + gl, EPSILON );\n}\nfloat D_GGX( const in float alpha, const in float dotNH ) {\n\tfloat a2 = pow2( alpha );\n\tfloat denom = pow2( dotNH ) * ( a2 - 1.0 ) + 1.0;\n\treturn RECIPROCAL_PI * a2 / pow2( denom );\n}\nvec3 BRDF_GGX( const in IncidentLight incidentLight, const in vec3 viewDir, const in vec3 normal, const in vec3 f0, const in float f90, const in float roughness ) {\n\tfloat alpha = pow2( roughness );\n\tvec3 halfDir = normalize( incidentLight.direction + viewDir );\n\tfloat dotNL = saturate( dot( normal, incidentLight.direction ) );\n\tfloat dotNV = saturate( dot( normal, viewDir ) );\n\tfloat dotNH = saturate( dot( normal, halfDir ) );\n\tfloat dotVH = saturate( dot( viewDir, halfDir ) );\n\tvec3 F = F_Schlick( f0, f90, dotVH );\n\tfloat V = V_GGX_SmithCorrelated( alpha, dotNL, dotNV );\n\tfloat D = D_GGX( alpha, dotNH );\n\treturn F * ( V * D );\n}\nvec2 LTC_Uv( const in vec3 N, const in vec3 V, const in float roughness ) {\n\tconst float LUT_SIZE = 64.0;\n\tconst float LUT_SCALE = ( LUT_SIZE - 1.0 ) / LUT_SIZE;\n\tconst float LUT_BIAS = 0.5 / LUT_SIZE;\n\tfloat dotNV = saturate( dot( N, V ) );\n\tvec2 uv = vec2( roughness, sqrt( 1.0 - dotNV ) );\n\tuv = uv * LUT_SCALE + LUT_BIAS;\n\treturn uv;\n}\nfloat LTC_ClippedSphereFormFactor( const in vec3 f ) {\n\tfloat l = length( f );\n\treturn max( ( l * l + f.z ) / ( l + 1.0 ), 0.0 );\n}\nvec3 LTC_EdgeVectorFormFactor( const in vec3 v1, const in vec3 v2 ) {\n\tfloat x = dot( v1, v2 );\n\tfloat y = abs( x );\n\tfloat a = 0.8543985 + ( 0.4965155 + 0.0145206 * y ) * y;\n\tfloat b = 3.4175940 + ( 4.1616724 + y ) * y;\n\tfloat v = a / b;\n\tfloat theta_sintheta = ( x > 0.0 ) ? v : 0.5 * inversesqrt( max( 1.0 - x * x, 1e-7 ) ) - v;\n\treturn cross( v1, v2 ) * theta_sintheta;\n}\nvec3 LTC_Evaluate( const in vec3 N, const in vec3 V, const in vec3 P, const in mat3 mInv, const in vec3 rectCoords[ 4 ] ) {\n\tvec3 v1 = rectCoords[ 1 ] - rectCoords[ 0 ];\n\tvec3 v2 = rectCoords[ 3 ] - rectCoords[ 0 ];\n\tvec3 lightNormal = cross( v1, v2 );\n\tif( dot( lightNormal, P - rectCoords[ 0 ] ) < 0.0 ) return vec3( 0.0 );\n\tvec3 T1, T2;\n\tT1 = normalize( V - N * dot( V, N ) );\n\tT2 = - cross( N, T1 );\n\tmat3 mat = mInv * transposeMat3( mat3( T1, T2, N ) );\n\tvec3 coords[ 4 ];\n\tcoords[ 0 ] = mat * ( rectCoords[ 0 ] - P );\n\tcoords[ 1 ] = mat * ( rectCoords[ 1 ] - P );\n\tcoords[ 2 ] = mat * ( rectCoords[ 2 ] - P );\n\tcoords[ 3 ] = mat * ( rectCoords[ 3 ] - P );\n\tcoords[ 0 ] = normalize( coords[ 0 ] );\n\tcoords[ 1 ] = normalize( coords[ 1 ] );\n\tcoords[ 2 ] = normalize( coords[ 2 ] );\n\tcoords[ 3 ] = normalize( coords[ 3 ] );\n\tvec3 vectorFormFactor = vec3( 0.0 );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 0 ], coords[ 1 ] );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 1 ], coords[ 2 ] );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 2 ], coords[ 3 ] );\n\tvectorFormFactor += LTC_EdgeVectorFormFactor( coords[ 3 ], coords[ 0 ] );\n\tfloat result = LTC_ClippedSphereFormFactor( vectorFormFactor );\n\treturn vec3( result );\n}\nfloat G_BlinnPhong_Implicit( ) {\n\treturn 0.25;\n}\nfloat D_BlinnPhong( const in float shininess, const in float dotNH ) {\n\treturn RECIPROCAL_PI * ( shininess * 0.5 + 1.0 ) * pow( dotNH, shininess );\n}\nvec3 BRDF_BlinnPhong( const in IncidentLight incidentLight, const in GeometricContext geometry, const in vec3 specularColor, const in float shininess ) {\n\tvec3 halfDir = normalize( incidentLight.direction + geometry.viewDir );\n\tfloat dotNH = saturate( dot( geometry.normal, halfDir ) );\n\tfloat dotVH = saturate( dot( geometry.viewDir, halfDir ) );\n\tvec3 F = F_Schlick( specularColor, 1.0, dotVH );\n\tfloat G = G_BlinnPhong_Implicit( );\n\tfloat D = D_BlinnPhong( shininess, dotNH );\n\treturn F * ( G * D );\n}\n#if defined( USE_SHEEN )\nfloat D_Charlie( float roughness, float NoH ) {\n\tfloat invAlpha = 1.0 / roughness;\n\tfloat cos2h = NoH * NoH;\n\tfloat sin2h = max( 1.0 - cos2h, 0.0078125 );\n\treturn ( 2.0 + invAlpha ) * pow( sin2h, invAlpha * 0.5 ) / ( 2.0 * PI );\n}\nfloat V_Neubelt( float NoV, float NoL ) {\n\treturn saturate( 1.0 / ( 4.0 * ( NoL + NoV - NoL * NoV ) ) );\n}\nvec3 BRDF_Sheen( const in float roughness, const in vec3 L, const in GeometricContext geometry, vec3 specularColor ) {\n\tvec3 N = geometry.normal;\n\tvec3 V = geometry.viewDir;\n\tvec3 H = normalize( V + L );\n\tfloat dotNH = saturate( dot( N, H ) );\n\treturn specularColor * D_Charlie( roughness, dotNH ) * V_Neubelt( dot(N, V), dot(N, L) );\n}\n#endif";
 
 var bumpmap_pars_fragment = "#ifdef USE_BUMPMAP\n\tuniform sampler2D bumpMap;\n\tuniform float bumpScale;\n\tvec2 dHdxy_fwd() {\n\t\tvec2 dSTdx = dFdx( vUv );\n\t\tvec2 dSTdy = dFdy( vUv );\n\t\tfloat Hll = bumpScale * texture2D( bumpMap, vUv ).x;\n\t\tfloat dBx = bumpScale * texture2D( bumpMap, vUv + dSTdx ).x - Hll;\n\t\tfloat dBy = bumpScale * texture2D( bumpMap, vUv + dSTdy ).x - Hll;\n\t\treturn vec2( dBx, dBy );\n\t}\n\tvec3 perturbNormalArb( vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection ) {\n\t\tvec3 vSigmaX = vec3( dFdx( surf_pos.x ), dFdx( surf_pos.y ), dFdx( surf_pos.z ) );\n\t\tvec3 vSigmaY = vec3( dFdy( surf_pos.x ), dFdy( surf_pos.y ), dFdy( surf_pos.z ) );\n\t\tvec3 vN = surf_norm;\n\t\tvec3 R1 = cross( vSigmaY, vN );\n\t\tvec3 R2 = cross( vN, vSigmaX );\n\t\tfloat fDet = dot( vSigmaX, R1 ) * faceDirection;\n\t\tvec3 vGrad = sign( fDet ) * ( dHdxy.x * R1 + dHdxy.y * R2 );\n\t\treturn normalize( abs( fDet ) * surf_norm - vGrad );\n\t}\n#endif";
 
@@ -12363,7 +12260,7 @@ var color_pars_vertex = "#if defined( USE_COLOR_ALPHA )\n\tvarying vec4 vColor;\
 
 var color_vertex = "#if defined( USE_COLOR_ALPHA )\n\tvColor = vec4( 1.0 );\n#elif defined( USE_COLOR ) || defined( USE_INSTANCING_COLOR )\n\tvColor = vec3( 1.0 );\n#endif\n#ifdef USE_COLOR\n\tvColor *= color;\n#endif\n#ifdef USE_INSTANCING_COLOR\n\tvColor.xyz *= instanceColor.xyz;\n#endif";
 
-var common = "#define PI 3.141592653589793\n#define PI2 6.283185307179586\n#define PI_HALF 1.5707963267948966\n#define RECIPROCAL_PI 0.3183098861837907\n#define RECIPROCAL_PI2 0.15915494309189535\n#define EPSILON 1e-6\n#ifndef saturate\n#define saturate(a) clamp( a, 0.0, 1.0 )\n#endif\n#define whiteComplement(a) ( 1.0 - saturate( a ) )\nfloat pow2( const in float x ) { return x*x; }\nfloat pow3( const in float x ) { return x*x*x; }\nfloat pow4( const in float x ) { float x2 = x*x; return x2*x2; }\nfloat average( const in vec3 color ) { return dot( color, vec3( 0.3333 ) ); }\nhighp float rand( const in vec2 uv ) {\n\tconst highp float a = 12.9898, b = 78.233, c = 43758.5453;\n\thighp float dt = dot( uv.xy, vec2( a,b ) ), sn = mod( dt, PI );\n\treturn fract(sin(sn) * c);\n}\n#ifdef HIGH_PRECISION\n\tfloat precisionSafeLength( vec3 v ) { return length( v ); }\n#else\n\tfloat max3( vec3 v ) { return max( max( v.x, v.y ), v.z ); }\n\tfloat precisionSafeLength( vec3 v ) {\n\t\tfloat maxComponent = max3( abs( v ) );\n\t\treturn length( v / maxComponent ) * maxComponent;\n\t}\n#endif\nstruct IncidentLight {\n\tvec3 color;\n\tvec3 direction;\n\tbool visible;\n};\nstruct ReflectedLight {\n\tvec3 directDiffuse;\n\tvec3 directSpecular;\n\tvec3 indirectDiffuse;\n\tvec3 indirectSpecular;\n};\nstruct GeometricContext {\n\tvec3 position;\n\tvec3 normal;\n\tvec3 viewDir;\n#ifdef CLEARCOAT\n\tvec3 clearcoatNormal;\n#endif\n};\nvec3 transformDirection( in vec3 dir, in mat4 matrix ) {\n\treturn normalize( ( matrix * vec4( dir, 0.0 ) ).xyz );\n}\nvec3 inverseTransformDirection( in vec3 dir, in mat4 matrix ) {\n\treturn normalize( ( vec4( dir, 0.0 ) * matrix ).xyz );\n}\nvec3 projectOnPlane(in vec3 point, in vec3 pointOnPlane, in vec3 planeNormal ) {\n\tfloat distance = dot( planeNormal, point - pointOnPlane );\n\treturn - distance * planeNormal + point;\n}\nfloat sideOfPlane( in vec3 point, in vec3 pointOnPlane, in vec3 planeNormal ) {\n\treturn sign( dot( point - pointOnPlane, planeNormal ) );\n}\nvec3 linePlaneIntersect( in vec3 pointOnLine, in vec3 lineDirection, in vec3 pointOnPlane, in vec3 planeNormal ) {\n\treturn lineDirection * ( dot( planeNormal, pointOnPlane - pointOnLine ) / dot( planeNormal, lineDirection ) ) + pointOnLine;\n}\nmat3 transposeMat3( const in mat3 m ) {\n\tmat3 tmp;\n\ttmp[ 0 ] = vec3( m[ 0 ].x, m[ 1 ].x, m[ 2 ].x );\n\ttmp[ 1 ] = vec3( m[ 0 ].y, m[ 1 ].y, m[ 2 ].y );\n\ttmp[ 2 ] = vec3( m[ 0 ].z, m[ 1 ].z, m[ 2 ].z );\n\treturn tmp;\n}\nfloat linearToRelativeLuminance( const in vec3 color ) {\n\tvec3 weights = vec3( 0.2126, 0.7152, 0.0722 );\n\treturn dot( weights, color.rgb );\n}\nbool isPerspectiveMatrix( mat4 m ) {\n\treturn m[ 2 ][ 3 ] == - 1.0;\n}\nvec2 equirectUv( in vec3 dir ) {\n\tfloat u = atan( dir.z, dir.x ) * RECIPROCAL_PI2 + 0.5;\n\tfloat v = asin( clamp( dir.y, - 1.0, 1.0 ) ) * RECIPROCAL_PI + 0.5;\n\treturn vec2( u, v );\n}";
+var common = "#define PI 3.141592653589793\n#define PI2 6.283185307179586\n#define PI_HALF 1.5707963267948966\n#define RECIPROCAL_PI 0.3183098861837907\n#define RECIPROCAL_PI2 0.15915494309189535\n#define EPSILON 1e-6\n#ifndef saturate\n#define saturate( a ) clamp( a, 0.0, 1.0 )\n#endif\n#define whiteComplement( a ) ( 1.0 - saturate( a ) )\nfloat pow2( const in float x ) { return x*x; }\nfloat pow3( const in float x ) { return x*x*x; }\nfloat pow4( const in float x ) { float x2 = x*x; return x2*x2; }\nfloat max3( const in vec3 v ) { return max( max( v.x, v.y ), v.z ); }\nfloat average( const in vec3 color ) { return dot( color, vec3( 0.3333 ) ); }\nhighp float rand( const in vec2 uv ) {\n\tconst highp float a = 12.9898, b = 78.233, c = 43758.5453;\n\thighp float dt = dot( uv.xy, vec2( a,b ) ), sn = mod( dt, PI );\n\treturn fract( sin( sn ) * c );\n}\n#ifdef HIGH_PRECISION\n\tfloat precisionSafeLength( vec3 v ) { return length( v ); }\n#else\n\tfloat precisionSafeLength( vec3 v ) {\n\t\tfloat maxComponent = max3( abs( v ) );\n\t\treturn length( v / maxComponent ) * maxComponent;\n\t}\n#endif\nstruct IncidentLight {\n\tvec3 color;\n\tvec3 direction;\n\tbool visible;\n};\nstruct ReflectedLight {\n\tvec3 directDiffuse;\n\tvec3 directSpecular;\n\tvec3 indirectDiffuse;\n\tvec3 indirectSpecular;\n};\nstruct GeometricContext {\n\tvec3 position;\n\tvec3 normal;\n\tvec3 viewDir;\n#ifdef USE_CLEARCOAT\n\tvec3 clearcoatNormal;\n#endif\n};\nvec3 transformDirection( in vec3 dir, in mat4 matrix ) {\n\treturn normalize( ( matrix * vec4( dir, 0.0 ) ).xyz );\n}\nvec3 inverseTransformDirection( in vec3 dir, in mat4 matrix ) {\n\treturn normalize( ( vec4( dir, 0.0 ) * matrix ).xyz );\n}\nmat3 transposeMat3( const in mat3 m ) {\n\tmat3 tmp;\n\ttmp[ 0 ] = vec3( m[ 0 ].x, m[ 1 ].x, m[ 2 ].x );\n\ttmp[ 1 ] = vec3( m[ 0 ].y, m[ 1 ].y, m[ 2 ].y );\n\ttmp[ 2 ] = vec3( m[ 0 ].z, m[ 1 ].z, m[ 2 ].z );\n\treturn tmp;\n}\nfloat linearToRelativeLuminance( const in vec3 color ) {\n\tvec3 weights = vec3( 0.2126, 0.7152, 0.0722 );\n\treturn dot( weights, color.rgb );\n}\nbool isPerspectiveMatrix( mat4 m ) {\n\treturn m[ 2 ][ 3 ] == - 1.0;\n}\nvec2 equirectUv( in vec3 dir ) {\n\tfloat u = atan( dir.z, dir.x ) * RECIPROCAL_PI2 + 0.5;\n\tfloat v = asin( clamp( dir.y, - 1.0, 1.0 ) ) * RECIPROCAL_PI + 0.5;\n\treturn vec2( u, v );\n}";
 
 var cube_uv_reflection_fragment = "#ifdef ENVMAP_TYPE_CUBE_UV\n\t#define cubeUV_maxMipLevel 8.0\n\t#define cubeUV_minMipLevel 4.0\n\t#define cubeUV_maxTileSize 256.0\n\t#define cubeUV_minTileSize 16.0\n\tfloat getFace( vec3 direction ) {\n\t\tvec3 absDirection = abs( direction );\n\t\tfloat face = - 1.0;\n\t\tif ( absDirection.x > absDirection.z ) {\n\t\t\tif ( absDirection.x > absDirection.y )\n\t\t\t\tface = direction.x > 0.0 ? 0.0 : 3.0;\n\t\t\telse\n\t\t\t\tface = direction.y > 0.0 ? 1.0 : 4.0;\n\t\t} else {\n\t\t\tif ( absDirection.z > absDirection.y )\n\t\t\t\tface = direction.z > 0.0 ? 2.0 : 5.0;\n\t\t\telse\n\t\t\t\tface = direction.y > 0.0 ? 1.0 : 4.0;\n\t\t}\n\t\treturn face;\n\t}\n\tvec2 getUV( vec3 direction, float face ) {\n\t\tvec2 uv;\n\t\tif ( face == 0.0 ) {\n\t\t\tuv = vec2( direction.z, direction.y ) / abs( direction.x );\n\t\t} else if ( face == 1.0 ) {\n\t\t\tuv = vec2( - direction.x, - direction.z ) / abs( direction.y );\n\t\t} else if ( face == 2.0 ) {\n\t\t\tuv = vec2( - direction.x, direction.y ) / abs( direction.z );\n\t\t} else if ( face == 3.0 ) {\n\t\t\tuv = vec2( - direction.z, direction.y ) / abs( direction.x );\n\t\t} else if ( face == 4.0 ) {\n\t\t\tuv = vec2( - direction.x, direction.z ) / abs( direction.y );\n\t\t} else {\n\t\t\tuv = vec2( direction.x, direction.y ) / abs( direction.z );\n\t\t}\n\t\treturn 0.5 * ( uv + 1.0 );\n\t}\n\tvec3 bilinearCubeUV( sampler2D envMap, vec3 direction, float mipInt ) {\n\t\tfloat face = getFace( direction );\n\t\tfloat filterInt = max( cubeUV_minMipLevel - mipInt, 0.0 );\n\t\tmipInt = max( mipInt, cubeUV_minMipLevel );\n\t\tfloat faceSize = exp2( mipInt );\n\t\tfloat texelSize = 1.0 / ( 3.0 * cubeUV_maxTileSize );\n\t\tvec2 uv = getUV( direction, face ) * ( faceSize - 1.0 );\n\t\tvec2 f = fract( uv );\n\t\tuv += 0.5 - f;\n\t\tif ( face > 2.0 ) {\n\t\t\tuv.y += faceSize;\n\t\t\tface -= 3.0;\n\t\t}\n\t\tuv.x += face * faceSize;\n\t\tif ( mipInt < cubeUV_maxMipLevel ) {\n\t\t\tuv.y += 2.0 * cubeUV_maxTileSize;\n\t\t}\n\t\tuv.y += filterInt * 2.0 * cubeUV_minTileSize;\n\t\tuv.x += 3.0 * max( 0.0, cubeUV_maxTileSize - 2.0 * faceSize );\n\t\tuv *= texelSize;\n\t\tvec3 tl = envMapTexelToLinear( texture2D( envMap, uv ) ).rgb;\n\t\tuv.x += texelSize;\n\t\tvec3 tr = envMapTexelToLinear( texture2D( envMap, uv ) ).rgb;\n\t\tuv.y += texelSize;\n\t\tvec3 br = envMapTexelToLinear( texture2D( envMap, uv ) ).rgb;\n\t\tuv.x -= texelSize;\n\t\tvec3 bl = envMapTexelToLinear( texture2D( envMap, uv ) ).rgb;\n\t\tvec3 tm = mix( tl, tr, f.x );\n\t\tvec3 bm = mix( bl, br, f.x );\n\t\treturn mix( tm, bm, f.y );\n\t}\n\t#define r0 1.0\n\t#define v0 0.339\n\t#define m0 - 2.0\n\t#define r1 0.8\n\t#define v1 0.276\n\t#define m1 - 1.0\n\t#define r4 0.4\n\t#define v4 0.046\n\t#define m4 2.0\n\t#define r5 0.305\n\t#define v5 0.016\n\t#define m5 3.0\n\t#define r6 0.21\n\t#define v6 0.0038\n\t#define m6 4.0\n\tfloat roughnessToMip( float roughness ) {\n\t\tfloat mip = 0.0;\n\t\tif ( roughness >= r1 ) {\n\t\t\tmip = ( r0 - roughness ) * ( m1 - m0 ) / ( r0 - r1 ) + m0;\n\t\t} else if ( roughness >= r4 ) {\n\t\t\tmip = ( r1 - roughness ) * ( m4 - m1 ) / ( r1 - r4 ) + m1;\n\t\t} else if ( roughness >= r5 ) {\n\t\t\tmip = ( r4 - roughness ) * ( m5 - m4 ) / ( r4 - r5 ) + m4;\n\t\t} else if ( roughness >= r6 ) {\n\t\t\tmip = ( r5 - roughness ) * ( m6 - m5 ) / ( r5 - r6 ) + m5;\n\t\t} else {\n\t\t\tmip = - 2.0 * log2( 1.16 * roughness );\t\t}\n\t\treturn mip;\n\t}\n\tvec4 textureCubeUV( sampler2D envMap, vec3 sampleDir, float roughness ) {\n\t\tfloat mip = clamp( roughnessToMip( roughness ), m0, cubeUV_maxMipLevel );\n\t\tfloat mipF = fract( mip );\n\t\tfloat mipInt = floor( mip );\n\t\tvec3 color0 = bilinearCubeUV( envMap, sampleDir, mipInt );\n\t\tif ( mipF == 0.0 ) {\n\t\t\treturn vec4( color0, 1.0 );\n\t\t} else {\n\t\t\tvec3 color1 = bilinearCubeUV( envMap, sampleDir, mipInt + 1.0 );\n\t\t\treturn vec4( mix( color0, color1, mipF ), 1.0 );\n\t\t}\n\t}\n#endif";
 
@@ -12381,7 +12278,7 @@ var encodings_fragment = "gl_FragColor = linearToOutputTexel( gl_FragColor );";
 
 var encodings_pars_fragment = "\nvec4 LinearToLinear( in vec4 value ) {\n\treturn value;\n}\nvec4 GammaToLinear( in vec4 value, in float gammaFactor ) {\n\treturn vec4( pow( value.rgb, vec3( gammaFactor ) ), value.a );\n}\nvec4 LinearToGamma( in vec4 value, in float gammaFactor ) {\n\treturn vec4( pow( value.rgb, vec3( 1.0 / gammaFactor ) ), value.a );\n}\nvec4 sRGBToLinear( in vec4 value ) {\n\treturn vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.a );\n}\nvec4 LinearTosRGB( in vec4 value ) {\n\treturn vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.a );\n}\nvec4 RGBEToLinear( in vec4 value ) {\n\treturn vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );\n}\nvec4 LinearToRGBE( in vec4 value ) {\n\tfloat maxComponent = max( max( value.r, value.g ), value.b );\n\tfloat fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );\n\treturn vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );\n}\nvec4 RGBMToLinear( in vec4 value, in float maxRange ) {\n\treturn vec4( value.rgb * value.a * maxRange, 1.0 );\n}\nvec4 LinearToRGBM( in vec4 value, in float maxRange ) {\n\tfloat maxRGB = max( value.r, max( value.g, value.b ) );\n\tfloat M = clamp( maxRGB / maxRange, 0.0, 1.0 );\n\tM = ceil( M * 255.0 ) / 255.0;\n\treturn vec4( value.rgb / ( M * maxRange ), M );\n}\nvec4 RGBDToLinear( in vec4 value, in float maxRange ) {\n\treturn vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );\n}\nvec4 LinearToRGBD( in vec4 value, in float maxRange ) {\n\tfloat maxRGB = max( value.r, max( value.g, value.b ) );\n\tfloat D = max( maxRange / maxRGB, 1.0 );\n\tD = clamp( floor( D ) / 255.0, 0.0, 1.0 );\n\treturn vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );\n}\nconst mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );\nvec4 LinearToLogLuv( in vec4 value ) {\n\tvec3 Xp_Y_XYZp = cLogLuvM * value.rgb;\n\tXp_Y_XYZp = max( Xp_Y_XYZp, vec3( 1e-6, 1e-6, 1e-6 ) );\n\tvec4 vResult;\n\tvResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;\n\tfloat Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;\n\tvResult.w = fract( Le );\n\tvResult.z = ( Le - ( floor( vResult.w * 255.0 ) ) / 255.0 ) / 255.0;\n\treturn vResult;\n}\nconst mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );\nvec4 LogLuvToLinear( in vec4 value ) {\n\tfloat Le = value.z * 255.0 + value.w;\n\tvec3 Xp_Y_XYZp;\n\tXp_Y_XYZp.y = exp2( ( Le - 127.0 ) / 2.0 );\n\tXp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;\n\tXp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;\n\tvec3 vRGB = cLogLuvInverseM * Xp_Y_XYZp.rgb;\n\treturn vec4( max( vRGB, 0.0 ), 1.0 );\n}";
 
-var envmap_fragment = "#ifdef USE_ENVMAP\n\t#ifdef ENV_WORLDPOS\n\t\tvec3 cameraToFrag;\n\t\tif ( isOrthographic ) {\n\t\t\tcameraToFrag = normalize( vec3( - viewMatrix[ 0 ][ 2 ], - viewMatrix[ 1 ][ 2 ], - viewMatrix[ 2 ][ 2 ] ) );\n\t\t} else {\n\t\t\tcameraToFrag = normalize( vWorldPosition - cameraPosition );\n\t\t}\n\t\tvec3 worldNormal = inverseTransformDirection( normal, viewMatrix );\n\t\t#ifdef ENVMAP_MODE_REFLECTION\n\t\t\tvec3 reflectVec = reflect( cameraToFrag, worldNormal );\n\t\t#else\n\t\t\tvec3 reflectVec = refract( cameraToFrag, worldNormal, refractionRatio );\n\t\t#endif\n\t#else\n\t\tvec3 reflectVec = vReflect;\n\t#endif\n\t#ifdef ENVMAP_TYPE_CUBE\n\t\tvec4 envColor = textureCube( envMap, vec3( flipEnvMap * reflectVec.x, reflectVec.yz ) );\n\t#elif defined( ENVMAP_TYPE_CUBE_UV )\n\t\tvec4 envColor = textureCubeUV( envMap, reflectVec, 0.0 );\n\t#else\n\t\tvec4 envColor = vec4( 0.0 );\n\t#endif\n\t#ifndef ENVMAP_TYPE_CUBE_UV\n\t\tenvColor = envMapTexelToLinear( envColor );\n\t#endif\n\t#ifdef ENVMAP_BLENDING_MULTIPLY\n\t\toutgoingLight = mix( outgoingLight, outgoingLight * envColor.xyz, specularStrength * reflectivity );\n\t#elif defined( ENVMAP_BLENDING_MIX )\n\t\toutgoingLight = mix( outgoingLight, envColor.xyz, specularStrength * reflectivity );\n\t#elif defined( ENVMAP_BLENDING_ADD )\n\t\toutgoingLight += envColor.xyz * specularStrength * reflectivity;\n\t#endif\n#endif";
+var envmap_fragment = "#ifdef USE_ENVMAP\n\t#ifdef ENV_WORLDPOS\n\t\tvec3 cameraToFrag;\n\t\tif ( isOrthographic ) {\n\t\t\tcameraToFrag = normalize( vec3( - viewMatrix[ 0 ][ 2 ], - viewMatrix[ 1 ][ 2 ], - viewMatrix[ 2 ][ 2 ] ) );\n\t\t} else {\n\t\t\tcameraToFrag = normalize( vWorldPosition - cameraPosition );\n\t\t}\n\t\tvec3 worldNormal = inverseTransformDirection( normal, viewMatrix );\n\t\t#ifdef ENVMAP_MODE_REFLECTION\n\t\t\tvec3 reflectVec = reflect( cameraToFrag, worldNormal );\n\t\t#else\n\t\t\tvec3 reflectVec = refract( cameraToFrag, worldNormal, refractionRatio );\n\t\t#endif\n\t#else\n\t\tvec3 reflectVec = vReflect;\n\t#endif\n\t#ifdef ENVMAP_TYPE_CUBE\n\t\tvec4 envColor = textureCube( envMap, vec3( flipEnvMap * reflectVec.x, reflectVec.yz ) );\n\t\tenvColor = envMapTexelToLinear( envColor );\n\t#elif defined( ENVMAP_TYPE_CUBE_UV )\n\t\tvec4 envColor = textureCubeUV( envMap, reflectVec, 0.0 );\n\t#else\n\t\tvec4 envColor = vec4( 0.0 );\n\t#endif\n\t#ifdef ENVMAP_BLENDING_MULTIPLY\n\t\toutgoingLight = mix( outgoingLight, outgoingLight * envColor.xyz, specularStrength * reflectivity );\n\t#elif defined( ENVMAP_BLENDING_MIX )\n\t\toutgoingLight = mix( outgoingLight, envColor.xyz, specularStrength * reflectivity );\n\t#elif defined( ENVMAP_BLENDING_ADD )\n\t\toutgoingLight += envColor.xyz * specularStrength * reflectivity;\n\t#endif\n#endif";
 
 var envmap_common_pars_fragment = "#ifdef USE_ENVMAP\n\tuniform float envMapIntensity;\n\tuniform float flipEnvMap;\n\tuniform int maxMipLevel;\n\t#ifdef ENVMAP_TYPE_CUBE\n\t\tuniform samplerCube envMap;\n\t#else\n\t\tuniform sampler2D envMap;\n\t#endif\n\t\n#endif";
 
@@ -12391,41 +12288,41 @@ var envmap_pars_vertex = "#ifdef USE_ENVMAP\n\t#if defined( USE_BUMPMAP ) || def
 
 var envmap_vertex = "#ifdef USE_ENVMAP\n\t#ifdef ENV_WORLDPOS\n\t\tvWorldPosition = worldPosition.xyz;\n\t#else\n\t\tvec3 cameraToVertex;\n\t\tif ( isOrthographic ) {\n\t\t\tcameraToVertex = normalize( vec3( - viewMatrix[ 0 ][ 2 ], - viewMatrix[ 1 ][ 2 ], - viewMatrix[ 2 ][ 2 ] ) );\n\t\t} else {\n\t\t\tcameraToVertex = normalize( worldPosition.xyz - cameraPosition );\n\t\t}\n\t\tvec3 worldNormal = inverseTransformDirection( transformedNormal, viewMatrix );\n\t\t#ifdef ENVMAP_MODE_REFLECTION\n\t\t\tvReflect = reflect( cameraToVertex, worldNormal );\n\t\t#else\n\t\t\tvReflect = refract( cameraToVertex, worldNormal, refractionRatio );\n\t\t#endif\n\t#endif\n#endif";
 
-var fog_vertex = "#ifdef USE_FOG\n\tfogDepth = - mvPosition.z;\n#endif";
+var fog_vertex = "#ifdef USE_FOG\n\tvFogDepth = - mvPosition.z;\n#endif";
 
-var fog_pars_vertex = "#ifdef USE_FOG\n\tvarying float fogDepth;\n#endif";
+var fog_pars_vertex = "#ifdef USE_FOG\n\tvarying float vFogDepth;\n#endif";
 
-var fog_fragment = "#ifdef USE_FOG\n\t#ifdef FOG_EXP2\n\t\tfloat fogFactor = 1.0 - exp( - fogDensity * fogDensity * fogDepth * fogDepth );\n\t#else\n\t\tfloat fogFactor = smoothstep( fogNear, fogFar, fogDepth );\n\t#endif\n\tgl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif";
+var fog_fragment = "#ifdef USE_FOG\n\t#ifdef FOG_EXP2\n\t\tfloat fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );\n\t#else\n\t\tfloat fogFactor = smoothstep( fogNear, fogFar, vFogDepth );\n\t#endif\n\tgl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif";
 
-var fog_pars_fragment = "#ifdef USE_FOG\n\tuniform vec3 fogColor;\n\tvarying float fogDepth;\n\t#ifdef FOG_EXP2\n\t\tuniform float fogDensity;\n\t#else\n\t\tuniform float fogNear;\n\t\tuniform float fogFar;\n\t#endif\n#endif";
+var fog_pars_fragment = "#ifdef USE_FOG\n\tuniform vec3 fogColor;\n\tvarying float vFogDepth;\n\t#ifdef FOG_EXP2\n\t\tuniform float fogDensity;\n\t#else\n\t\tuniform float fogNear;\n\t\tuniform float fogFar;\n\t#endif\n#endif";
 
 var gradientmap_pars_fragment = "#ifdef USE_GRADIENTMAP\n\tuniform sampler2D gradientMap;\n#endif\nvec3 getGradientIrradiance( vec3 normal, vec3 lightDirection ) {\n\tfloat dotNL = dot( normal, lightDirection );\n\tvec2 coord = vec2( dotNL * 0.5 + 0.5, 0.0 );\n\t#ifdef USE_GRADIENTMAP\n\t\treturn texture2D( gradientMap, coord ).rgb;\n\t#else\n\t\treturn ( coord.x < 0.7 ) ? vec3( 0.7 ) : vec3( 1.0 );\n\t#endif\n}";
 
-var lightmap_fragment = "#ifdef USE_LIGHTMAP\n\tvec4 lightMapTexel= texture2D( lightMap, vUv2 );\n\treflectedLight.indirectDiffuse += PI * lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;\n#endif";
+var lightmap_fragment = "#ifdef USE_LIGHTMAP\n\tvec4 lightMapTexel = texture2D( lightMap, vUv2 );\n\tvec3 lightMapIrradiance = lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;\n\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\tlightMapIrradiance *= PI;\n\t#endif\n\treflectedLight.indirectDiffuse += lightMapIrradiance;\n#endif";
 
 var lightmap_pars_fragment = "#ifdef USE_LIGHTMAP\n\tuniform sampler2D lightMap;\n\tuniform float lightMapIntensity;\n#endif";
 
-var lights_lambert_vertex = "vec3 diffuse = vec3( 1.0 );\nGeometricContext geometry;\ngeometry.position = mvPosition.xyz;\ngeometry.normal = normalize( transformedNormal );\ngeometry.viewDir = ( isOrthographic ) ? vec3( 0, 0, 1 ) : normalize( -mvPosition.xyz );\nGeometricContext backGeometry;\nbackGeometry.position = geometry.position;\nbackGeometry.normal = -geometry.normal;\nbackGeometry.viewDir = geometry.viewDir;\nvLightFront = vec3( 0.0 );\nvIndirectFront = vec3( 0.0 );\n#ifdef DOUBLE_SIDED\n\tvLightBack = vec3( 0.0 );\n\tvIndirectBack = vec3( 0.0 );\n#endif\nIncidentLight directLight;\nfloat dotNL;\nvec3 directLightColor_Diffuse;\nvIndirectFront += getAmbientLightIrradiance( ambientLightColor );\nvIndirectFront += getLightProbeIrradiance( lightProbe, geometry );\n#ifdef DOUBLE_SIDED\n\tvIndirectBack += getAmbientLightIrradiance( ambientLightColor );\n\tvIndirectBack += getLightProbeIrradiance( lightProbe, backGeometry );\n#endif\n#if NUM_POINT_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_POINT_LIGHTS; i ++ ) {\n\t\tgetPointDirectLightIrradiance( pointLights[ i ], geometry, directLight );\n\t\tdotNL = dot( geometry.normal, directLight.direction );\n\t\tdirectLightColor_Diffuse = PI * directLight.color;\n\t\tvLightFront += saturate( dotNL ) * directLightColor_Diffuse;\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvLightBack += saturate( -dotNL ) * directLightColor_Diffuse;\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if NUM_SPOT_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_SPOT_LIGHTS; i ++ ) {\n\t\tgetSpotDirectLightIrradiance( spotLights[ i ], geometry, directLight );\n\t\tdotNL = dot( geometry.normal, directLight.direction );\n\t\tdirectLightColor_Diffuse = PI * directLight.color;\n\t\tvLightFront += saturate( dotNL ) * directLightColor_Diffuse;\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvLightBack += saturate( -dotNL ) * directLightColor_Diffuse;\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if NUM_DIR_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {\n\t\tgetDirectionalDirectLightIrradiance( directionalLights[ i ], geometry, directLight );\n\t\tdotNL = dot( geometry.normal, directLight.direction );\n\t\tdirectLightColor_Diffuse = PI * directLight.color;\n\t\tvLightFront += saturate( dotNL ) * directLightColor_Diffuse;\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvLightBack += saturate( -dotNL ) * directLightColor_Diffuse;\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if NUM_HEMI_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_HEMI_LIGHTS; i ++ ) {\n\t\tvIndirectFront += getHemisphereLightIrradiance( hemisphereLights[ i ], geometry );\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvIndirectBack += getHemisphereLightIrradiance( hemisphereLights[ i ], backGeometry );\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif";
+var lights_lambert_vertex = "vec3 diffuse = vec3( 1.0 );\nGeometricContext geometry;\ngeometry.position = mvPosition.xyz;\ngeometry.normal = normalize( transformedNormal );\ngeometry.viewDir = ( isOrthographic ) ? vec3( 0, 0, 1 ) : normalize( -mvPosition.xyz );\nGeometricContext backGeometry;\nbackGeometry.position = geometry.position;\nbackGeometry.normal = -geometry.normal;\nbackGeometry.viewDir = geometry.viewDir;\nvLightFront = vec3( 0.0 );\nvIndirectFront = vec3( 0.0 );\n#ifdef DOUBLE_SIDED\n\tvLightBack = vec3( 0.0 );\n\tvIndirectBack = vec3( 0.0 );\n#endif\nIncidentLight directLight;\nfloat dotNL;\nvec3 directLightColor_Diffuse;\nvIndirectFront += getAmbientLightIrradiance( ambientLightColor );\nvIndirectFront += getLightProbeIrradiance( lightProbe, geometry );\n#ifdef DOUBLE_SIDED\n\tvIndirectBack += getAmbientLightIrradiance( ambientLightColor );\n\tvIndirectBack += getLightProbeIrradiance( lightProbe, backGeometry );\n#endif\n#if NUM_POINT_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_POINT_LIGHTS; i ++ ) {\n\t\tgetPointLightInfo( pointLights[ i ], geometry, directLight );\n\t\tdotNL = dot( geometry.normal, directLight.direction );\n\t\tdirectLightColor_Diffuse = directLight.color;\n\t\tvLightFront += saturate( dotNL ) * directLightColor_Diffuse;\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvLightBack += saturate( - dotNL ) * directLightColor_Diffuse;\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if NUM_SPOT_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_SPOT_LIGHTS; i ++ ) {\n\t\tgetSpotLightInfo( spotLights[ i ], geometry, directLight );\n\t\tdotNL = dot( geometry.normal, directLight.direction );\n\t\tdirectLightColor_Diffuse = directLight.color;\n\t\tvLightFront += saturate( dotNL ) * directLightColor_Diffuse;\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvLightBack += saturate( - dotNL ) * directLightColor_Diffuse;\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if NUM_DIR_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {\n\t\tgetDirectionalLightInfo( directionalLights[ i ], geometry, directLight );\n\t\tdotNL = dot( geometry.normal, directLight.direction );\n\t\tdirectLightColor_Diffuse = directLight.color;\n\t\tvLightFront += saturate( dotNL ) * directLightColor_Diffuse;\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvLightBack += saturate( - dotNL ) * directLightColor_Diffuse;\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if NUM_HEMI_LIGHTS > 0\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_HEMI_LIGHTS; i ++ ) {\n\t\tvIndirectFront += getHemisphereLightIrradiance( hemisphereLights[ i ], geometry );\n\t\t#ifdef DOUBLE_SIDED\n\t\t\tvIndirectBack += getHemisphereLightIrradiance( hemisphereLights[ i ], backGeometry );\n\t\t#endif\n\t}\n\t#pragma unroll_loop_end\n#endif";
 
-var lights_pars_begin = "uniform bool receiveShadow;\nuniform vec3 ambientLightColor;\nuniform vec3 lightProbe[ 9 ];\nvec3 shGetIrradianceAt( in vec3 normal, in vec3 shCoefficients[ 9 ] ) {\n\tfloat x = normal.x, y = normal.y, z = normal.z;\n\tvec3 result = shCoefficients[ 0 ] * 0.886227;\n\tresult += shCoefficients[ 1 ] * 2.0 * 0.511664 * y;\n\tresult += shCoefficients[ 2 ] * 2.0 * 0.511664 * z;\n\tresult += shCoefficients[ 3 ] * 2.0 * 0.511664 * x;\n\tresult += shCoefficients[ 4 ] * 2.0 * 0.429043 * x * y;\n\tresult += shCoefficients[ 5 ] * 2.0 * 0.429043 * y * z;\n\tresult += shCoefficients[ 6 ] * ( 0.743125 * z * z - 0.247708 );\n\tresult += shCoefficients[ 7 ] * 2.0 * 0.429043 * x * z;\n\tresult += shCoefficients[ 8 ] * 0.429043 * ( x * x - y * y );\n\treturn result;\n}\nvec3 getLightProbeIrradiance( const in vec3 lightProbe[ 9 ], const in GeometricContext geometry ) {\n\tvec3 worldNormal = inverseTransformDirection( geometry.normal, viewMatrix );\n\tvec3 irradiance = shGetIrradianceAt( worldNormal, lightProbe );\n\treturn irradiance;\n}\nvec3 getAmbientLightIrradiance( const in vec3 ambientLightColor ) {\n\tvec3 irradiance = ambientLightColor;\n\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\tirradiance *= PI;\n\t#endif\n\treturn irradiance;\n}\n#if NUM_DIR_LIGHTS > 0\n\tstruct DirectionalLight {\n\t\tvec3 direction;\n\t\tvec3 color;\n\t};\n\tuniform DirectionalLight directionalLights[ NUM_DIR_LIGHTS ];\n\tvoid getDirectionalDirectLightIrradiance( const in DirectionalLight directionalLight, const in GeometricContext geometry, out IncidentLight directLight ) {\n\t\tdirectLight.color = directionalLight.color;\n\t\tdirectLight.direction = directionalLight.direction;\n\t\tdirectLight.visible = true;\n\t}\n#endif\n#if NUM_POINT_LIGHTS > 0\n\tstruct PointLight {\n\t\tvec3 position;\n\t\tvec3 color;\n\t\tfloat distance;\n\t\tfloat decay;\n\t};\n\tuniform PointLight pointLights[ NUM_POINT_LIGHTS ];\n\tvoid getPointDirectLightIrradiance( const in PointLight pointLight, const in GeometricContext geometry, out IncidentLight directLight ) {\n\t\tvec3 lVector = pointLight.position - geometry.position;\n\t\tdirectLight.direction = normalize( lVector );\n\t\tfloat lightDistance = length( lVector );\n\t\tdirectLight.color = pointLight.color;\n\t\tdirectLight.color *= punctualLightIntensityToIrradianceFactor( lightDistance, pointLight.distance, pointLight.decay );\n\t\tdirectLight.visible = ( directLight.color != vec3( 0.0 ) );\n\t}\n#endif\n#if NUM_SPOT_LIGHTS > 0\n\tstruct SpotLight {\n\t\tvec3 position;\n\t\tvec3 direction;\n\t\tvec3 color;\n\t\tfloat distance;\n\t\tfloat decay;\n\t\tfloat coneCos;\n\t\tfloat penumbraCos;\n\t};\n\tuniform SpotLight spotLights[ NUM_SPOT_LIGHTS ];\n\tvoid getSpotDirectLightIrradiance( const in SpotLight spotLight, const in GeometricContext geometry, out IncidentLight directLight ) {\n\t\tvec3 lVector = spotLight.position - geometry.position;\n\t\tdirectLight.direction = normalize( lVector );\n\t\tfloat lightDistance = length( lVector );\n\t\tfloat angleCos = dot( directLight.direction, spotLight.direction );\n\t\tif ( angleCos > spotLight.coneCos ) {\n\t\t\tfloat spotEffect = smoothstep( spotLight.coneCos, spotLight.penumbraCos, angleCos );\n\t\t\tdirectLight.color = spotLight.color;\n\t\t\tdirectLight.color *= spotEffect * punctualLightIntensityToIrradianceFactor( lightDistance, spotLight.distance, spotLight.decay );\n\t\t\tdirectLight.visible = true;\n\t\t} else {\n\t\t\tdirectLight.color = vec3( 0.0 );\n\t\t\tdirectLight.visible = false;\n\t\t}\n\t}\n#endif\n#if NUM_RECT_AREA_LIGHTS > 0\n\tstruct RectAreaLight {\n\t\tvec3 color;\n\t\tvec3 position;\n\t\tvec3 halfWidth;\n\t\tvec3 halfHeight;\n\t};\n\tuniform sampler2D ltc_1;\tuniform sampler2D ltc_2;\n\tuniform RectAreaLight rectAreaLights[ NUM_RECT_AREA_LIGHTS ];\n#endif\n#if NUM_HEMI_LIGHTS > 0\n\tstruct HemisphereLight {\n\t\tvec3 direction;\n\t\tvec3 skyColor;\n\t\tvec3 groundColor;\n\t};\n\tuniform HemisphereLight hemisphereLights[ NUM_HEMI_LIGHTS ];\n\tvec3 getHemisphereLightIrradiance( const in HemisphereLight hemiLight, const in GeometricContext geometry ) {\n\t\tfloat dotNL = dot( geometry.normal, hemiLight.direction );\n\t\tfloat hemiDiffuseWeight = 0.5 * dotNL + 0.5;\n\t\tvec3 irradiance = mix( hemiLight.groundColor, hemiLight.skyColor, hemiDiffuseWeight );\n\t\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\t\tirradiance *= PI;\n\t\t#endif\n\t\treturn irradiance;\n\t}\n#endif";
+var lights_pars_begin = "uniform bool receiveShadow;\nuniform vec3 ambientLightColor;\nuniform vec3 lightProbe[ 9 ];\nvec3 shGetIrradianceAt( in vec3 normal, in vec3 shCoefficients[ 9 ] ) {\n\tfloat x = normal.x, y = normal.y, z = normal.z;\n\tvec3 result = shCoefficients[ 0 ] * 0.886227;\n\tresult += shCoefficients[ 1 ] * 2.0 * 0.511664 * y;\n\tresult += shCoefficients[ 2 ] * 2.0 * 0.511664 * z;\n\tresult += shCoefficients[ 3 ] * 2.0 * 0.511664 * x;\n\tresult += shCoefficients[ 4 ] * 2.0 * 0.429043 * x * y;\n\tresult += shCoefficients[ 5 ] * 2.0 * 0.429043 * y * z;\n\tresult += shCoefficients[ 6 ] * ( 0.743125 * z * z - 0.247708 );\n\tresult += shCoefficients[ 7 ] * 2.0 * 0.429043 * x * z;\n\tresult += shCoefficients[ 8 ] * 0.429043 * ( x * x - y * y );\n\treturn result;\n}\nvec3 getLightProbeIrradiance( const in vec3 lightProbe[ 9 ], const in GeometricContext geometry ) {\n\tvec3 worldNormal = inverseTransformDirection( geometry.normal, viewMatrix );\n\tvec3 irradiance = shGetIrradianceAt( worldNormal, lightProbe );\n\treturn irradiance;\n}\nvec3 getAmbientLightIrradiance( const in vec3 ambientLightColor ) {\n\tvec3 irradiance = ambientLightColor;\n\treturn irradiance;\n}\nfloat getDistanceAttenuation( const in float lightDistance, const in float cutoffDistance, const in float decayExponent ) {\n\t#if defined ( PHYSICALLY_CORRECT_LIGHTS )\n\t\tfloat distanceFalloff = 1.0 / max( pow( lightDistance, decayExponent ), 0.01 );\n\t\tif ( cutoffDistance > 0.0 ) {\n\t\t\tdistanceFalloff *= pow2( saturate( 1.0 - pow4( lightDistance / cutoffDistance ) ) );\n\t\t}\n\t\treturn distanceFalloff;\n\t#else\n\t\tif ( cutoffDistance > 0.0 && decayExponent > 0.0 ) {\n\t\t\treturn pow( saturate( - lightDistance / cutoffDistance + 1.0 ), decayExponent );\n\t\t}\n\t\treturn 1.0;\n\t#endif\n}\nfloat getSpotAttenuation( const in float coneCosine, const in float penumbraCosine, const in float angleCosine ) {\n\treturn smoothstep( coneCosine, penumbraCosine, angleCosine );\n}\n#if NUM_DIR_LIGHTS > 0\n\tstruct DirectionalLight {\n\t\tvec3 direction;\n\t\tvec3 color;\n\t};\n\tuniform DirectionalLight directionalLights[ NUM_DIR_LIGHTS ];\n\tvoid getDirectionalLightInfo( const in DirectionalLight directionalLight, const in GeometricContext geometry, out IncidentLight light ) {\n\t\tlight.color = directionalLight.color;\n\t\tlight.direction = directionalLight.direction;\n\t\tlight.visible = true;\n\t}\n#endif\n#if NUM_POINT_LIGHTS > 0\n\tstruct PointLight {\n\t\tvec3 position;\n\t\tvec3 color;\n\t\tfloat distance;\n\t\tfloat decay;\n\t};\n\tuniform PointLight pointLights[ NUM_POINT_LIGHTS ];\n\tvoid getPointLightInfo( const in PointLight pointLight, const in GeometricContext geometry, out IncidentLight light ) {\n\t\tvec3 lVector = pointLight.position - geometry.position;\n\t\tlight.direction = normalize( lVector );\n\t\tfloat lightDistance = length( lVector );\n\t\tlight.color = pointLight.color;\n\t\tlight.color *= getDistanceAttenuation( lightDistance, pointLight.distance, pointLight.decay );\n\t\tlight.visible = ( light.color != vec3( 0.0 ) );\n\t}\n#endif\n#if NUM_SPOT_LIGHTS > 0\n\tstruct SpotLight {\n\t\tvec3 position;\n\t\tvec3 direction;\n\t\tvec3 color;\n\t\tfloat distance;\n\t\tfloat decay;\n\t\tfloat coneCos;\n\t\tfloat penumbraCos;\n\t};\n\tuniform SpotLight spotLights[ NUM_SPOT_LIGHTS ];\n\tvoid getSpotLightInfo( const in SpotLight spotLight, const in GeometricContext geometry, out IncidentLight light ) {\n\t\tvec3 lVector = spotLight.position - geometry.position;\n\t\tlight.direction = normalize( lVector );\n\t\tfloat angleCos = dot( light.direction, spotLight.direction );\n\t\tfloat spotAttenuation = getSpotAttenuation( spotLight.coneCos, spotLight.penumbraCos, angleCos );\n\t\tif ( spotAttenuation > 0.0 ) {\n\t\t\tfloat lightDistance = length( lVector );\n\t\t\tlight.color = spotLight.color * spotAttenuation;\n\t\t\tlight.color *= getDistanceAttenuation( lightDistance, spotLight.distance, spotLight.decay );\n\t\t\tlight.visible = ( light.color != vec3( 0.0 ) );\n\t\t} else {\n\t\t\tlight.color = vec3( 0.0 );\n\t\t\tlight.visible = false;\n\t\t}\n\t}\n#endif\n#if NUM_RECT_AREA_LIGHTS > 0\n\tstruct RectAreaLight {\n\t\tvec3 color;\n\t\tvec3 position;\n\t\tvec3 halfWidth;\n\t\tvec3 halfHeight;\n\t};\n\tuniform sampler2D ltc_1;\tuniform sampler2D ltc_2;\n\tuniform RectAreaLight rectAreaLights[ NUM_RECT_AREA_LIGHTS ];\n#endif\n#if NUM_HEMI_LIGHTS > 0\n\tstruct HemisphereLight {\n\t\tvec3 direction;\n\t\tvec3 skyColor;\n\t\tvec3 groundColor;\n\t};\n\tuniform HemisphereLight hemisphereLights[ NUM_HEMI_LIGHTS ];\n\tvec3 getHemisphereLightIrradiance( const in HemisphereLight hemiLight, const in GeometricContext geometry ) {\n\t\tfloat dotNL = dot( geometry.normal, hemiLight.direction );\n\t\tfloat hemiDiffuseWeight = 0.5 * dotNL + 0.5;\n\t\tvec3 irradiance = mix( hemiLight.groundColor, hemiLight.skyColor, hemiDiffuseWeight );\n\t\treturn irradiance;\n\t}\n#endif";
 
-var envmap_physical_pars_fragment = "#if defined( USE_ENVMAP )\n\t#ifdef ENVMAP_MODE_REFRACTION\n\t\tuniform float refractionRatio;\n\t#endif\n\tvec3 getLightProbeIndirectIrradiance( const in GeometricContext geometry, const in int maxMIPLevel ) {\n\t\tvec3 worldNormal = inverseTransformDirection( geometry.normal, viewMatrix );\n\t\t#ifdef ENVMAP_TYPE_CUBE\n\t\t\tvec3 queryVec = vec3( flipEnvMap * worldNormal.x, worldNormal.yz );\n\t\t\t#ifdef TEXTURE_LOD_EXT\n\t\t\t\tvec4 envMapColor = textureCubeLodEXT( envMap, queryVec, float( maxMIPLevel ) );\n\t\t\t#else\n\t\t\t\tvec4 envMapColor = textureCube( envMap, queryVec, float( maxMIPLevel ) );\n\t\t\t#endif\n\t\t\tenvMapColor.rgb = envMapTexelToLinear( envMapColor ).rgb;\n\t\t#elif defined( ENVMAP_TYPE_CUBE_UV )\n\t\t\tvec4 envMapColor = textureCubeUV( envMap, worldNormal, 1.0 );\n\t\t#else\n\t\t\tvec4 envMapColor = vec4( 0.0 );\n\t\t#endif\n\t\treturn PI * envMapColor.rgb * envMapIntensity;\n\t}\n\tfloat getSpecularMIPLevel( const in float roughness, const in int maxMIPLevel ) {\n\t\tfloat maxMIPLevelScalar = float( maxMIPLevel );\n\t\tfloat sigma = PI * roughness * roughness / ( 1.0 + roughness );\n\t\tfloat desiredMIPLevel = maxMIPLevelScalar + log2( sigma );\n\t\treturn clamp( desiredMIPLevel, 0.0, maxMIPLevelScalar );\n\t}\n\tvec3 getLightProbeIndirectRadiance( const in vec3 viewDir, const in vec3 normal, const in float roughness, const in int maxMIPLevel ) {\n\t\t#ifdef ENVMAP_MODE_REFLECTION\n\t\t\tvec3 reflectVec = reflect( -viewDir, normal );\n\t\t\treflectVec = normalize( mix( reflectVec, normal, roughness * roughness) );\n\t\t#else\n\t\t\tvec3 reflectVec = refract( -viewDir, normal, refractionRatio );\n\t\t#endif\n\t\treflectVec = inverseTransformDirection( reflectVec, viewMatrix );\n\t\tfloat specularMIPLevel = getSpecularMIPLevel( roughness, maxMIPLevel );\n\t\t#ifdef ENVMAP_TYPE_CUBE\n\t\t\tvec3 queryReflectVec = vec3( flipEnvMap * reflectVec.x, reflectVec.yz );\n\t\t\t#ifdef TEXTURE_LOD_EXT\n\t\t\t\tvec4 envMapColor = textureCubeLodEXT( envMap, queryReflectVec, specularMIPLevel );\n\t\t\t#else\n\t\t\t\tvec4 envMapColor = textureCube( envMap, queryReflectVec, specularMIPLevel );\n\t\t\t#endif\n\t\t\tenvMapColor.rgb = envMapTexelToLinear( envMapColor ).rgb;\n\t\t#elif defined( ENVMAP_TYPE_CUBE_UV )\n\t\t\tvec4 envMapColor = textureCubeUV( envMap, reflectVec, roughness );\n\t\t#endif\n\t\treturn envMapColor.rgb * envMapIntensity;\n\t}\n#endif";
+var envmap_physical_pars_fragment = "#if defined( USE_ENVMAP )\n\t#ifdef ENVMAP_MODE_REFRACTION\n\t\tuniform float refractionRatio;\n\t#endif\n\tvec3 getIBLIrradiance( const in GeometricContext geometry ) {\n\t\t#if defined( ENVMAP_TYPE_CUBE_UV )\n\t\t\tvec3 worldNormal = inverseTransformDirection( geometry.normal, viewMatrix );\n\t\t\tvec4 envMapColor = textureCubeUV( envMap, worldNormal, 1.0 );\n\t\t\treturn PI * envMapColor.rgb * envMapIntensity;\n\t\t#else\n\t\t\treturn vec3( 0.0 );\n\t\t#endif\n\t}\n\tvec3 getIBLRadiance( const in vec3 viewDir, const in vec3 normal, const in float roughness ) {\n\t\t#if defined( ENVMAP_TYPE_CUBE_UV )\n\t\t\tvec3 reflectVec;\n\t\t\t#ifdef ENVMAP_MODE_REFLECTION\n\t\t\t\treflectVec = reflect( - viewDir, normal );\n\t\t\t\treflectVec = normalize( mix( reflectVec, normal, roughness * roughness) );\n\t\t\t#else\n\t\t\t\treflectVec = refract( - viewDir, normal, refractionRatio );\n\t\t\t#endif\n\t\t\treflectVec = inverseTransformDirection( reflectVec, viewMatrix );\n\t\t\tvec4 envMapColor = textureCubeUV( envMap, reflectVec, roughness );\n\t\t\treturn envMapColor.rgb * envMapIntensity;\n\t\t#else\n\t\t\treturn vec3( 0.0 );\n\t\t#endif\n\t}\n#endif";
 
 var lights_toon_fragment = "ToonMaterial material;\nmaterial.diffuseColor = diffuseColor.rgb;";
 
-var lights_toon_pars_fragment = "varying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\nstruct ToonMaterial {\n\tvec3 diffuseColor;\n};\nvoid RE_Direct_Toon( const in IncidentLight directLight, const in GeometricContext geometry, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {\n\tvec3 irradiance = getGradientIrradiance( geometry.normal, directLight.direction ) * directLight.color;\n\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\tirradiance *= PI;\n\t#endif\n\treflectedLight.directDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );\n}\nvoid RE_IndirectDiffuse_Toon( const in vec3 irradiance, const in GeometricContext geometry, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {\n\treflectedLight.indirectDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );\n}\n#define RE_Direct\t\t\t\tRE_Direct_Toon\n#define RE_IndirectDiffuse\t\tRE_IndirectDiffuse_Toon\n#define Material_LightProbeLOD( material )\t(0)";
+var lights_toon_pars_fragment = "varying vec3 vViewPosition;\nstruct ToonMaterial {\n\tvec3 diffuseColor;\n};\nvoid RE_Direct_Toon( const in IncidentLight directLight, const in GeometricContext geometry, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {\n\tvec3 irradiance = getGradientIrradiance( geometry.normal, directLight.direction ) * directLight.color;\n\treflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );\n}\nvoid RE_IndirectDiffuse_Toon( const in vec3 irradiance, const in GeometricContext geometry, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {\n\treflectedLight.indirectDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );\n}\n#define RE_Direct\t\t\t\tRE_Direct_Toon\n#define RE_IndirectDiffuse\t\tRE_IndirectDiffuse_Toon\n#define Material_LightProbeLOD( material )\t(0)";
 
 var lights_phong_fragment = "BlinnPhongMaterial material;\nmaterial.diffuseColor = diffuseColor.rgb;\nmaterial.specularColor = specular;\nmaterial.specularShininess = shininess;\nmaterial.specularStrength = specularStrength;";
 
-var lights_phong_pars_fragment = "varying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\nstruct BlinnPhongMaterial {\n\tvec3 diffuseColor;\n\tvec3 specularColor;\n\tfloat specularShininess;\n\tfloat specularStrength;\n};\nvoid RE_Direct_BlinnPhong( const in IncidentLight directLight, const in GeometricContext geometry, const in BlinnPhongMaterial material, inout ReflectedLight reflectedLight ) {\n\tfloat dotNL = saturate( dot( geometry.normal, directLight.direction ) );\n\tvec3 irradiance = dotNL * directLight.color;\n\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\tirradiance *= PI;\n\t#endif\n\treflectedLight.directDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );\n\treflectedLight.directSpecular += irradiance * BRDF_Specular_BlinnPhong( directLight, geometry, material.specularColor, material.specularShininess ) * material.specularStrength;\n}\nvoid RE_IndirectDiffuse_BlinnPhong( const in vec3 irradiance, const in GeometricContext geometry, const in BlinnPhongMaterial material, inout ReflectedLight reflectedLight ) {\n\treflectedLight.indirectDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );\n}\n#define RE_Direct\t\t\t\tRE_Direct_BlinnPhong\n#define RE_IndirectDiffuse\t\tRE_IndirectDiffuse_BlinnPhong\n#define Material_LightProbeLOD( material )\t(0)";
+var lights_phong_pars_fragment = "varying vec3 vViewPosition;\nstruct BlinnPhongMaterial {\n\tvec3 diffuseColor;\n\tvec3 specularColor;\n\tfloat specularShininess;\n\tfloat specularStrength;\n};\nvoid RE_Direct_BlinnPhong( const in IncidentLight directLight, const in GeometricContext geometry, const in BlinnPhongMaterial material, inout ReflectedLight reflectedLight ) {\n\tfloat dotNL = saturate( dot( geometry.normal, directLight.direction ) );\n\tvec3 irradiance = dotNL * directLight.color;\n\treflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );\n\treflectedLight.directSpecular += irradiance * BRDF_BlinnPhong( directLight, geometry, material.specularColor, material.specularShininess ) * material.specularStrength;\n}\nvoid RE_IndirectDiffuse_BlinnPhong( const in vec3 irradiance, const in GeometricContext geometry, const in BlinnPhongMaterial material, inout ReflectedLight reflectedLight ) {\n\treflectedLight.indirectDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );\n}\n#define RE_Direct\t\t\t\tRE_Direct_BlinnPhong\n#define RE_IndirectDiffuse\t\tRE_IndirectDiffuse_BlinnPhong\n#define Material_LightProbeLOD( material )\t(0)";
 
-var lights_physical_fragment = "PhysicalMaterial material;\nmaterial.diffuseColor = diffuseColor.rgb * ( 1.0 - metalnessFactor );\nvec3 dxy = max( abs( dFdx( geometryNormal ) ), abs( dFdy( geometryNormal ) ) );\nfloat geometryRoughness = max( max( dxy.x, dxy.y ), dxy.z );\nmaterial.specularRoughness = max( roughnessFactor, 0.0525 );material.specularRoughness += geometryRoughness;\nmaterial.specularRoughness = min( material.specularRoughness, 1.0 );\n#ifdef REFLECTIVITY\n\tmaterial.specularColor = mix( vec3( MAXIMUM_SPECULAR_COEFFICIENT * pow2( reflectivity ) ), diffuseColor.rgb, metalnessFactor );\n#else\n\tmaterial.specularColor = mix( vec3( DEFAULT_SPECULAR_COEFFICIENT ), diffuseColor.rgb, metalnessFactor );\n#endif\n#ifdef CLEARCOAT\n\tmaterial.clearcoat = clearcoat;\n\tmaterial.clearcoatRoughness = clearcoatRoughness;\n\t#ifdef USE_CLEARCOATMAP\n\t\tmaterial.clearcoat *= texture2D( clearcoatMap, vUv ).x;\n\t#endif\n\t#ifdef USE_CLEARCOAT_ROUGHNESSMAP\n\t\tmaterial.clearcoatRoughness *= texture2D( clearcoatRoughnessMap, vUv ).y;\n\t#endif\n\tmaterial.clearcoat = saturate( material.clearcoat );\tmaterial.clearcoatRoughness = max( material.clearcoatRoughness, 0.0525 );\n\tmaterial.clearcoatRoughness += geometryRoughness;\n\tmaterial.clearcoatRoughness = min( material.clearcoatRoughness, 1.0 );\n#endif\n#ifdef USE_SHEEN\n\tmaterial.sheenColor = sheen;\n#endif";
+var lights_physical_fragment = "PhysicalMaterial material;\nmaterial.diffuseColor = diffuseColor.rgb * ( 1.0 - metalnessFactor );\nvec3 dxy = max( abs( dFdx( geometryNormal ) ), abs( dFdy( geometryNormal ) ) );\nfloat geometryRoughness = max( max( dxy.x, dxy.y ), dxy.z );\nmaterial.roughness = max( roughnessFactor, 0.0525 );material.roughness += geometryRoughness;\nmaterial.roughness = min( material.roughness, 1.0 );\n#ifdef IOR\n\t#ifdef SPECULAR\n\t\tfloat specularIntensityFactor = specularIntensity;\n\t\tvec3 specularTintFactor = specularTint;\n\t\t#ifdef USE_SPECULARINTENSITYMAP\n\t\t\tspecularIntensityFactor *= texture2D( specularIntensityMap, vUv ).a;\n\t\t#endif\n\t\t#ifdef USE_SPECULARTINTMAP\n\t\t\tspecularTintFactor *= specularTintMapTexelToLinear( texture2D( specularTintMap, vUv ) ).rgb;\n\t\t#endif\n\t\tmaterial.specularF90 = mix( specularIntensityFactor, 1.0, metalnessFactor );\n\t#else\n\t\tfloat specularIntensityFactor = 1.0;\n\t\tvec3 specularTintFactor = vec3( 1.0 );\n\t\tmaterial.specularF90 = 1.0;\n\t#endif\n\tmaterial.specularColor = mix( min( pow2( ( ior - 1.0 ) / ( ior + 1.0 ) ) * specularTintFactor, vec3( 1.0 ) ) * specularIntensityFactor, diffuseColor.rgb, metalnessFactor );\n#else\n\tmaterial.specularColor = mix( vec3( 0.04 ), diffuseColor.rgb, metalnessFactor );\n\tmaterial.specularF90 = 1.0;\n#endif\n#ifdef USE_CLEARCOAT\n\tmaterial.clearcoat = clearcoat;\n\tmaterial.clearcoatRoughness = clearcoatRoughness;\n\tmaterial.clearcoatF0 = vec3( 0.04 );\n\tmaterial.clearcoatF90 = 1.0;\n\t#ifdef USE_CLEARCOATMAP\n\t\tmaterial.clearcoat *= texture2D( clearcoatMap, vUv ).x;\n\t#endif\n\t#ifdef USE_CLEARCOAT_ROUGHNESSMAP\n\t\tmaterial.clearcoatRoughness *= texture2D( clearcoatRoughnessMap, vUv ).y;\n\t#endif\n\tmaterial.clearcoat = saturate( material.clearcoat );\tmaterial.clearcoatRoughness = max( material.clearcoatRoughness, 0.0525 );\n\tmaterial.clearcoatRoughness += geometryRoughness;\n\tmaterial.clearcoatRoughness = min( material.clearcoatRoughness, 1.0 );\n#endif\n#ifdef USE_SHEEN\n\tmaterial.sheenTint = sheenTint;\n#endif";
 
-var lights_physical_pars_fragment = "struct PhysicalMaterial {\n\tvec3 diffuseColor;\n\tfloat specularRoughness;\n\tvec3 specularColor;\n#ifdef CLEARCOAT\n\tfloat clearcoat;\n\tfloat clearcoatRoughness;\n#endif\n#ifdef USE_SHEEN\n\tvec3 sheenColor;\n#endif\n};\n#define MAXIMUM_SPECULAR_COEFFICIENT 0.16\n#define DEFAULT_SPECULAR_COEFFICIENT 0.04\nfloat clearcoatDHRApprox( const in float roughness, const in float dotNL ) {\n\treturn DEFAULT_SPECULAR_COEFFICIENT + ( 1.0 - DEFAULT_SPECULAR_COEFFICIENT ) * ( pow( 1.0 - dotNL, 5.0 ) * pow( 1.0 - roughness, 2.0 ) );\n}\n#if NUM_RECT_AREA_LIGHTS > 0\n\tvoid RE_Direct_RectArea_Physical( const in RectAreaLight rectAreaLight, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {\n\t\tvec3 normal = geometry.normal;\n\t\tvec3 viewDir = geometry.viewDir;\n\t\tvec3 position = geometry.position;\n\t\tvec3 lightPos = rectAreaLight.position;\n\t\tvec3 halfWidth = rectAreaLight.halfWidth;\n\t\tvec3 halfHeight = rectAreaLight.halfHeight;\n\t\tvec3 lightColor = rectAreaLight.color;\n\t\tfloat roughness = material.specularRoughness;\n\t\tvec3 rectCoords[ 4 ];\n\t\trectCoords[ 0 ] = lightPos + halfWidth - halfHeight;\t\trectCoords[ 1 ] = lightPos - halfWidth - halfHeight;\n\t\trectCoords[ 2 ] = lightPos - halfWidth + halfHeight;\n\t\trectCoords[ 3 ] = lightPos + halfWidth + halfHeight;\n\t\tvec2 uv = LTC_Uv( normal, viewDir, roughness );\n\t\tvec4 t1 = texture2D( ltc_1, uv );\n\t\tvec4 t2 = texture2D( ltc_2, uv );\n\t\tmat3 mInv = mat3(\n\t\t\tvec3( t1.x, 0, t1.y ),\n\t\t\tvec3(    0, 1,    0 ),\n\t\t\tvec3( t1.z, 0, t1.w )\n\t\t);\n\t\tvec3 fresnel = ( material.specularColor * t2.x + ( vec3( 1.0 ) - material.specularColor ) * t2.y );\n\t\treflectedLight.directSpecular += lightColor * fresnel * LTC_Evaluate( normal, viewDir, position, mInv, rectCoords );\n\t\treflectedLight.directDiffuse += lightColor * material.diffuseColor * LTC_Evaluate( normal, viewDir, position, mat3( 1.0 ), rectCoords );\n\t}\n#endif\nvoid RE_Direct_Physical( const in IncidentLight directLight, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {\n\tfloat dotNL = saturate( dot( geometry.normal, directLight.direction ) );\n\tvec3 irradiance = dotNL * directLight.color;\n\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\tirradiance *= PI;\n\t#endif\n\t#ifdef CLEARCOAT\n\t\tfloat ccDotNL = saturate( dot( geometry.clearcoatNormal, directLight.direction ) );\n\t\tvec3 ccIrradiance = ccDotNL * directLight.color;\n\t\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\t\tccIrradiance *= PI;\n\t\t#endif\n\t\tfloat clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );\n\t\treflectedLight.directSpecular += ccIrradiance * material.clearcoat * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), material.clearcoatRoughness );\n\t#else\n\t\tfloat clearcoatDHR = 0.0;\n\t#endif\n\t#ifdef USE_SHEEN\n\t\treflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_Sheen(\n\t\t\tmaterial.specularRoughness,\n\t\t\tdirectLight.direction,\n\t\t\tgeometry,\n\t\t\tmaterial.sheenColor\n\t\t);\n\t#else\n\t\treflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularColor, material.specularRoughness);\n\t#endif\n\treflectedLight.directDiffuse += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );\n}\nvoid RE_IndirectDiffuse_Physical( const in vec3 irradiance, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {\n\treflectedLight.indirectDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );\n}\nvoid RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradiance, const in vec3 clearcoatRadiance, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight) {\n\t#ifdef CLEARCOAT\n\t\tfloat ccDotNV = saturate( dot( geometry.clearcoatNormal, geometry.viewDir ) );\n\t\treflectedLight.indirectSpecular += clearcoatRadiance * material.clearcoat * BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), material.clearcoatRoughness );\n\t\tfloat ccDotNL = ccDotNV;\n\t\tfloat clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );\n\t#else\n\t\tfloat clearcoatDHR = 0.0;\n\t#endif\n\tfloat clearcoatInv = 1.0 - clearcoatDHR;\n\tvec3 singleScattering = vec3( 0.0 );\n\tvec3 multiScattering = vec3( 0.0 );\n\tvec3 cosineWeightedIrradiance = irradiance * RECIPROCAL_PI;\n\tBRDF_Specular_Multiscattering_Environment( geometry, material.specularColor, material.specularRoughness, singleScattering, multiScattering );\n\tvec3 diffuse = material.diffuseColor * ( 1.0 - ( singleScattering + multiScattering ) );\n\treflectedLight.indirectSpecular += clearcoatInv * radiance * singleScattering;\n\treflectedLight.indirectSpecular += multiScattering * cosineWeightedIrradiance;\n\treflectedLight.indirectDiffuse += diffuse * cosineWeightedIrradiance;\n}\n#define RE_Direct\t\t\t\tRE_Direct_Physical\n#define RE_Direct_RectArea\t\tRE_Direct_RectArea_Physical\n#define RE_IndirectDiffuse\t\tRE_IndirectDiffuse_Physical\n#define RE_IndirectSpecular\t\tRE_IndirectSpecular_Physical\nfloat computeSpecularOcclusion( const in float dotNV, const in float ambientOcclusion, const in float roughness ) {\n\treturn saturate( pow( dotNV + ambientOcclusion, exp2( - 16.0 * roughness - 1.0 ) ) - 1.0 + ambientOcclusion );\n}";
+var lights_physical_pars_fragment = "struct PhysicalMaterial {\n\tvec3 diffuseColor;\n\tfloat roughness;\n\tvec3 specularColor;\n\tfloat specularF90;\n\t#ifdef USE_CLEARCOAT\n\t\tfloat clearcoat;\n\t\tfloat clearcoatRoughness;\n\t\tvec3 clearcoatF0;\n\t\tfloat clearcoatF90;\n\t#endif\n\t#ifdef USE_SHEEN\n\t\tvec3 sheenTint;\n\t#endif\n};\nvec3 clearcoatSpecular = vec3( 0.0 );\nvec2 DFGApprox( const in vec3 normal, const in vec3 viewDir, const in float roughness ) {\n\tfloat dotNV = saturate( dot( normal, viewDir ) );\n\tconst vec4 c0 = vec4( - 1, - 0.0275, - 0.572, 0.022 );\n\tconst vec4 c1 = vec4( 1, 0.0425, 1.04, - 0.04 );\n\tvec4 r = roughness * c0 + c1;\n\tfloat a004 = min( r.x * r.x, exp2( - 9.28 * dotNV ) ) * r.x + r.y;\n\tvec2 fab = vec2( - 1.04, 1.04 ) * a004 + r.zw;\n\treturn fab;\n}\nvec3 EnvironmentBRDF( const in vec3 normal, const in vec3 viewDir, const in vec3 specularColor, const in float specularF90, const in float roughness ) {\n\tvec2 fab = DFGApprox( normal, viewDir, roughness );\n\treturn specularColor * fab.x + specularF90 * fab.y;\n}\nvoid computeMultiscattering( const in vec3 normal, const in vec3 viewDir, const in vec3 specularColor, const in float specularF90, const in float roughness, inout vec3 singleScatter, inout vec3 multiScatter ) {\n\tvec2 fab = DFGApprox( normal, viewDir, roughness );\n\tvec3 FssEss = specularColor * fab.x + specularF90 * fab.y;\n\tfloat Ess = fab.x + fab.y;\n\tfloat Ems = 1.0 - Ess;\n\tvec3 Favg = specularColor + ( 1.0 - specularColor ) * 0.047619;\tvec3 Fms = FssEss * Favg / ( 1.0 - Ems * Favg );\n\tsingleScatter += FssEss;\n\tmultiScatter += Fms * Ems;\n}\n#if NUM_RECT_AREA_LIGHTS > 0\n\tvoid RE_Direct_RectArea_Physical( const in RectAreaLight rectAreaLight, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {\n\t\tvec3 normal = geometry.normal;\n\t\tvec3 viewDir = geometry.viewDir;\n\t\tvec3 position = geometry.position;\n\t\tvec3 lightPos = rectAreaLight.position;\n\t\tvec3 halfWidth = rectAreaLight.halfWidth;\n\t\tvec3 halfHeight = rectAreaLight.halfHeight;\n\t\tvec3 lightColor = rectAreaLight.color;\n\t\tfloat roughness = material.roughness;\n\t\tvec3 rectCoords[ 4 ];\n\t\trectCoords[ 0 ] = lightPos + halfWidth - halfHeight;\t\trectCoords[ 1 ] = lightPos - halfWidth - halfHeight;\n\t\trectCoords[ 2 ] = lightPos - halfWidth + halfHeight;\n\t\trectCoords[ 3 ] = lightPos + halfWidth + halfHeight;\n\t\tvec2 uv = LTC_Uv( normal, viewDir, roughness );\n\t\tvec4 t1 = texture2D( ltc_1, uv );\n\t\tvec4 t2 = texture2D( ltc_2, uv );\n\t\tmat3 mInv = mat3(\n\t\t\tvec3( t1.x, 0, t1.y ),\n\t\t\tvec3(    0, 1,    0 ),\n\t\t\tvec3( t1.z, 0, t1.w )\n\t\t);\n\t\tvec3 fresnel = ( material.specularColor * t2.x + ( vec3( 1.0 ) - material.specularColor ) * t2.y );\n\t\treflectedLight.directSpecular += lightColor * fresnel * LTC_Evaluate( normal, viewDir, position, mInv, rectCoords );\n\t\treflectedLight.directDiffuse += lightColor * material.diffuseColor * LTC_Evaluate( normal, viewDir, position, mat3( 1.0 ), rectCoords );\n\t}\n#endif\nvoid RE_Direct_Physical( const in IncidentLight directLight, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {\n\tfloat dotNL = saturate( dot( geometry.normal, directLight.direction ) );\n\tvec3 irradiance = dotNL * directLight.color;\n\t#ifdef USE_CLEARCOAT\n\t\tfloat dotNLcc = saturate( dot( geometry.clearcoatNormal, directLight.direction ) );\n\t\tvec3 ccIrradiance = dotNLcc * directLight.color;\n\t\tclearcoatSpecular += ccIrradiance * BRDF_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, material.clearcoatF0, material.clearcoatF90, material.clearcoatRoughness );\n\t#endif\n\t#ifdef USE_SHEEN\n\t\treflectedLight.directSpecular += irradiance * BRDF_Sheen( material.roughness, directLight.direction, geometry, material.sheenTint );\n\t#else\n\t\treflectedLight.directSpecular += irradiance * BRDF_GGX( directLight, geometry.viewDir, geometry.normal, material.specularColor, material.specularF90, material.roughness );\n\t#endif\n\treflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );\n}\nvoid RE_IndirectDiffuse_Physical( const in vec3 irradiance, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {\n\treflectedLight.indirectDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );\n}\nvoid RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradiance, const in vec3 clearcoatRadiance, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight) {\n\t#ifdef USE_CLEARCOAT\n\t\tclearcoatSpecular += clearcoatRadiance * EnvironmentBRDF( geometry.clearcoatNormal, geometry.viewDir, material.clearcoatF0, material.clearcoatF90, material.clearcoatRoughness );\n\t#endif\n\tvec3 singleScattering = vec3( 0.0 );\n\tvec3 multiScattering = vec3( 0.0 );\n\tvec3 cosineWeightedIrradiance = irradiance * RECIPROCAL_PI;\n\tcomputeMultiscattering( geometry.normal, geometry.viewDir, material.specularColor, material.specularF90, material.roughness, singleScattering, multiScattering );\n\tvec3 diffuse = material.diffuseColor * ( 1.0 - ( singleScattering + multiScattering ) );\n\treflectedLight.indirectSpecular += radiance * singleScattering;\n\treflectedLight.indirectSpecular += multiScattering * cosineWeightedIrradiance;\n\treflectedLight.indirectDiffuse += diffuse * cosineWeightedIrradiance;\n}\n#define RE_Direct\t\t\t\tRE_Direct_Physical\n#define RE_Direct_RectArea\t\tRE_Direct_RectArea_Physical\n#define RE_IndirectDiffuse\t\tRE_IndirectDiffuse_Physical\n#define RE_IndirectSpecular\t\tRE_IndirectSpecular_Physical\nfloat computeSpecularOcclusion( const in float dotNV, const in float ambientOcclusion, const in float roughness ) {\n\treturn saturate( pow( dotNV + ambientOcclusion, exp2( - 16.0 * roughness - 1.0 ) ) - 1.0 + ambientOcclusion );\n}";
 
-var lights_fragment_begin = "\nGeometricContext geometry;\ngeometry.position = - vViewPosition;\ngeometry.normal = normal;\ngeometry.viewDir = ( isOrthographic ) ? vec3( 0, 0, 1 ) : normalize( vViewPosition );\n#ifdef CLEARCOAT\n\tgeometry.clearcoatNormal = clearcoatNormal;\n#endif\nIncidentLight directLight;\n#if ( NUM_POINT_LIGHTS > 0 ) && defined( RE_Direct )\n\tPointLight pointLight;\n\t#if defined( USE_SHADOWMAP ) && NUM_POINT_LIGHT_SHADOWS > 0\n\tPointLightShadow pointLightShadow;\n\t#endif\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_POINT_LIGHTS; i ++ ) {\n\t\tpointLight = pointLights[ i ];\n\t\tgetPointDirectLightIrradiance( pointLight, geometry, directLight );\n\t\t#if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_POINT_LIGHT_SHADOWS )\n\t\tpointLightShadow = pointLightShadows[ i ];\n\t\tdirectLight.color *= all( bvec2( directLight.visible, receiveShadow ) ) ? getPointShadow( pointShadowMap[ i ], pointLightShadow.shadowMapSize, pointLightShadow.shadowBias, pointLightShadow.shadowRadius, vPointShadowCoord[ i ], pointLightShadow.shadowCameraNear, pointLightShadow.shadowCameraFar ) : 1.0;\n\t\t#endif\n\t\tRE_Direct( directLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if ( NUM_SPOT_LIGHTS > 0 ) && defined( RE_Direct )\n\tSpotLight spotLight;\n\t#if defined( USE_SHADOWMAP ) && NUM_SPOT_LIGHT_SHADOWS > 0\n\tSpotLightShadow spotLightShadow;\n\t#endif\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_SPOT_LIGHTS; i ++ ) {\n\t\tspotLight = spotLights[ i ];\n\t\tgetSpotDirectLightIrradiance( spotLight, geometry, directLight );\n\t\t#if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_SPOT_LIGHT_SHADOWS )\n\t\tspotLightShadow = spotLightShadows[ i ];\n\t\tdirectLight.color *= all( bvec2( directLight.visible, receiveShadow ) ) ? getShadow( spotShadowMap[ i ], spotLightShadow.shadowMapSize, spotLightShadow.shadowBias, spotLightShadow.shadowRadius, vSpotShadowCoord[ i ] ) : 1.0;\n\t\t#endif\n\t\tRE_Direct( directLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )\n\tDirectionalLight directionalLight;\n\t#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0\n\tDirectionalLightShadow directionalLightShadow;\n\t#endif\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {\n\t\tdirectionalLight = directionalLights[ i ];\n\t\tgetDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );\n\t\t#if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_DIR_LIGHT_SHADOWS )\n\t\tdirectionalLightShadow = directionalLightShadows[ i ];\n\t\tdirectLight.color *= all( bvec2( directLight.visible, receiveShadow ) ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;\n\t\t#endif\n\t\tRE_Direct( directLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if ( NUM_RECT_AREA_LIGHTS > 0 ) && defined( RE_Direct_RectArea )\n\tRectAreaLight rectAreaLight;\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_RECT_AREA_LIGHTS; i ++ ) {\n\t\trectAreaLight = rectAreaLights[ i ];\n\t\tRE_Direct_RectArea( rectAreaLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if defined( RE_IndirectDiffuse )\n\tvec3 iblIrradiance = vec3( 0.0 );\n\tvec3 irradiance = getAmbientLightIrradiance( ambientLightColor );\n\tirradiance += getLightProbeIrradiance( lightProbe, geometry );\n\t#if ( NUM_HEMI_LIGHTS > 0 )\n\t\t#pragma unroll_loop_start\n\t\tfor ( int i = 0; i < NUM_HEMI_LIGHTS; i ++ ) {\n\t\t\tirradiance += getHemisphereLightIrradiance( hemisphereLights[ i ], geometry );\n\t\t}\n\t\t#pragma unroll_loop_end\n\t#endif\n#endif\n#if defined( RE_IndirectSpecular )\n\tvec3 radiance = vec3( 0.0 );\n\tvec3 clearcoatRadiance = vec3( 0.0 );\n#endif";
+var lights_fragment_begin = "\nGeometricContext geometry;\ngeometry.position = - vViewPosition;\ngeometry.normal = normal;\ngeometry.viewDir = ( isOrthographic ) ? vec3( 0, 0, 1 ) : normalize( vViewPosition );\n#ifdef USE_CLEARCOAT\n\tgeometry.clearcoatNormal = clearcoatNormal;\n#endif\nIncidentLight directLight;\n#if ( NUM_POINT_LIGHTS > 0 ) && defined( RE_Direct )\n\tPointLight pointLight;\n\t#if defined( USE_SHADOWMAP ) && NUM_POINT_LIGHT_SHADOWS > 0\n\tPointLightShadow pointLightShadow;\n\t#endif\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_POINT_LIGHTS; i ++ ) {\n\t\tpointLight = pointLights[ i ];\n\t\tgetPointLightInfo( pointLight, geometry, directLight );\n\t\t#if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_POINT_LIGHT_SHADOWS )\n\t\tpointLightShadow = pointLightShadows[ i ];\n\t\tdirectLight.color *= all( bvec2( directLight.visible, receiveShadow ) ) ? getPointShadow( pointShadowMap[ i ], pointLightShadow.shadowMapSize, pointLightShadow.shadowBias, pointLightShadow.shadowRadius, vPointShadowCoord[ i ], pointLightShadow.shadowCameraNear, pointLightShadow.shadowCameraFar ) : 1.0;\n\t\t#endif\n\t\tRE_Direct( directLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if ( NUM_SPOT_LIGHTS > 0 ) && defined( RE_Direct )\n\tSpotLight spotLight;\n\t#if defined( USE_SHADOWMAP ) && NUM_SPOT_LIGHT_SHADOWS > 0\n\tSpotLightShadow spotLightShadow;\n\t#endif\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_SPOT_LIGHTS; i ++ ) {\n\t\tspotLight = spotLights[ i ];\n\t\tgetSpotLightInfo( spotLight, geometry, directLight );\n\t\t#if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_SPOT_LIGHT_SHADOWS )\n\t\tspotLightShadow = spotLightShadows[ i ];\n\t\tdirectLight.color *= all( bvec2( directLight.visible, receiveShadow ) ) ? getShadow( spotShadowMap[ i ], spotLightShadow.shadowMapSize, spotLightShadow.shadowBias, spotLightShadow.shadowRadius, vSpotShadowCoord[ i ] ) : 1.0;\n\t\t#endif\n\t\tRE_Direct( directLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )\n\tDirectionalLight directionalLight;\n\t#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0\n\tDirectionalLightShadow directionalLightShadow;\n\t#endif\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {\n\t\tdirectionalLight = directionalLights[ i ];\n\t\tgetDirectionalLightInfo( directionalLight, geometry, directLight );\n\t\t#if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_DIR_LIGHT_SHADOWS )\n\t\tdirectionalLightShadow = directionalLightShadows[ i ];\n\t\tdirectLight.color *= all( bvec2( directLight.visible, receiveShadow ) ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;\n\t\t#endif\n\t\tRE_Direct( directLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if ( NUM_RECT_AREA_LIGHTS > 0 ) && defined( RE_Direct_RectArea )\n\tRectAreaLight rectAreaLight;\n\t#pragma unroll_loop_start\n\tfor ( int i = 0; i < NUM_RECT_AREA_LIGHTS; i ++ ) {\n\t\trectAreaLight = rectAreaLights[ i ];\n\t\tRE_Direct_RectArea( rectAreaLight, geometry, material, reflectedLight );\n\t}\n\t#pragma unroll_loop_end\n#endif\n#if defined( RE_IndirectDiffuse )\n\tvec3 iblIrradiance = vec3( 0.0 );\n\tvec3 irradiance = getAmbientLightIrradiance( ambientLightColor );\n\tirradiance += getLightProbeIrradiance( lightProbe, geometry );\n\t#if ( NUM_HEMI_LIGHTS > 0 )\n\t\t#pragma unroll_loop_start\n\t\tfor ( int i = 0; i < NUM_HEMI_LIGHTS; i ++ ) {\n\t\t\tirradiance += getHemisphereLightIrradiance( hemisphereLights[ i ], geometry );\n\t\t}\n\t\t#pragma unroll_loop_end\n\t#endif\n#endif\n#if defined( RE_IndirectSpecular )\n\tvec3 radiance = vec3( 0.0 );\n\tvec3 clearcoatRadiance = vec3( 0.0 );\n#endif";
 
-var lights_fragment_maps = "#if defined( RE_IndirectDiffuse )\n\t#ifdef USE_LIGHTMAP\n\t\tvec4 lightMapTexel= texture2D( lightMap, vUv2 );\n\t\tvec3 lightMapIrradiance = lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;\n\t\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\t\tlightMapIrradiance *= PI;\n\t\t#endif\n\t\tirradiance += lightMapIrradiance;\n\t#endif\n\t#if defined( USE_ENVMAP ) && defined( STANDARD ) && defined( ENVMAP_TYPE_CUBE_UV )\n\t\tiblIrradiance += getLightProbeIndirectIrradiance( geometry, maxMipLevel );\n\t#endif\n#endif\n#if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular )\n\tradiance += getLightProbeIndirectRadiance( geometry.viewDir, geometry.normal, material.specularRoughness, maxMipLevel );\n\t#ifdef CLEARCOAT\n\t\tclearcoatRadiance += getLightProbeIndirectRadiance( geometry.viewDir, geometry.clearcoatNormal, material.clearcoatRoughness, maxMipLevel );\n\t#endif\n#endif";
+var lights_fragment_maps = "#if defined( RE_IndirectDiffuse )\n\t#ifdef USE_LIGHTMAP\n\t\tvec4 lightMapTexel = texture2D( lightMap, vUv2 );\n\t\tvec3 lightMapIrradiance = lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;\n\t\t#ifndef PHYSICALLY_CORRECT_LIGHTS\n\t\t\tlightMapIrradiance *= PI;\n\t\t#endif\n\t\tirradiance += lightMapIrradiance;\n\t#endif\n\t#if defined( USE_ENVMAP ) && defined( STANDARD ) && defined( ENVMAP_TYPE_CUBE_UV )\n\t\tiblIrradiance += getIBLIrradiance( geometry );\n\t#endif\n#endif\n#if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular )\n\tradiance += getIBLRadiance( geometry.viewDir, geometry.normal, material.roughness );\n\t#ifdef USE_CLEARCOAT\n\t\tclearcoatRadiance += getIBLRadiance( geometry.viewDir, geometry.clearcoatNormal, material.clearcoatRoughness );\n\t#endif\n#endif";
 
 var lights_fragment_end = "#if defined( RE_IndirectDiffuse )\n\tRE_IndirectDiffuse( irradiance, geometry, material, reflectedLight );\n#endif\n#if defined( RE_IndirectSpecular )\n\tRE_IndirectSpecular( radiance, iblIrradiance, clearcoatRadiance, geometry, material, reflectedLight );\n#endif";
 
@@ -12457,17 +12354,25 @@ var morphtarget_vertex = "#ifdef USE_MORPHTARGETS\n\ttransformed *= morphTargetB
 
 var normal_fragment_begin = "float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;\n#ifdef FLAT_SHADED\n\tvec3 fdx = vec3( dFdx( vViewPosition.x ), dFdx( vViewPosition.y ), dFdx( vViewPosition.z ) );\n\tvec3 fdy = vec3( dFdy( vViewPosition.x ), dFdy( vViewPosition.y ), dFdy( vViewPosition.z ) );\n\tvec3 normal = normalize( cross( fdx, fdy ) );\n#else\n\tvec3 normal = normalize( vNormal );\n\t#ifdef DOUBLE_SIDED\n\t\tnormal = normal * faceDirection;\n\t#endif\n\t#ifdef USE_TANGENT\n\t\tvec3 tangent = normalize( vTangent );\n\t\tvec3 bitangent = normalize( vBitangent );\n\t\t#ifdef DOUBLE_SIDED\n\t\t\ttangent = tangent * faceDirection;\n\t\t\tbitangent = bitangent * faceDirection;\n\t\t#endif\n\t\t#if defined( TANGENTSPACE_NORMALMAP ) || defined( USE_CLEARCOAT_NORMALMAP )\n\t\t\tmat3 vTBN = mat3( tangent, bitangent, normal );\n\t\t#endif\n\t#endif\n#endif\nvec3 geometryNormal = normal;";
 
-var normal_fragment_maps = "#ifdef OBJECTSPACE_NORMALMAP\n\tnormal = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\t#ifdef FLIP_SIDED\n\t\tnormal = - normal;\n\t#endif\n\t#ifdef DOUBLE_SIDED\n\t\tnormal = normal * faceDirection;\n\t#endif\n\tnormal = normalize( normalMatrix * normal );\n#elif defined( TANGENTSPACE_NORMALMAP )\n\tvec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\t#ifdef USE_TANGENT\n\t\tnormal = normalize( vTBN * mapN );\n\t#else\n\t\tnormal = perturbNormal2Arb( -vViewPosition, normal, mapN, faceDirection );\n\t#endif\n#elif defined( USE_BUMPMAP )\n\tnormal = perturbNormalArb( -vViewPosition, normal, dHdxy_fwd(), faceDirection );\n#endif";
+var normal_fragment_maps = "#ifdef OBJECTSPACE_NORMALMAP\n\tnormal = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\t#ifdef FLIP_SIDED\n\t\tnormal = - normal;\n\t#endif\n\t#ifdef DOUBLE_SIDED\n\t\tnormal = normal * faceDirection;\n\t#endif\n\tnormal = normalize( normalMatrix * normal );\n#elif defined( TANGENTSPACE_NORMALMAP )\n\tvec3 mapN = texture2D( normalMap, vUv ).xyz * 2.0 - 1.0;\n\tmapN.xy *= normalScale;\n\t#ifdef USE_TANGENT\n\t\tnormal = normalize( vTBN * mapN );\n\t#else\n\t\tnormal = perturbNormal2Arb( - vViewPosition, normal, mapN, faceDirection );\n\t#endif\n#elif defined( USE_BUMPMAP )\n\tnormal = perturbNormalArb( - vViewPosition, normal, dHdxy_fwd(), faceDirection );\n#endif";
+
+var normal_pars_fragment = "#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifdef USE_TANGENT\n\t\tvarying vec3 vTangent;\n\t\tvarying vec3 vBitangent;\n\t#endif\n#endif";
+
+var normal_pars_vertex = "#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifdef USE_TANGENT\n\t\tvarying vec3 vTangent;\n\t\tvarying vec3 vBitangent;\n\t#endif\n#endif";
+
+var normal_vertex = "#ifndef FLAT_SHADED\n\tvNormal = normalize( transformedNormal );\n\t#ifdef USE_TANGENT\n\t\tvTangent = normalize( transformedTangent );\n\t\tvBitangent = normalize( cross( vNormal, vTangent ) * tangent.w );\n\t#endif\n#endif";
 
 var normalmap_pars_fragment = "#ifdef USE_NORMALMAP\n\tuniform sampler2D normalMap;\n\tuniform vec2 normalScale;\n#endif\n#ifdef OBJECTSPACE_NORMALMAP\n\tuniform mat3 normalMatrix;\n#endif\n#if ! defined ( USE_TANGENT ) && ( defined ( TANGENTSPACE_NORMALMAP ) || defined ( USE_CLEARCOAT_NORMALMAP ) )\n\tvec3 perturbNormal2Arb( vec3 eye_pos, vec3 surf_norm, vec3 mapN, float faceDirection ) {\n\t\tvec3 q0 = vec3( dFdx( eye_pos.x ), dFdx( eye_pos.y ), dFdx( eye_pos.z ) );\n\t\tvec3 q1 = vec3( dFdy( eye_pos.x ), dFdy( eye_pos.y ), dFdy( eye_pos.z ) );\n\t\tvec2 st0 = dFdx( vUv.st );\n\t\tvec2 st1 = dFdy( vUv.st );\n\t\tvec3 N = surf_norm;\n\t\tvec3 q1perp = cross( q1, N );\n\t\tvec3 q0perp = cross( N, q0 );\n\t\tvec3 T = q1perp * st0.x + q0perp * st1.x;\n\t\tvec3 B = q1perp * st0.y + q0perp * st1.y;\n\t\tfloat det = max( dot( T, T ), dot( B, B ) );\n\t\tfloat scale = ( det == 0.0 ) ? 0.0 : faceDirection * inversesqrt( det );\n\t\treturn normalize( T * ( mapN.x * scale ) + B * ( mapN.y * scale ) + N * mapN.z );\n\t}\n#endif";
 
-var clearcoat_normal_fragment_begin = "#ifdef CLEARCOAT\n\tvec3 clearcoatNormal = geometryNormal;\n#endif";
+var clearcoat_normal_fragment_begin = "#ifdef USE_CLEARCOAT\n\tvec3 clearcoatNormal = geometryNormal;\n#endif";
 
 var clearcoat_normal_fragment_maps = "#ifdef USE_CLEARCOAT_NORMALMAP\n\tvec3 clearcoatMapN = texture2D( clearcoatNormalMap, vUv ).xyz * 2.0 - 1.0;\n\tclearcoatMapN.xy *= clearcoatNormalScale;\n\t#ifdef USE_TANGENT\n\t\tclearcoatNormal = normalize( vTBN * clearcoatMapN );\n\t#else\n\t\tclearcoatNormal = perturbNormal2Arb( - vViewPosition, clearcoatNormal, clearcoatMapN, faceDirection );\n\t#endif\n#endif";
 
 var clearcoat_pars_fragment = "#ifdef USE_CLEARCOATMAP\n\tuniform sampler2D clearcoatMap;\n#endif\n#ifdef USE_CLEARCOAT_ROUGHNESSMAP\n\tuniform sampler2D clearcoatRoughnessMap;\n#endif\n#ifdef USE_CLEARCOAT_NORMALMAP\n\tuniform sampler2D clearcoatNormalMap;\n\tuniform vec2 clearcoatNormalScale;\n#endif";
 
-var packing = "vec3 packNormalToRGB( const in vec3 normal ) {\n\treturn normalize( normal ) * 0.5 + 0.5;\n}\nvec3 unpackRGBToNormal( const in vec3 rgb ) {\n\treturn 2.0 * rgb.xyz - 1.0;\n}\nconst float PackUpscale = 256. / 255.;const float UnpackDownscale = 255. / 256.;\nconst vec3 PackFactors = vec3( 256. * 256. * 256., 256. * 256., 256. );\nconst vec4 UnpackFactors = UnpackDownscale / vec4( PackFactors, 1. );\nconst float ShiftRight8 = 1. / 256.;\nvec4 packDepthToRGBA( const in float v ) {\n\tvec4 r = vec4( fract( v * PackFactors ), v );\n\tr.yzw -= r.xyz * ShiftRight8;\treturn r * PackUpscale;\n}\nfloat unpackRGBAToDepth( const in vec4 v ) {\n\treturn dot( v, UnpackFactors );\n}\nvec4 pack2HalfToRGBA( vec2 v ) {\n\tvec4 r = vec4( v.x, fract( v.x * 255.0 ), v.y, fract( v.y * 255.0 ));\n\treturn vec4( r.x - r.y / 255.0, r.y, r.z - r.w / 255.0, r.w);\n}\nvec2 unpackRGBATo2Half( vec4 v ) {\n\treturn vec2( v.x + ( v.y / 255.0 ), v.z + ( v.w / 255.0 ) );\n}\nfloat viewZToOrthographicDepth( const in float viewZ, const in float near, const in float far ) {\n\treturn ( viewZ + near ) / ( near - far );\n}\nfloat orthographicDepthToViewZ( const in float linearClipZ, const in float near, const in float far ) {\n\treturn linearClipZ * ( near - far ) - near;\n}\nfloat viewZToPerspectiveDepth( const in float viewZ, const in float near, const in float far ) {\n\treturn (( near + viewZ ) * far ) / (( far - near ) * viewZ );\n}\nfloat perspectiveDepthToViewZ( const in float invClipZ, const in float near, const in float far ) {\n\treturn ( near * far ) / ( ( far - near ) * invClipZ - far );\n}";
+var output_fragment = "#ifdef OPAQUE\ndiffuseColor.a = 1.0;\n#endif\n#ifdef USE_TRANSMISSION\ndiffuseColor.a *= transmissionAlpha + 0.1;\n#endif\ngl_FragColor = vec4( outgoingLight, diffuseColor.a );";
+
+var packing = "vec3 packNormalToRGB( const in vec3 normal ) {\n\treturn normalize( normal ) * 0.5 + 0.5;\n}\nvec3 unpackRGBToNormal( const in vec3 rgb ) {\n\treturn 2.0 * rgb.xyz - 1.0;\n}\nconst float PackUpscale = 256. / 255.;const float UnpackDownscale = 255. / 256.;\nconst vec3 PackFactors = vec3( 256. * 256. * 256., 256. * 256., 256. );\nconst vec4 UnpackFactors = UnpackDownscale / vec4( PackFactors, 1. );\nconst float ShiftRight8 = 1. / 256.;\nvec4 packDepthToRGBA( const in float v ) {\n\tvec4 r = vec4( fract( v * PackFactors ), v );\n\tr.yzw -= r.xyz * ShiftRight8;\treturn r * PackUpscale;\n}\nfloat unpackRGBAToDepth( const in vec4 v ) {\n\treturn dot( v, UnpackFactors );\n}\nvec4 pack2HalfToRGBA( vec2 v ) {\n\tvec4 r = vec4( v.x, fract( v.x * 255.0 ), v.y, fract( v.y * 255.0 ) );\n\treturn vec4( r.x - r.y / 255.0, r.y, r.z - r.w / 255.0, r.w );\n}\nvec2 unpackRGBATo2Half( vec4 v ) {\n\treturn vec2( v.x + ( v.y / 255.0 ), v.z + ( v.w / 255.0 ) );\n}\nfloat viewZToOrthographicDepth( const in float viewZ, const in float near, const in float far ) {\n\treturn ( viewZ + near ) / ( near - far );\n}\nfloat orthographicDepthToViewZ( const in float linearClipZ, const in float near, const in float far ) {\n\treturn linearClipZ * ( near - far ) - near;\n}\nfloat viewZToPerspectiveDepth( const in float viewZ, const in float near, const in float far ) {\n\treturn ( ( near + viewZ ) * far ) / ( ( far - near ) * viewZ );\n}\nfloat perspectiveDepthToViewZ( const in float invClipZ, const in float near, const in float far ) {\n\treturn ( near * far ) / ( ( far - near ) * invClipZ - far );\n}";
 
 var premultiplied_alpha_fragment = "#ifdef PREMULTIPLIED_ALPHA\n\tgl_FragColor.rgb *= gl_FragColor.a;\n#endif";
 
@@ -12503,11 +12408,11 @@ var specularmap_pars_fragment = "#ifdef USE_SPECULARMAP\n\tuniform sampler2D spe
 
 var tonemapping_fragment = "#if defined( TONE_MAPPING )\n\tgl_FragColor.rgb = toneMapping( gl_FragColor.rgb );\n#endif";
 
-var tonemapping_pars_fragment = "#ifndef saturate\n#define saturate(a) clamp( a, 0.0, 1.0 )\n#endif\nuniform float toneMappingExposure;\nvec3 LinearToneMapping( vec3 color ) {\n\treturn toneMappingExposure * color;\n}\nvec3 ReinhardToneMapping( vec3 color ) {\n\tcolor *= toneMappingExposure;\n\treturn saturate( color / ( vec3( 1.0 ) + color ) );\n}\nvec3 OptimizedCineonToneMapping( vec3 color ) {\n\tcolor *= toneMappingExposure;\n\tcolor = max( vec3( 0.0 ), color - 0.004 );\n\treturn pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );\n}\nvec3 RRTAndODTFit( vec3 v ) {\n\tvec3 a = v * ( v + 0.0245786 ) - 0.000090537;\n\tvec3 b = v * ( 0.983729 * v + 0.4329510 ) + 0.238081;\n\treturn a / b;\n}\nvec3 ACESFilmicToneMapping( vec3 color ) {\n\tconst mat3 ACESInputMat = mat3(\n\t\tvec3( 0.59719, 0.07600, 0.02840 ),\t\tvec3( 0.35458, 0.90834, 0.13383 ),\n\t\tvec3( 0.04823, 0.01566, 0.83777 )\n\t);\n\tconst mat3 ACESOutputMat = mat3(\n\t\tvec3(  1.60475, -0.10208, -0.00327 ),\t\tvec3( -0.53108,  1.10813, -0.07276 ),\n\t\tvec3( -0.07367, -0.00605,  1.07602 )\n\t);\n\tcolor *= toneMappingExposure / 0.6;\n\tcolor = ACESInputMat * color;\n\tcolor = RRTAndODTFit( color );\n\tcolor = ACESOutputMat * color;\n\treturn saturate( color );\n}\nvec3 CustomToneMapping( vec3 color ) { return color; }";
+var tonemapping_pars_fragment = "#ifndef saturate\n#define saturate( a ) clamp( a, 0.0, 1.0 )\n#endif\nuniform float toneMappingExposure;\nvec3 LinearToneMapping( vec3 color ) {\n\treturn toneMappingExposure * color;\n}\nvec3 ReinhardToneMapping( vec3 color ) {\n\tcolor *= toneMappingExposure;\n\treturn saturate( color / ( vec3( 1.0 ) + color ) );\n}\nvec3 OptimizedCineonToneMapping( vec3 color ) {\n\tcolor *= toneMappingExposure;\n\tcolor = max( vec3( 0.0 ), color - 0.004 );\n\treturn pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );\n}\nvec3 RRTAndODTFit( vec3 v ) {\n\tvec3 a = v * ( v + 0.0245786 ) - 0.000090537;\n\tvec3 b = v * ( 0.983729 * v + 0.4329510 ) + 0.238081;\n\treturn a / b;\n}\nvec3 ACESFilmicToneMapping( vec3 color ) {\n\tconst mat3 ACESInputMat = mat3(\n\t\tvec3( 0.59719, 0.07600, 0.02840 ),\t\tvec3( 0.35458, 0.90834, 0.13383 ),\n\t\tvec3( 0.04823, 0.01566, 0.83777 )\n\t);\n\tconst mat3 ACESOutputMat = mat3(\n\t\tvec3(  1.60475, -0.10208, -0.00327 ),\t\tvec3( -0.53108,  1.10813, -0.07276 ),\n\t\tvec3( -0.07367, -0.00605,  1.07602 )\n\t);\n\tcolor *= toneMappingExposure / 0.6;\n\tcolor = ACESInputMat * color;\n\tcolor = RRTAndODTFit( color );\n\tcolor = ACESOutputMat * color;\n\treturn saturate( color );\n}\nvec3 CustomToneMapping( vec3 color ) { return color; }";
 
-var transmissionmap_fragment = "#ifdef USE_TRANSMISSIONMAP\n\ttotalTransmission *= texture2D( transmissionMap, vUv ).r;\n#endif";
+var transmission_fragment = "#ifdef USE_TRANSMISSION\n\tfloat transmissionAlpha = 1.0;\n\tfloat transmissionFactor = transmission;\n\tfloat thicknessFactor = thickness;\n\t#ifdef USE_TRANSMISSIONMAP\n\t\ttransmissionFactor *= texture2D( transmissionMap, vUv ).r;\n\t#endif\n\t#ifdef USE_THICKNESSMAP\n\t\tthicknessFactor *= texture2D( thicknessMap, vUv ).g;\n\t#endif\n\tvec3 pos = vWorldPosition;\n\tvec3 v = normalize( cameraPosition - pos );\n\tvec3 n = inverseTransformDirection( normal, viewMatrix );\n\tvec4 transmission = getIBLVolumeRefraction(\n\t\tn, v, roughnessFactor, material.diffuseColor, material.specularColor, material.specularF90,\n\t\tpos, modelMatrix, viewMatrix, projectionMatrix, ior, thicknessFactor,\n\t\tattenuationTint, attenuationDistance );\n\ttotalDiffuse = mix( totalDiffuse, transmission.rgb, transmissionFactor );\n\ttransmissionAlpha = transmission.a;\n#endif";
 
-var transmissionmap_pars_fragment = "#ifdef USE_TRANSMISSIONMAP\n\tuniform sampler2D transmissionMap;\n#endif";
+var transmission_pars_fragment = "#ifdef USE_TRANSMISSION\n\tuniform float transmission;\n\tuniform float thickness;\n\tuniform float attenuationDistance;\n\tuniform vec3 attenuationTint;\n\t#ifdef USE_TRANSMISSIONMAP\n\t\tuniform sampler2D transmissionMap;\n\t#endif\n\t#ifdef USE_THICKNESSMAP\n\t\tuniform sampler2D thicknessMap;\n\t#endif\n\tuniform vec2 transmissionSamplerSize;\n\tuniform sampler2D transmissionSamplerMap;\n\tuniform mat4 modelMatrix;\n\tuniform mat4 projectionMatrix;\n\tvarying vec3 vWorldPosition;\n\tvec3 getVolumeTransmissionRay( vec3 n, vec3 v, float thickness, float ior, mat4 modelMatrix ) {\n\t\tvec3 refractionVector = refract( - v, normalize( n ), 1.0 / ior );\n\t\tvec3 modelScale;\n\t\tmodelScale.x = length( vec3( modelMatrix[ 0 ].xyz ) );\n\t\tmodelScale.y = length( vec3( modelMatrix[ 1 ].xyz ) );\n\t\tmodelScale.z = length( vec3( modelMatrix[ 2 ].xyz ) );\n\t\treturn normalize( refractionVector ) * thickness * modelScale;\n\t}\n\tfloat applyIorToRoughness( float roughness, float ior ) {\n\t\treturn roughness * clamp( ior * 2.0 - 2.0, 0.0, 1.0 );\n\t}\n\tvec4 getTransmissionSample( vec2 fragCoord, float roughness, float ior ) {\n\t\tfloat framebufferLod = log2( transmissionSamplerSize.x ) * applyIorToRoughness( roughness, ior );\n\t\t#ifdef TEXTURE_LOD_EXT\n\t\t\treturn texture2DLodEXT( transmissionSamplerMap, fragCoord.xy, framebufferLod );\n\t\t#else\n\t\t\treturn texture2D( transmissionSamplerMap, fragCoord.xy, framebufferLod );\n\t\t#endif\n\t}\n\tvec3 applyVolumeAttenuation( vec3 radiance, float transmissionDistance, vec3 attenuationColor, float attenuationDistance ) {\n\t\tif ( attenuationDistance == 0.0 ) {\n\t\t\treturn radiance;\n\t\t} else {\n\t\t\tvec3 attenuationCoefficient = -log( attenuationColor ) / attenuationDistance;\n\t\t\tvec3 transmittance = exp( - attenuationCoefficient * transmissionDistance );\t\t\treturn transmittance * radiance;\n\t\t}\n\t}\n\tvec4 getIBLVolumeRefraction( vec3 n, vec3 v, float roughness, vec3 diffuseColor, vec3 specularColor, float specularF90,\n\t\tvec3 position, mat4 modelMatrix, mat4 viewMatrix, mat4 projMatrix, float ior, float thickness,\n\t\tvec3 attenuationColor, float attenuationDistance ) {\n\t\tvec3 transmissionRay = getVolumeTransmissionRay( n, v, thickness, ior, modelMatrix );\n\t\tvec3 refractedRayExit = position + transmissionRay;\n\t\tvec4 ndcPos = projMatrix * viewMatrix * vec4( refractedRayExit, 1.0 );\n\t\tvec2 refractionCoords = ndcPos.xy / ndcPos.w;\n\t\trefractionCoords += 1.0;\n\t\trefractionCoords /= 2.0;\n\t\tvec4 transmittedLight = getTransmissionSample( refractionCoords, roughness, ior );\n\t\tvec3 attenuatedColor = applyVolumeAttenuation( transmittedLight.rgb, length( transmissionRay ), attenuationColor, attenuationDistance );\n\t\tvec3 F = EnvironmentBRDF( n, v, specularColor, specularF90, roughness );\n\t\treturn vec4( ( 1.0 - F ) * attenuatedColor * diffuseColor, transmittedLight.a );\n\t}\n#endif";
 
 var uv_pars_fragment = "#if ( defined( USE_UV ) && ! defined( UVS_VERTEX_ONLY ) )\n\tvarying vec2 vUv;\n#endif";
 
@@ -12521,7 +12426,7 @@ var uv2_pars_vertex = "#if defined( USE_LIGHTMAP ) || defined( USE_AOMAP )\n\tat
 
 var uv2_vertex = "#if defined( USE_LIGHTMAP ) || defined( USE_AOMAP )\n\tvUv2 = ( uv2Transform * vec3( uv2, 1 ) ).xy;\n#endif";
 
-var worldpos_vertex = "#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP )\n\tvec4 worldPosition = vec4( transformed, 1.0 );\n\t#ifdef USE_INSTANCING\n\t\tworldPosition = instanceMatrix * worldPosition;\n\t#endif\n\tworldPosition = modelMatrix * worldPosition;\n#endif";
+var worldpos_vertex = "#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION )\n\tvec4 worldPosition = vec4( transformed, 1.0 );\n\t#ifdef USE_INSTANCING\n\t\tworldPosition = instanceMatrix * worldPosition;\n\t#endif\n\tworldPosition = modelMatrix * worldPosition;\n#endif";
 
 var background_frag = "uniform sampler2D t2D;\nvarying vec2 vUv;\nvoid main() {\n\tvec4 texColor = texture2D( t2D, vUv );\n\tgl_FragColor = mapTexelToLinear( texColor );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n}";
 
@@ -12531,11 +12436,11 @@ var cube_frag = "#include <envmap_common_pars_fragment>\nuniform float opacity;\
 
 var cube_vert = "varying vec3 vWorldDirection;\n#include <common>\nvoid main() {\n\tvWorldDirection = transformDirection( position, modelMatrix );\n\t#include <begin_vertex>\n\t#include <project_vertex>\n\tgl_Position.z = gl_Position.w;\n}";
 
-var depth_frag = "#if DEPTH_PACKING == 3200\n\tuniform float opacity;\n#endif\n#include <common>\n#include <packing>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvarying vec2 vHighPrecisionZW;\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( 1.0 );\n\t#if DEPTH_PACKING == 3200\n\t\tdiffuseColor.a = opacity;\n\t#endif\n\t#include <map_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <logdepthbuf_fragment>\n\tfloat fragCoordZ = 0.5 * vHighPrecisionZW[0] / vHighPrecisionZW[1] + 0.5;\n\t#if DEPTH_PACKING == 3200\n\t\tgl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );\n\t#elif DEPTH_PACKING == 3201\n\t\tgl_FragColor = packDepthToRGBA( fragCoordZ );\n\t#endif\n}";
+var depth_frag = "#if DEPTH_PACKING == 3200\n\tuniform float opacity;\n#endif\n#include <common>\n#include <packing>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvarying vec2 vHighPrecisionZW;\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( 1.0 );\n\t#if DEPTH_PACKING == 3200\n\t\tdiffuseColor.a = opacity;\n\t#endif\n\t#include <map_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <logdepthbuf_fragment>\n\tfloat fragCoordZ = 0.5 * vHighPrecisionZW[0] / vHighPrecisionZW[1] + 0.5;\n\t#if DEPTH_PACKING == 3200\n\t\tgl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );\n\t#elif DEPTH_PACKING == 3201\n\t\tgl_FragColor = packDepthToRGBA( fragCoordZ );\n\t#endif\n}";
 
 var depth_vert = "#include <common>\n#include <uv_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvarying vec2 vHighPrecisionZW;\nvoid main() {\n\t#include <uv_vertex>\n\t#include <skinbase_vertex>\n\t#ifdef USE_DISPLACEMENTMAP\n\t\t#include <beginnormal_vertex>\n\t\t#include <morphnormal_vertex>\n\t\t#include <skinnormal_vertex>\n\t#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\tvHighPrecisionZW = gl_Position.zw;\n}";
 
-var distanceRGBA_frag = "#define DISTANCE\nuniform vec3 referencePosition;\nuniform float nearDistance;\nuniform float farDistance;\nvarying vec3 vWorldPosition;\n#include <common>\n#include <packing>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main () {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( 1.0 );\n\t#include <map_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\tfloat dist = length( vWorldPosition - referencePosition );\n\tdist = ( dist - nearDistance ) / ( farDistance - nearDistance );\n\tdist = saturate( dist );\n\tgl_FragColor = packDepthToRGBA( dist );\n}";
+var distanceRGBA_frag = "#define DISTANCE\nuniform vec3 referencePosition;\nuniform float nearDistance;\nuniform float farDistance;\nvarying vec3 vWorldPosition;\n#include <common>\n#include <packing>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main () {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( 1.0 );\n\t#include <map_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\tfloat dist = length( vWorldPosition - referencePosition );\n\tdist = ( dist - nearDistance ) / ( farDistance - nearDistance );\n\tdist = saturate( dist );\n\tgl_FragColor = packDepthToRGBA( dist );\n}";
 
 var distanceRGBA_vert = "#define DISTANCE\nvarying vec3 vWorldPosition;\n#include <common>\n#include <uv_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <skinbase_vertex>\n\t#ifdef USE_DISPLACEMENTMAP\n\t\t#include <beginnormal_vertex>\n\t\t#include <morphnormal_vertex>\n\t\t#include <skinnormal_vertex>\n\t#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <worldpos_vertex>\n\t#include <clipping_planes_vertex>\n\tvWorldPosition = worldPosition.xyz;\n}";
 
@@ -12543,39 +12448,39 @@ var equirect_frag = "uniform sampler2D tEquirect;\nvarying vec3 vWorldDirection;
 
 var equirect_vert = "varying vec3 vWorldDirection;\n#include <common>\nvoid main() {\n\tvWorldDirection = transformDirection( position, modelMatrix );\n\t#include <begin_vertex>\n\t#include <project_vertex>\n}";
 
-var linedashed_frag = "uniform vec3 diffuse;\nuniform float opacity;\nuniform float dashSize;\nuniform float totalSize;\nvarying float vLineDistance;\n#include <common>\n#include <color_pars_fragment>\n#include <fog_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tif ( mod( vLineDistance, totalSize ) > dashSize ) {\n\t\tdiscard;\n\t}\n\tvec3 outgoingLight = vec3( 0.0 );\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <color_fragment>\n\toutgoingLight = diffuseColor.rgb;\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n}";
+var linedashed_frag = "uniform vec3 diffuse;\nuniform float opacity;\nuniform float dashSize;\nuniform float totalSize;\nvarying float vLineDistance;\n#include <common>\n#include <color_pars_fragment>\n#include <fog_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tif ( mod( vLineDistance, totalSize ) > dashSize ) {\n\t\tdiscard;\n\t}\n\tvec3 outgoingLight = vec3( 0.0 );\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <color_fragment>\n\toutgoingLight = diffuseColor.rgb;\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n}";
 
 var linedashed_vert = "uniform float scale;\nattribute float lineDistance;\nvarying float vLineDistance;\n#include <common>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\tvLineDistance = scale * lineDistance;\n\t#include <color_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <fog_vertex>\n}";
 
-var meshbasic_frag = "uniform vec3 diffuse;\nuniform float opacity;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\n#include <common>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_pars_fragment>\n#include <cube_uv_reflection_fragment>\n#include <fog_pars_fragment>\n#include <specularmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <specularmap_fragment>\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\t#ifdef USE_LIGHTMAP\n\t\n\t\tvec4 lightMapTexel= texture2D( lightMap, vUv2 );\n\t\treflectedLight.indirectDiffuse += lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;\n\t#else\n\t\treflectedLight.indirectDiffuse += vec3( 1.0 );\n\t#endif\n\t#include <aomap_fragment>\n\treflectedLight.indirectDiffuse *= diffuseColor.rgb;\n\tvec3 outgoingLight = reflectedLight.indirectDiffuse;\n\t#include <envmap_fragment>\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
+var meshbasic_frag = "uniform vec3 diffuse;\nuniform float opacity;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\n#include <common>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_pars_fragment>\n#include <cube_uv_reflection_fragment>\n#include <fog_pars_fragment>\n#include <specularmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <specularmap_fragment>\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\t#ifdef USE_LIGHTMAP\n\t\tvec4 lightMapTexel= texture2D( lightMap, vUv2 );\n\t\treflectedLight.indirectDiffuse += lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;\n\t#else\n\t\treflectedLight.indirectDiffuse += vec3( 1.0 );\n\t#endif\n\t#include <aomap_fragment>\n\treflectedLight.indirectDiffuse *= diffuseColor.rgb;\n\tvec3 outgoingLight = reflectedLight.indirectDiffuse;\n\t#include <envmap_fragment>\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
 
-var meshbasic_vert = "#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <envmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <skinbase_vertex>\n\t#ifdef USE_ENVMAP\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <worldpos_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <envmap_vertex>\n\t#include <fog_vertex>\n}";
+var meshbasic_vert = "#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <envmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#if defined ( USE_ENVMAP ) || defined ( USE_SKINNING )\n\t\t#include <beginnormal_vertex>\n\t\t#include <morphnormal_vertex>\n\t\t#include <skinbase_vertex>\n\t\t#include <skinnormal_vertex>\n\t\t#include <defaultnormal_vertex>\n\t#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <worldpos_vertex>\n\t#include <envmap_vertex>\n\t#include <fog_vertex>\n}";
 
-var meshlambert_frag = "uniform vec3 diffuse;\nuniform vec3 emissive;\nuniform float opacity;\nvarying vec3 vLightFront;\nvarying vec3 vIndirectFront;\n#ifdef DOUBLE_SIDED\n\tvarying vec3 vLightBack;\n\tvarying vec3 vIndirectBack;\n#endif\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_pars_fragment>\n#include <cube_uv_reflection_fragment>\n#include <bsdfs>\n#include <lights_pars_begin>\n#include <fog_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <shadowmask_pars_fragment>\n#include <specularmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <specularmap_fragment>\n\t#include <emissivemap_fragment>\n\t#ifdef DOUBLE_SIDED\n\t\treflectedLight.indirectDiffuse += ( gl_FrontFacing ) ? vIndirectFront : vIndirectBack;\n\t#else\n\t\treflectedLight.indirectDiffuse += vIndirectFront;\n\t#endif\n\t#include <lightmap_fragment>\n\treflectedLight.indirectDiffuse *= BRDF_Diffuse_Lambert( diffuseColor.rgb );\n\t#ifdef DOUBLE_SIDED\n\t\treflectedLight.directDiffuse = ( gl_FrontFacing ) ? vLightFront : vLightBack;\n\t#else\n\t\treflectedLight.directDiffuse = vLightFront;\n\t#endif\n\treflectedLight.directDiffuse *= BRDF_Diffuse_Lambert( diffuseColor.rgb ) * getShadowMask();\n\t#include <aomap_fragment>\n\tvec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;\n\t#include <envmap_fragment>\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
+var meshlambert_frag = "uniform vec3 diffuse;\nuniform vec3 emissive;\nuniform float opacity;\nvarying vec3 vLightFront;\nvarying vec3 vIndirectFront;\n#ifdef DOUBLE_SIDED\n\tvarying vec3 vLightBack;\n\tvarying vec3 vIndirectBack;\n#endif\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_pars_fragment>\n#include <cube_uv_reflection_fragment>\n#include <bsdfs>\n#include <lights_pars_begin>\n#include <fog_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <shadowmask_pars_fragment>\n#include <specularmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <specularmap_fragment>\n\t#include <emissivemap_fragment>\n\t#ifdef DOUBLE_SIDED\n\t\treflectedLight.indirectDiffuse += ( gl_FrontFacing ) ? vIndirectFront : vIndirectBack;\n\t#else\n\t\treflectedLight.indirectDiffuse += vIndirectFront;\n\t#endif\n\t#include <lightmap_fragment>\n\treflectedLight.indirectDiffuse *= BRDF_Lambert( diffuseColor.rgb );\n\t#ifdef DOUBLE_SIDED\n\t\treflectedLight.directDiffuse = ( gl_FrontFacing ) ? vLightFront : vLightBack;\n\t#else\n\t\treflectedLight.directDiffuse = vLightFront;\n\t#endif\n\treflectedLight.directDiffuse *= BRDF_Lambert( diffuseColor.rgb ) * getShadowMask();\n\t#include <aomap_fragment>\n\tvec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;\n\t#include <envmap_fragment>\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
 
 var meshlambert_vert = "#define LAMBERT\nvarying vec3 vLightFront;\nvarying vec3 vIndirectFront;\n#ifdef DOUBLE_SIDED\n\tvarying vec3 vLightBack;\n\tvarying vec3 vIndirectBack;\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <envmap_pars_vertex>\n#include <bsdfs>\n#include <lights_pars_begin>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <shadowmap_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <worldpos_vertex>\n\t#include <envmap_vertex>\n\t#include <lights_lambert_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n}";
 
-var meshmatcap_frag = "#define MATCAP\nuniform vec3 diffuse;\nuniform float opacity;\nuniform sampler2D matcap;\nvarying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\n#include <common>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <fog_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\tvec3 viewDir = normalize( vViewPosition );\n\tvec3 x = normalize( vec3( viewDir.z, 0.0, - viewDir.x ) );\n\tvec3 y = cross( viewDir, x );\n\tvec2 uv = vec2( dot( x, normal ), dot( y, normal ) ) * 0.495 + 0.5;\n\t#ifdef USE_MATCAP\n\t\tvec4 matcapColor = texture2D( matcap, uv );\n\t\tmatcapColor = matcapTexelToLinear( matcapColor );\n\t#else\n\t\tvec4 matcapColor = vec4( 1.0 );\n\t#endif\n\tvec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
+var meshmatcap_frag = "#define MATCAP\nuniform vec3 diffuse;\nuniform float opacity;\nuniform sampler2D matcap;\nvarying vec3 vViewPosition;\n#include <common>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <fog_pars_fragment>\n#include <normal_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\tvec3 viewDir = normalize( vViewPosition );\n\tvec3 x = normalize( vec3( viewDir.z, 0.0, - viewDir.x ) );\n\tvec3 y = cross( viewDir, x );\n\tvec2 uv = vec2( dot( x, normal ), dot( y, normal ) ) * 0.495 + 0.5;\n\t#ifdef USE_MATCAP\n\t\tvec4 matcapColor = texture2D( matcap, uv );\n\t\tmatcapColor = matcapTexelToLinear( matcapColor );\n\t#else\n\t\tvec4 matcapColor = vec4( 1.0 );\n\t#endif\n\tvec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
 
-var meshmatcap_vert = "#define MATCAP\nvarying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <color_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#ifndef FLAT_SHADED\n\t\tvNormal = normalize( transformedNormal );\n\t#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <fog_vertex>\n\tvViewPosition = - mvPosition.xyz;\n}";
+var meshmatcap_vert = "#define MATCAP\nvarying vec3 vViewPosition;\n#include <common>\n#include <uv_pars_vertex>\n#include <color_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <fog_pars_vertex>\n#include <normal_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#include <normal_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <fog_vertex>\n\tvViewPosition = - mvPosition.xyz;\n}";
 
-var meshtoon_frag = "#define TOON\nuniform vec3 diffuse;\nuniform vec3 emissive;\nuniform float opacity;\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <gradientmap_pars_fragment>\n#include <fog_pars_fragment>\n#include <bsdfs>\n#include <lights_pars_begin>\n#include <lights_toon_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\t#include <emissivemap_fragment>\n\t#include <lights_toon_fragment>\n\t#include <lights_fragment_begin>\n\t#include <lights_fragment_maps>\n\t#include <lights_fragment_end>\n\t#include <aomap_fragment>\n\tvec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
+var meshnormal_frag = "#define NORMAL\nuniform float opacity;\n#if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( TANGENTSPACE_NORMALMAP )\n\tvarying vec3 vViewPosition;\n#endif\n#include <packing>\n#include <uv_pars_fragment>\n#include <normal_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\t#include <logdepthbuf_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\tgl_FragColor = vec4( packNormalToRGB( normal ), opacity );\n}";
 
-var meshtoon_vert = "#define TOON\nvarying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <shadowmap_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n#ifndef FLAT_SHADED\n\tvNormal = normalize( transformedNormal );\n#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\tvViewPosition = - mvPosition.xyz;\n\t#include <worldpos_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n}";
+var meshnormal_vert = "#define NORMAL\n#if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( TANGENTSPACE_NORMALMAP )\n\tvarying vec3 vViewPosition;\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <normal_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#include <normal_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n#if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( TANGENTSPACE_NORMALMAP )\n\tvViewPosition = - mvPosition.xyz;\n#endif\n}";
 
-var meshphong_frag = "#define PHONG\nuniform vec3 diffuse;\nuniform vec3 emissive;\nuniform vec3 specular;\nuniform float shininess;\nuniform float opacity;\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_pars_fragment>\n#include <cube_uv_reflection_fragment>\n#include <fog_pars_fragment>\n#include <bsdfs>\n#include <lights_pars_begin>\n#include <lights_phong_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <specularmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <specularmap_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\t#include <emissivemap_fragment>\n\t#include <lights_phong_fragment>\n\t#include <lights_fragment_begin>\n\t#include <lights_fragment_maps>\n\t#include <lights_fragment_end>\n\t#include <aomap_fragment>\n\tvec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directSpecular + reflectedLight.indirectSpecular + totalEmissiveRadiance;\n\t#include <envmap_fragment>\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
+var meshphong_frag = "#define PHONG\nuniform vec3 diffuse;\nuniform vec3 emissive;\nuniform vec3 specular;\nuniform float shininess;\nuniform float opacity;\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_pars_fragment>\n#include <cube_uv_reflection_fragment>\n#include <fog_pars_fragment>\n#include <bsdfs>\n#include <lights_pars_begin>\n#include <normal_pars_fragment>\n#include <lights_phong_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <specularmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <specularmap_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\t#include <emissivemap_fragment>\n\t#include <lights_phong_fragment>\n\t#include <lights_fragment_begin>\n\t#include <lights_fragment_maps>\n\t#include <lights_fragment_end>\n\t#include <aomap_fragment>\n\tvec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directSpecular + reflectedLight.indirectSpecular + totalEmissiveRadiance;\n\t#include <envmap_fragment>\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
 
-var meshphong_vert = "#define PHONG\nvarying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <envmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <shadowmap_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n#ifndef FLAT_SHADED\n\tvNormal = normalize( transformedNormal );\n#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\tvViewPosition = - mvPosition.xyz;\n\t#include <worldpos_vertex>\n\t#include <envmap_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n}";
+var meshphong_vert = "#define PHONG\nvarying vec3 vViewPosition;\n#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <envmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <normal_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <shadowmap_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#include <normal_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\tvViewPosition = - mvPosition.xyz;\n\t#include <worldpos_vertex>\n\t#include <envmap_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n}";
 
-var meshphysical_frag = "#define STANDARD\n#ifdef PHYSICAL\n\t#define REFLECTIVITY\n\t#define CLEARCOAT\n\t#define TRANSMISSION\n#endif\nuniform vec3 diffuse;\nuniform vec3 emissive;\nuniform float roughness;\nuniform float metalness;\nuniform float opacity;\n#ifdef TRANSMISSION\n\tuniform float transmission;\n#endif\n#ifdef REFLECTIVITY\n\tuniform float reflectivity;\n#endif\n#ifdef CLEARCOAT\n\tuniform float clearcoat;\n\tuniform float clearcoatRoughness;\n#endif\n#ifdef USE_SHEEN\n\tuniform vec3 sheen;\n#endif\nvarying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifdef USE_TANGENT\n\t\tvarying vec3 vTangent;\n\t\tvarying vec3 vBitangent;\n\t#endif\n#endif\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <transmissionmap_pars_fragment>\n#include <bsdfs>\n#include <cube_uv_reflection_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_physical_pars_fragment>\n#include <fog_pars_fragment>\n#include <lights_pars_begin>\n#include <lights_physical_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <clearcoat_pars_fragment>\n#include <roughnessmap_pars_fragment>\n#include <metalnessmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#ifdef TRANSMISSION\n\t\tfloat totalTransmission = transmission;\n\t#endif\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <roughnessmap_fragment>\n\t#include <metalnessmap_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\t#include <clearcoat_normal_fragment_begin>\n\t#include <clearcoat_normal_fragment_maps>\n\t#include <emissivemap_fragment>\n\t#include <transmissionmap_fragment>\n\t#include <lights_physical_fragment>\n\t#include <lights_fragment_begin>\n\t#include <lights_fragment_maps>\n\t#include <lights_fragment_end>\n\t#include <aomap_fragment>\n\tvec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directSpecular + reflectedLight.indirectSpecular + totalEmissiveRadiance;\n\t#ifdef TRANSMISSION\n\t\tdiffuseColor.a *= mix( saturate( 1. - totalTransmission + linearToRelativeLuminance( reflectedLight.directSpecular + reflectedLight.indirectSpecular ) ), 1.0, metalness );\n\t#endif\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
+var meshphysical_frag = "#define STANDARD\n#ifdef PHYSICAL\n\t#define IOR\n\t#define SPECULAR\n#endif\nuniform vec3 diffuse;\nuniform vec3 emissive;\nuniform float roughness;\nuniform float metalness;\nuniform float opacity;\n#ifdef IOR\n\tuniform float ior;\n#endif\n#ifdef SPECULAR\n\tuniform float specularIntensity;\n\tuniform vec3 specularTint;\n\t#ifdef USE_SPECULARINTENSITYMAP\n\t\tuniform sampler2D specularIntensityMap;\n\t#endif\n\t#ifdef USE_SPECULARTINTMAP\n\t\tuniform sampler2D specularTintMap;\n\t#endif\n#endif\n#ifdef USE_CLEARCOAT\n\tuniform float clearcoat;\n\tuniform float clearcoatRoughness;\n#endif\n#ifdef USE_SHEEN\n\tuniform vec3 sheenTint;\n#endif\nvarying vec3 vViewPosition;\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <bsdfs>\n#include <cube_uv_reflection_fragment>\n#include <envmap_common_pars_fragment>\n#include <envmap_physical_pars_fragment>\n#include <fog_pars_fragment>\n#include <lights_pars_begin>\n#include <normal_pars_fragment>\n#include <lights_physical_pars_fragment>\n#include <transmission_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <clearcoat_pars_fragment>\n#include <roughnessmap_pars_fragment>\n#include <metalnessmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <roughnessmap_fragment>\n\t#include <metalnessmap_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\t#include <clearcoat_normal_fragment_begin>\n\t#include <clearcoat_normal_fragment_maps>\n\t#include <emissivemap_fragment>\n\t#include <lights_physical_fragment>\n\t#include <lights_fragment_begin>\n\t#include <lights_fragment_maps>\n\t#include <lights_fragment_end>\n\t#include <aomap_fragment>\n\tvec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;\n\tvec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;\n\t#include <transmission_fragment>\n\tvec3 outgoingLight = totalDiffuse + totalSpecular + totalEmissiveRadiance;\n\t#ifdef USE_CLEARCOAT\n\t\tfloat dotNVcc = saturate( dot( geometry.clearcoatNormal, geometry.viewDir ) );\n\t\tvec3 Fcc = F_Schlick( material.clearcoatF0, material.clearcoatF90, dotNVcc );\n\t\toutgoingLight = outgoingLight * ( 1.0 - clearcoat * Fcc ) + clearcoatSpecular * clearcoat;\n\t#endif\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
 
-var meshphysical_vert = "#define STANDARD\nvarying vec3 vViewPosition;\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifdef USE_TANGENT\n\t\tvarying vec3 vTangent;\n\t\tvarying vec3 vBitangent;\n\t#endif\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <shadowmap_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n#ifndef FLAT_SHADED\n\tvNormal = normalize( transformedNormal );\n\t#ifdef USE_TANGENT\n\t\tvTangent = normalize( transformedTangent );\n\t\tvBitangent = normalize( cross( vNormal, vTangent ) * tangent.w );\n\t#endif\n#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\tvViewPosition = - mvPosition.xyz;\n\t#include <worldpos_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n}";
+var meshphysical_vert = "#define STANDARD\nvarying vec3 vViewPosition;\n#ifdef USE_TRANSMISSION\n\tvarying vec3 vWorldPosition;\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <normal_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <shadowmap_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#include <normal_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\tvViewPosition = - mvPosition.xyz;\n\t#include <worldpos_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n#ifdef USE_TRANSMISSION\n\tvWorldPosition = worldPosition.xyz;\n#endif\n}";
 
-var normal_frag = "#define NORMAL\nuniform float opacity;\n#if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( TANGENTSPACE_NORMALMAP )\n\tvarying vec3 vViewPosition;\n#endif\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifdef USE_TANGENT\n\t\tvarying vec3 vTangent;\n\t\tvarying vec3 vBitangent;\n\t#endif\n#endif\n#include <packing>\n#include <uv_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\t#include <logdepthbuf_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\tgl_FragColor = vec4( packNormalToRGB( normal ), opacity );\n}";
+var meshtoon_frag = "#define TOON\nuniform vec3 diffuse;\nuniform vec3 emissive;\nuniform float opacity;\n#include <common>\n#include <packing>\n#include <dithering_pars_fragment>\n#include <color_pars_fragment>\n#include <uv_pars_fragment>\n#include <uv2_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <aomap_pars_fragment>\n#include <lightmap_pars_fragment>\n#include <emissivemap_pars_fragment>\n#include <gradientmap_pars_fragment>\n#include <fog_pars_fragment>\n#include <bsdfs>\n#include <lights_pars_begin>\n#include <normal_pars_fragment>\n#include <lights_toon_pars_fragment>\n#include <shadowmap_pars_fragment>\n#include <bumpmap_pars_fragment>\n#include <normalmap_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\tReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );\n\tvec3 totalEmissiveRadiance = emissive;\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <color_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\t#include <normal_fragment_begin>\n\t#include <normal_fragment_maps>\n\t#include <emissivemap_fragment>\n\t#include <lights_toon_fragment>\n\t#include <lights_fragment_begin>\n\t#include <lights_fragment_maps>\n\t#include <lights_fragment_end>\n\t#include <aomap_fragment>\n\tvec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n\t#include <dithering_fragment>\n}";
 
-var normal_vert = "#define NORMAL\n#if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( TANGENTSPACE_NORMALMAP )\n\tvarying vec3 vViewPosition;\n#endif\n#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifdef USE_TANGENT\n\t\tvarying vec3 vTangent;\n\t\tvarying vec3 vBitangent;\n\t#endif\n#endif\n#include <common>\n#include <uv_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n#ifndef FLAT_SHADED\n\tvNormal = normalize( transformedNormal );\n\t#ifdef USE_TANGENT\n\t\tvTangent = normalize( transformedTangent );\n\t\tvBitangent = normalize( cross( vNormal, vTangent ) * tangent.w );\n\t#endif\n#endif\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n#if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( TANGENTSPACE_NORMALMAP )\n\tvViewPosition = - mvPosition.xyz;\n#endif\n}";
+var meshtoon_vert = "#define TOON\nvarying vec3 vViewPosition;\n#include <common>\n#include <uv_pars_vertex>\n#include <uv2_pars_vertex>\n#include <displacementmap_pars_vertex>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <normal_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <skinning_pars_vertex>\n#include <shadowmap_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\t#include <uv2_vertex>\n\t#include <color_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#include <normal_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <skinning_vertex>\n\t#include <displacementmap_vertex>\n\t#include <project_vertex>\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\tvViewPosition = - mvPosition.xyz;\n\t#include <worldpos_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n}";
 
-var points_frag = "uniform vec3 diffuse;\nuniform float opacity;\n#include <common>\n#include <color_pars_fragment>\n#include <map_particle_pars_fragment>\n#include <fog_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec3 outgoingLight = vec3( 0.0 );\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_particle_fragment>\n\t#include <color_fragment>\n\t#include <alphatest_fragment>\n\toutgoingLight = diffuseColor.rgb;\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n}";
+var points_frag = "uniform vec3 diffuse;\nuniform float opacity;\n#include <common>\n#include <color_pars_fragment>\n#include <map_particle_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <fog_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec3 outgoingLight = vec3( 0.0 );\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_particle_fragment>\n\t#include <color_fragment>\n\t#include <alphatest_fragment>\n\toutgoingLight = diffuseColor.rgb;\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n\t#include <premultiplied_alpha_fragment>\n}";
 
 var points_vert = "uniform float size;\nuniform float scale;\n#include <common>\n#include <color_pars_vertex>\n#include <fog_pars_vertex>\n#include <morphtarget_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <color_vertex>\n\t#include <begin_vertex>\n\t#include <morphtarget_vertex>\n\t#include <project_vertex>\n\tgl_PointSize = size;\n\t#ifdef USE_SIZEATTENUATION\n\t\tbool isPerspective = isPerspectiveMatrix( projectionMatrix );\n\t\tif ( isPerspective ) gl_PointSize *= ( scale / - mvPosition.z );\n\t#endif\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <worldpos_vertex>\n\t#include <fog_vertex>\n}";
 
@@ -12583,7 +12488,7 @@ var shadow_frag = "uniform vec3 color;\nuniform float opacity;\n#include <common
 
 var shadow_vert = "#include <common>\n#include <fog_pars_vertex>\n#include <shadowmap_pars_vertex>\nvoid main() {\n\t#include <begin_vertex>\n\t#include <project_vertex>\n\t#include <worldpos_vertex>\n\t#include <beginnormal_vertex>\n\t#include <morphnormal_vertex>\n\t#include <skinbase_vertex>\n\t#include <skinnormal_vertex>\n\t#include <defaultnormal_vertex>\n\t#include <shadowmap_vertex>\n\t#include <fog_vertex>\n}";
 
-var sprite_frag = "uniform vec3 diffuse;\nuniform float opacity;\n#include <common>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <fog_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec3 outgoingLight = vec3( 0.0 );\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\toutgoingLight = diffuseColor.rgb;\n\tgl_FragColor = vec4( outgoingLight, diffuseColor.a );\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n}";
+var sprite_frag = "uniform vec3 diffuse;\nuniform float opacity;\n#include <common>\n#include <uv_pars_fragment>\n#include <map_pars_fragment>\n#include <alphamap_pars_fragment>\n#include <alphatest_pars_fragment>\n#include <fog_pars_fragment>\n#include <logdepthbuf_pars_fragment>\n#include <clipping_planes_pars_fragment>\nvoid main() {\n\t#include <clipping_planes_fragment>\n\tvec3 outgoingLight = vec3( 0.0 );\n\tvec4 diffuseColor = vec4( diffuse, opacity );\n\t#include <logdepthbuf_fragment>\n\t#include <map_fragment>\n\t#include <alphamap_fragment>\n\t#include <alphatest_fragment>\n\toutgoingLight = diffuseColor.rgb;\n\t#include <output_fragment>\n\t#include <tonemapping_fragment>\n\t#include <encodings_fragment>\n\t#include <fog_fragment>\n}";
 
 var sprite_vert = "uniform float rotation;\nuniform vec2 center;\n#include <common>\n#include <uv_pars_vertex>\n#include <fog_pars_vertex>\n#include <logdepthbuf_pars_vertex>\n#include <clipping_planes_pars_vertex>\nvoid main() {\n\t#include <uv_vertex>\n\tvec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );\n\tvec2 scale;\n\tscale.x = length( vec3( modelMatrix[ 0 ].x, modelMatrix[ 0 ].y, modelMatrix[ 0 ].z ) );\n\tscale.y = length( vec3( modelMatrix[ 1 ].x, modelMatrix[ 1 ].y, modelMatrix[ 1 ].z ) );\n\t#ifndef USE_SIZEATTENUATION\n\t\tbool isPerspective = isPerspectiveMatrix( projectionMatrix );\n\t\tif ( isPerspective ) scale *= - mvPosition.z;\n\t#endif\n\tvec2 alignedPosition = ( position.xy - ( center - vec2( 0.5 ) ) ) * scale;\n\tvec2 rotatedPosition;\n\trotatedPosition.x = cos( rotation ) * alignedPosition.x - sin( rotation ) * alignedPosition.y;\n\trotatedPosition.y = sin( rotation ) * alignedPosition.x + cos( rotation ) * alignedPosition.y;\n\tmvPosition.xy += rotatedPosition;\n\tgl_Position = projectionMatrix * mvPosition;\n\t#include <logdepthbuf_vertex>\n\t#include <clipping_planes_vertex>\n\t#include <fog_vertex>\n}";
 
@@ -12591,6 +12496,7 @@ const ShaderChunk = {
 	alphamap_fragment: alphamap_fragment,
 	alphamap_pars_fragment: alphamap_pars_fragment,
 	alphatest_fragment: alphatest_fragment,
+	alphatest_pars_fragment: alphatest_pars_fragment,
 	aomap_fragment: aomap_fragment,
 	aomap_pars_fragment: aomap_pars_fragment,
 	begin_vertex: begin_vertex,
@@ -12653,10 +12559,14 @@ const ShaderChunk = {
 	morphtarget_vertex: morphtarget_vertex,
 	normal_fragment_begin: normal_fragment_begin,
 	normal_fragment_maps: normal_fragment_maps,
+	normal_pars_fragment: normal_pars_fragment,
+	normal_pars_vertex: normal_pars_vertex,
+	normal_vertex: normal_vertex,
 	normalmap_pars_fragment: normalmap_pars_fragment,
 	clearcoat_normal_fragment_begin: clearcoat_normal_fragment_begin,
 	clearcoat_normal_fragment_maps: clearcoat_normal_fragment_maps,
 	clearcoat_pars_fragment: clearcoat_pars_fragment,
+	output_fragment: output_fragment,
 	packing: packing,
 	premultiplied_alpha_fragment: premultiplied_alpha_fragment,
 	project_vertex: project_vertex,
@@ -12676,8 +12586,8 @@ const ShaderChunk = {
 	specularmap_pars_fragment: specularmap_pars_fragment,
 	tonemapping_fragment: tonemapping_fragment,
 	tonemapping_pars_fragment: tonemapping_pars_fragment,
-	transmissionmap_fragment: transmissionmap_fragment,
-	transmissionmap_pars_fragment: transmissionmap_pars_fragment,
+	transmission_fragment: transmission_fragment,
+	transmission_pars_fragment: transmission_pars_fragment,
 	uv_pars_fragment: uv_pars_fragment,
 	uv_pars_vertex: uv_pars_vertex,
 	uv_vertex: uv_vertex,
@@ -12704,14 +12614,14 @@ const ShaderChunk = {
 	meshlambert_vert: meshlambert_vert,
 	meshmatcap_frag: meshmatcap_frag,
 	meshmatcap_vert: meshmatcap_vert,
-	meshtoon_frag: meshtoon_frag,
-	meshtoon_vert: meshtoon_vert,
+	meshnormal_frag: meshnormal_frag,
+	meshnormal_vert: meshnormal_vert,
 	meshphong_frag: meshphong_frag,
 	meshphong_vert: meshphong_vert,
 	meshphysical_frag: meshphysical_frag,
 	meshphysical_vert: meshphysical_vert,
-	normal_frag: normal_frag,
-	normal_vert: normal_vert,
+	meshtoon_frag: meshtoon_frag,
+	meshtoon_vert: meshtoon_vert,
 	points_frag: points_frag,
 	points_vert: points_vert,
 	shadow_frag: shadow_frag,
@@ -12728,7 +12638,7 @@ const UniformsLib = {
 
 	common: {
 
-		diffuse: { value: new Color( 0xeeeeee ) },
+		diffuse: { value: new Color( 0xffffff ) },
 		opacity: { value: 1.0 },
 
 		map: { value: null },
@@ -12736,6 +12646,7 @@ const UniformsLib = {
 		uv2Transform: { value: new Matrix3() },
 
 		alphaMap: { value: null },
+		alphaTest: { value: 0 }
 
 	},
 
@@ -12749,7 +12660,8 @@ const UniformsLib = {
 
 		envMap: { value: null },
 		flipEnvMap: { value: - 1 },
-		reflectivity: { value: 1.0 },
+		reflectivity: { value: 1.0 }, // basic, lambert, phong
+		ior: { value: 1.5 }, // standard, physical
 		refractionRatio: { value: 0.98 },
 		maxMipLevel: { value: 0 }
 
@@ -12905,24 +12817,26 @@ const UniformsLib = {
 
 	points: {
 
-		diffuse: { value: new Color( 0xeeeeee ) },
+		diffuse: { value: new Color( 0xffffff ) },
 		opacity: { value: 1.0 },
 		size: { value: 1.0 },
 		scale: { value: 1.0 },
 		map: { value: null },
 		alphaMap: { value: null },
+		alphaTest: { value: 0 },
 		uvTransform: { value: new Matrix3() }
 
 	},
 
 	sprite: {
 
-		diffuse: { value: new Color( 0xeeeeee ) },
+		diffuse: { value: new Color( 0xffffff ) },
 		opacity: { value: 1.0 },
 		center: { value: new Vector2( 0.5, 0.5 ) },
 		rotation: { value: 0.0 },
 		map: { value: null },
 		alphaMap: { value: null },
+		alphaTest: { value: 0 },
 		uvTransform: { value: new Matrix3() }
 
 	}
@@ -13116,8 +13030,8 @@ const ShaderLib = {
 			}
 		] ),
 
-		vertexShader: ShaderChunk.normal_vert,
-		fragmentShader: ShaderChunk.normal_frag
+		vertexShader: ShaderChunk.meshnormal_vert,
+		fragmentShader: ShaderChunk.meshnormal_frag
 
 	},
 
@@ -13219,9 +13133,19 @@ ShaderLib.physical = {
 			clearcoatRoughnessMap: { value: null },
 			clearcoatNormalScale: { value: new Vector2( 1, 1 ) },
 			clearcoatNormalMap: { value: null },
-			sheen: { value: new Color( 0x000000 ) },
+			sheenTint: { value: new Color( 0x000000 ) },
 			transmission: { value: 0 },
 			transmissionMap: { value: null },
+			transmissionSamplerSize: { value: new Vector2() },
+			transmissionSamplerMap: { value: null },
+			thickness: { value: 0 },
+			thicknessMap: { value: null },
+			attenuationDistance: { value: 0 },
+			attenuationTint: { value: new Color( 0x000000 ) },
+			specularIntensity: { value: 0 },
+			specularIntensityMap: { value: null },
+			specularTint: { value: new Color( 1, 1, 1 ) },
+			specularTintMap: { value: null },
 		}
 	] ),
 
@@ -13242,8 +13166,9 @@ function WebGLBackground( renderer, cubemaps, state, objects, premultipliedAlpha
 	let currentBackgroundVersion = 0;
 	let currentTonemapping = null;
 
-	function render( renderList, scene, camera, forceClear ) {
+	function render( renderList, scene ) {
 
+		let forceClear = false;
 		let background = scene.isScene === true ? scene.background : null;
 
 		if ( background && background.isTexture ) {
@@ -13324,7 +13249,7 @@ function WebGLBackground( renderer, cubemaps, state, objects, premultipliedAlpha
 			}
 
 			boxMesh.material.uniforms.envMap.value = background;
-			boxMesh.material.uniforms.flipEnvMap.value = ( background.isCubeTexture && background._needsFlipEnvMap ) ? - 1 : 1;
+			boxMesh.material.uniforms.flipEnvMap.value = ( background.isCubeTexture && background.isRenderTargetTexture === false ) ? - 1 : 1;
 
 			if ( currentBackground !== background ||
 				currentBackgroundVersion !== background.version ||
@@ -13767,9 +13692,16 @@ function WebGLBindingStates( gl, extensions, attributes, capabilities ) {
 
 			const programAttribute = programAttributes[ name ];
 
-			if ( programAttribute >= 0 ) {
+			if ( programAttribute.location >= 0 ) {
 
-				const geometryAttribute = geometryAttributes[ name ];
+				let geometryAttribute = geometryAttributes[ name ];
+
+				if ( geometryAttribute === undefined ) {
+
+					if ( name === 'instanceMatrix' && object.instanceMatrix ) geometryAttribute = object.instanceMatrix;
+					if ( name === 'instanceColor' && object.instanceColor ) geometryAttribute = object.instanceColor;
+
+				}
 
 				if ( geometryAttribute !== undefined ) {
 
@@ -13794,9 +13726,13 @@ function WebGLBindingStates( gl, extensions, attributes, capabilities ) {
 
 						if ( data && data.isInstancedInterleavedBuffer ) {
 
-							enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
+							for ( let i = 0; i < programAttribute.locationSize; i ++ ) {
 
-							if ( geometry._maxInstanceCount === undefined ) {
+								enableAttributeAndDivisor( programAttribute.location + i, data.meshPerAttribute );
+
+							}
+
+							if ( object.isInstancedMesh !== true && geometry._maxInstanceCount === undefined ) {
 
 								geometry._maxInstanceCount = data.meshPerAttribute * data.count;
 
@@ -13804,20 +13740,40 @@ function WebGLBindingStates( gl, extensions, attributes, capabilities ) {
 
 						} else {
 
-							enableAttribute( programAttribute );
+							for ( let i = 0; i < programAttribute.locationSize; i ++ ) {
+
+								enableAttribute( programAttribute.location + i );
+
+							}
 
 						}
 
 						gl.bindBuffer( 34962, buffer );
-						vertexAttribPointer( programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement );
+
+						for ( let i = 0; i < programAttribute.locationSize; i ++ ) {
+
+							vertexAttribPointer(
+								programAttribute.location + i,
+								size / programAttribute.locationSize,
+								type,
+								normalized,
+								stride * bytesPerElement,
+								( offset + ( size / programAttribute.locationSize ) * i ) * bytesPerElement
+							);
+
+						}
 
 					} else {
 
 						if ( geometryAttribute.isInstancedBufferAttribute ) {
 
-							enableAttributeAndDivisor( programAttribute, geometryAttribute.meshPerAttribute );
+							for ( let i = 0; i < programAttribute.locationSize; i ++ ) {
 
-							if ( geometry._maxInstanceCount === undefined ) {
+								enableAttributeAndDivisor( programAttribute.location + i, geometryAttribute.meshPerAttribute );
+
+							}
+
+							if ( object.isInstancedMesh !== true && geometry._maxInstanceCount === undefined ) {
 
 								geometry._maxInstanceCount = geometryAttribute.meshPerAttribute * geometryAttribute.count;
 
@@ -13825,54 +13781,30 @@ function WebGLBindingStates( gl, extensions, attributes, capabilities ) {
 
 						} else {
 
-							enableAttribute( programAttribute );
+							for ( let i = 0; i < programAttribute.locationSize; i ++ ) {
+
+								enableAttribute( programAttribute.location + i );
+
+							}
 
 						}
 
 						gl.bindBuffer( 34962, buffer );
-						vertexAttribPointer( programAttribute, size, type, normalized, 0, 0 );
+
+						for ( let i = 0; i < programAttribute.locationSize; i ++ ) {
+
+							vertexAttribPointer(
+								programAttribute.location + i,
+								size / programAttribute.locationSize,
+								type,
+								normalized,
+								size * bytesPerElement,
+								( size / programAttribute.locationSize ) * i * bytesPerElement
+							);
+
+						}
 
 					}
-
-				} else if ( name === 'instanceMatrix' ) {
-
-					const attribute = attributes.get( object.instanceMatrix );
-
-					// TODO Attribute may not be available on context restore
-
-					if ( attribute === undefined ) continue;
-
-					const buffer = attribute.buffer;
-					const type = attribute.type;
-
-					enableAttributeAndDivisor( programAttribute + 0, 1 );
-					enableAttributeAndDivisor( programAttribute + 1, 1 );
-					enableAttributeAndDivisor( programAttribute + 2, 1 );
-					enableAttributeAndDivisor( programAttribute + 3, 1 );
-
-					gl.bindBuffer( 34962, buffer );
-
-					gl.vertexAttribPointer( programAttribute + 0, 4, type, false, 64, 0 );
-					gl.vertexAttribPointer( programAttribute + 1, 4, type, false, 64, 16 );
-					gl.vertexAttribPointer( programAttribute + 2, 4, type, false, 64, 32 );
-					gl.vertexAttribPointer( programAttribute + 3, 4, type, false, 64, 48 );
-
-				} else if ( name === 'instanceColor' ) {
-
-					const attribute = attributes.get( object.instanceColor );
-
-					// TODO Attribute may not be available on context restore
-
-					if ( attribute === undefined ) continue;
-
-					const buffer = attribute.buffer;
-					const type = attribute.type;
-
-					enableAttributeAndDivisor( programAttribute, 1 );
-
-					gl.bindBuffer( 34962, buffer );
-
-					gl.vertexAttribPointer( programAttribute, 3, type, false, 12, 0 );
 
 				} else if ( materialDefaultAttributeValues !== undefined ) {
 
@@ -13883,19 +13815,19 @@ function WebGLBindingStates( gl, extensions, attributes, capabilities ) {
 						switch ( value.length ) {
 
 							case 2:
-								gl.vertexAttrib2fv( programAttribute, value );
+								gl.vertexAttrib2fv( programAttribute.location, value );
 								break;
 
 							case 3:
-								gl.vertexAttrib3fv( programAttribute, value );
+								gl.vertexAttrib3fv( programAttribute.location, value );
 								break;
 
 							case 4:
-								gl.vertexAttrib4fv( programAttribute, value );
+								gl.vertexAttrib4fv( programAttribute.location, value );
 								break;
 
 							default:
-								gl.vertexAttrib1fv( programAttribute, value );
+								gl.vertexAttrib1fv( programAttribute.location, value );
 
 						}
 
@@ -14157,6 +14089,8 @@ function WebGLCapabilities( gl, extensions, parameters ) {
 
 	}
 
+	const drawBuffers = isWebGL2 || extensions.has( 'WEBGL_draw_buffers' );
+
 	const logarithmicDepthBuffer = parameters.logarithmicDepthBuffer === true;
 
 	const maxTextures = gl.getParameter( 34930 );
@@ -14178,6 +14112,8 @@ function WebGLCapabilities( gl, extensions, parameters ) {
 	return {
 
 		isWebGL2: isWebGL2,
+
+		drawBuffers: drawBuffers,
 
 		getMaxAnisotropy: getMaxAnisotropy,
 		getMaxPrecision: getMaxPrecision,
@@ -14389,7 +14325,7 @@ function WebGLCubeMaps( renderer ) {
 
 	function get( texture ) {
 
-		if ( texture && texture.isTexture ) {
+		if ( texture && texture.isTexture && texture.isRenderTargetTexture === false ) {
 
 			const mapping = texture.mapping;
 
@@ -14456,6 +14392,1227 @@ function WebGLCubeMaps( renderer ) {
 	function dispose() {
 
 		cubemaps = new WeakMap();
+
+	}
+
+	return {
+		get: get,
+		dispose: dispose
+	};
+
+}
+
+class OrthographicCamera extends Camera {
+
+	constructor( left = - 1, right = 1, top = 1, bottom = - 1, near = 0.1, far = 2000 ) {
+
+		super();
+
+		this.type = 'OrthographicCamera';
+
+		this.zoom = 1;
+		this.view = null;
+
+		this.left = left;
+		this.right = right;
+		this.top = top;
+		this.bottom = bottom;
+
+		this.near = near;
+		this.far = far;
+
+		this.updateProjectionMatrix();
+
+	}
+
+	copy( source, recursive ) {
+
+		super.copy( source, recursive );
+
+		this.left = source.left;
+		this.right = source.right;
+		this.top = source.top;
+		this.bottom = source.bottom;
+		this.near = source.near;
+		this.far = source.far;
+
+		this.zoom = source.zoom;
+		this.view = source.view === null ? null : Object.assign( {}, source.view );
+
+		return this;
+
+	}
+
+	setViewOffset( fullWidth, fullHeight, x, y, width, height ) {
+
+		if ( this.view === null ) {
+
+			this.view = {
+				enabled: true,
+				fullWidth: 1,
+				fullHeight: 1,
+				offsetX: 0,
+				offsetY: 0,
+				width: 1,
+				height: 1
+			};
+
+		}
+
+		this.view.enabled = true;
+		this.view.fullWidth = fullWidth;
+		this.view.fullHeight = fullHeight;
+		this.view.offsetX = x;
+		this.view.offsetY = y;
+		this.view.width = width;
+		this.view.height = height;
+
+		this.updateProjectionMatrix();
+
+	}
+
+	clearViewOffset() {
+
+		if ( this.view !== null ) {
+
+			this.view.enabled = false;
+
+		}
+
+		this.updateProjectionMatrix();
+
+	}
+
+	updateProjectionMatrix() {
+
+		const dx = ( this.right - this.left ) / ( 2 * this.zoom );
+		const dy = ( this.top - this.bottom ) / ( 2 * this.zoom );
+		const cx = ( this.right + this.left ) / 2;
+		const cy = ( this.top + this.bottom ) / 2;
+
+		let left = cx - dx;
+		let right = cx + dx;
+		let top = cy + dy;
+		let bottom = cy - dy;
+
+		if ( this.view !== null && this.view.enabled ) {
+
+			const scaleW = ( this.right - this.left ) / this.view.fullWidth / this.zoom;
+			const scaleH = ( this.top - this.bottom ) / this.view.fullHeight / this.zoom;
+
+			left += scaleW * this.view.offsetX;
+			right = left + scaleW * this.view.width;
+			top -= scaleH * this.view.offsetY;
+			bottom = top - scaleH * this.view.height;
+
+		}
+
+		this.projectionMatrix.makeOrthographic( left, right, top, bottom, this.near, this.far );
+
+		this.projectionMatrixInverse.copy( this.projectionMatrix ).invert();
+
+	}
+
+	toJSON( meta ) {
+
+		const data = super.toJSON( meta );
+
+		data.object.zoom = this.zoom;
+		data.object.left = this.left;
+		data.object.right = this.right;
+		data.object.top = this.top;
+		data.object.bottom = this.bottom;
+		data.object.near = this.near;
+		data.object.far = this.far;
+
+		if ( this.view !== null ) data.object.view = Object.assign( {}, this.view );
+
+		return data;
+
+	}
+
+}
+
+OrthographicCamera.prototype.isOrthographicCamera = true;
+
+class RawShaderMaterial extends ShaderMaterial {
+
+	constructor( parameters ) {
+
+		super( parameters );
+
+		this.type = 'RawShaderMaterial';
+
+	}
+
+}
+
+RawShaderMaterial.prototype.isRawShaderMaterial = true;
+
+const LOD_MIN = 4;
+const LOD_MAX = 8;
+const SIZE_MAX = Math.pow( 2, LOD_MAX );
+
+// The standard deviations (radians) associated with the extra mips. These are
+// chosen to approximate a Trowbridge-Reitz distribution function times the
+// geometric shadowing function. These sigma values squared must match the
+// variance #defines in cube_uv_reflection_fragment.glsl.js.
+const EXTRA_LOD_SIGMA = [ 0.125, 0.215, 0.35, 0.446, 0.526, 0.582 ];
+
+const TOTAL_LODS = LOD_MAX - LOD_MIN + 1 + EXTRA_LOD_SIGMA.length;
+
+// The maximum length of the blur for loop. Smaller sigmas will use fewer
+// samples and exit early, but not recompile the shader.
+const MAX_SAMPLES = 20;
+
+const ENCODINGS = {
+	[ LinearEncoding ]: 0,
+	[ sRGBEncoding ]: 1,
+	[ RGBEEncoding ]: 2,
+	[ RGBM7Encoding ]: 3,
+	[ RGBM16Encoding ]: 4,
+	[ RGBDEncoding ]: 5,
+	[ GammaEncoding ]: 6
+};
+
+const _flatCamera = /*@__PURE__*/ new OrthographicCamera();
+const { _lodPlanes, _sizeLods, _sigmas } = /*@__PURE__*/ _createPlanes();
+const _clearColor = /*@__PURE__*/ new Color();
+let _oldTarget = null;
+
+// Golden Ratio
+const PHI = ( 1 + Math.sqrt( 5 ) ) / 2;
+const INV_PHI = 1 / PHI;
+
+// Vertices of a dodecahedron (except the opposites, which represent the
+// same axis), used as axis directions evenly spread on a sphere.
+const _axisDirections = [
+	/*@__PURE__*/ new Vector3( 1, 1, 1 ),
+	/*@__PURE__*/ new Vector3( - 1, 1, 1 ),
+	/*@__PURE__*/ new Vector3( 1, 1, - 1 ),
+	/*@__PURE__*/ new Vector3( - 1, 1, - 1 ),
+	/*@__PURE__*/ new Vector3( 0, PHI, INV_PHI ),
+	/*@__PURE__*/ new Vector3( 0, PHI, - INV_PHI ),
+	/*@__PURE__*/ new Vector3( INV_PHI, 0, PHI ),
+	/*@__PURE__*/ new Vector3( - INV_PHI, 0, PHI ),
+	/*@__PURE__*/ new Vector3( PHI, INV_PHI, 0 ),
+	/*@__PURE__*/ new Vector3( - PHI, INV_PHI, 0 ) ];
+
+/**
+ * This class generates a Prefiltered, Mipmapped Radiance Environment Map
+ * (PMREM) from a cubeMap environment texture. This allows different levels of
+ * blur to be quickly accessed based on material roughness. It is packed into a
+ * special CubeUV format that allows us to perform custom interpolation so that
+ * we can support nonlinear formats such as RGBE. Unlike a traditional mipmap
+ * chain, it only goes down to the LOD_MIN level (above), and then creates extra
+ * even more filtered 'mips' at the same LOD_MIN resolution, associated with
+ * higher roughness levels. In this way we maintain resolution to smoothly
+ * interpolate diffuse lighting while limiting sampling computation.
+ *
+ * Paper: Fast, Accurate Image-Based Lighting
+ * https://drive.google.com/file/d/15y8r_UpKlU9SvV4ILb0C3qCPecS8pvLz/view
+*/
+
+class PMREMGenerator {
+
+	constructor( renderer ) {
+
+		this._renderer = renderer;
+		this._pingPongRenderTarget = null;
+
+		this._blurMaterial = _getBlurShader( MAX_SAMPLES );
+		this._equirectShader = null;
+		this._cubemapShader = null;
+
+		this._compileMaterial( this._blurMaterial );
+
+	}
+
+	/**
+	 * Generates a PMREM from a supplied Scene, which can be faster than using an
+	 * image if networking bandwidth is low. Optional sigma specifies a blur radius
+	 * in radians to be applied to the scene before PMREM generation. Optional near
+	 * and far planes ensure the scene is rendered in its entirety (the cubeCamera
+	 * is placed at the origin).
+	 */
+	fromScene( scene, sigma = 0, near = 0.1, far = 100 ) {
+
+		_oldTarget = this._renderer.getRenderTarget();
+		const cubeUVRenderTarget = this._allocateTargets();
+
+		this._sceneToCubeUV( scene, near, far, cubeUVRenderTarget );
+		if ( sigma > 0 ) {
+
+			this._blur( cubeUVRenderTarget, 0, 0, sigma );
+
+		}
+
+		this._applyPMREM( cubeUVRenderTarget );
+		this._cleanup( cubeUVRenderTarget );
+
+		return cubeUVRenderTarget;
+
+	}
+
+	/**
+	 * Generates a PMREM from an equirectangular texture, which can be either LDR
+	 * (RGBFormat) or HDR (RGBEFormat). The ideal input image size is 1k (1024 x 512),
+	 * as this matches best with the 256 x 256 cubemap output.
+	 */
+	fromEquirectangular( equirectangular ) {
+
+		return this._fromTexture( equirectangular );
+
+	}
+
+	/**
+	 * Generates a PMREM from an cubemap texture, which can be either LDR
+	 * (RGBFormat) or HDR (RGBEFormat). The ideal input cube size is 256 x 256,
+	 * as this matches best with the 256 x 256 cubemap output.
+	 */
+	fromCubemap( cubemap ) {
+
+		return this._fromTexture( cubemap );
+
+	}
+
+	/**
+	 * Pre-compiles the cubemap shader. You can get faster start-up by invoking this method during
+	 * your texture's network fetch for increased concurrency.
+	 */
+	compileCubemapShader() {
+
+		if ( this._cubemapShader === null ) {
+
+			this._cubemapShader = _getCubemapShader();
+			this._compileMaterial( this._cubemapShader );
+
+		}
+
+	}
+
+	/**
+	 * Pre-compiles the equirectangular shader. You can get faster start-up by invoking this method during
+	 * your texture's network fetch for increased concurrency.
+	 */
+	compileEquirectangularShader() {
+
+		if ( this._equirectShader === null ) {
+
+			this._equirectShader = _getEquirectShader();
+			this._compileMaterial( this._equirectShader );
+
+		}
+
+	}
+
+	/**
+	 * Disposes of the PMREMGenerator's internal memory. Note that PMREMGenerator is a static class,
+	 * so you should not need more than one PMREMGenerator object. If you do, calling dispose() on
+	 * one of them will cause any others to also become unusable.
+	 */
+	dispose() {
+
+		this._blurMaterial.dispose();
+
+		if ( this._cubemapShader !== null ) this._cubemapShader.dispose();
+		if ( this._equirectShader !== null ) this._equirectShader.dispose();
+
+		for ( let i = 0; i < _lodPlanes.length; i ++ ) {
+
+			_lodPlanes[ i ].dispose();
+
+		}
+
+	}
+
+	// private interface
+
+	_cleanup( outputTarget ) {
+
+		this._pingPongRenderTarget.dispose();
+		this._renderer.setRenderTarget( _oldTarget );
+		outputTarget.scissorTest = false;
+		_setViewport( outputTarget, 0, 0, outputTarget.width, outputTarget.height );
+
+	}
+
+	_fromTexture( texture ) {
+
+		_oldTarget = this._renderer.getRenderTarget();
+		const cubeUVRenderTarget = this._allocateTargets( texture );
+		this._textureToCubeUV( texture, cubeUVRenderTarget );
+		this._applyPMREM( cubeUVRenderTarget );
+		this._cleanup( cubeUVRenderTarget );
+
+		return cubeUVRenderTarget;
+
+	}
+
+	_allocateTargets( texture ) { // warning: null texture is valid
+
+		const params = {
+			magFilter: NearestFilter,
+			minFilter: NearestFilter,
+			generateMipmaps: false,
+			type: UnsignedByteType,
+			format: RGBEFormat,
+			encoding: _isLDR( texture ) ? texture.encoding : RGBEEncoding,
+			depthBuffer: false
+		};
+
+		const cubeUVRenderTarget = _createRenderTarget( params );
+		cubeUVRenderTarget.depthBuffer = texture ? false : true;
+		this._pingPongRenderTarget = _createRenderTarget( params );
+		return cubeUVRenderTarget;
+
+	}
+
+	_compileMaterial( material ) {
+
+		const tmpMesh = new Mesh( _lodPlanes[ 0 ], material );
+		this._renderer.compile( tmpMesh, _flatCamera );
+
+	}
+
+	_sceneToCubeUV( scene, near, far, cubeUVRenderTarget ) {
+
+		const fov = 90;
+		const aspect = 1;
+		const cubeCamera = new PerspectiveCamera( fov, aspect, near, far );
+		const upSign = [ 1, - 1, 1, 1, 1, 1 ];
+		const forwardSign = [ 1, 1, 1, - 1, - 1, - 1 ];
+		const renderer = this._renderer;
+
+		const originalAutoClear = renderer.autoClear;
+		const outputEncoding = renderer.outputEncoding;
+		const toneMapping = renderer.toneMapping;
+		renderer.getClearColor( _clearColor );
+
+		renderer.toneMapping = NoToneMapping;
+		renderer.outputEncoding = LinearEncoding;
+		renderer.autoClear = false;
+
+		const backgroundMaterial = new MeshBasicMaterial( {
+			name: 'PMREM.Background',
+			side: BackSide,
+			depthWrite: false,
+			depthTest: false,
+		} );
+
+		const backgroundBox = new Mesh( new BoxGeometry(), backgroundMaterial );
+
+		let useSolidColor = false;
+		const background = scene.background;
+
+		if ( background ) {
+
+			if ( background.isColor ) {
+
+				backgroundMaterial.color.copy( background );
+				scene.background = null;
+				useSolidColor = true;
+
+			}
+
+		} else {
+
+			backgroundMaterial.color.copy( _clearColor );
+			useSolidColor = true;
+
+		}
+
+		for ( let i = 0; i < 6; i ++ ) {
+
+			const col = i % 3;
+			if ( col == 0 ) {
+
+				cubeCamera.up.set( 0, upSign[ i ], 0 );
+				cubeCamera.lookAt( forwardSign[ i ], 0, 0 );
+
+			} else if ( col == 1 ) {
+
+				cubeCamera.up.set( 0, 0, upSign[ i ] );
+				cubeCamera.lookAt( 0, forwardSign[ i ], 0 );
+
+			} else {
+
+				cubeCamera.up.set( 0, upSign[ i ], 0 );
+				cubeCamera.lookAt( 0, 0, forwardSign[ i ] );
+
+			}
+
+			_setViewport( cubeUVRenderTarget,
+				col * SIZE_MAX, i > 2 ? SIZE_MAX : 0, SIZE_MAX, SIZE_MAX );
+			renderer.setRenderTarget( cubeUVRenderTarget );
+
+			if ( useSolidColor ) {
+
+				renderer.render( backgroundBox, cubeCamera );
+
+			}
+
+			renderer.render( scene, cubeCamera );
+
+		}
+
+		backgroundBox.geometry.dispose();
+		backgroundBox.material.dispose();
+
+		renderer.toneMapping = toneMapping;
+		renderer.outputEncoding = outputEncoding;
+		renderer.autoClear = originalAutoClear;
+		scene.background = background;
+
+	}
+
+	_textureToCubeUV( texture, cubeUVRenderTarget ) {
+
+		const renderer = this._renderer;
+
+		if ( texture.isCubeTexture ) {
+
+			if ( this._cubemapShader == null ) {
+
+				this._cubemapShader = _getCubemapShader();
+
+			}
+
+		} else {
+
+			if ( this._equirectShader == null ) {
+
+				this._equirectShader = _getEquirectShader();
+
+			}
+
+		}
+
+		const material = texture.isCubeTexture ? this._cubemapShader : this._equirectShader;
+		const mesh = new Mesh( _lodPlanes[ 0 ], material );
+
+		const uniforms = material.uniforms;
+
+		uniforms[ 'envMap' ].value = texture;
+
+		if ( ! texture.isCubeTexture ) {
+
+			uniforms[ 'texelSize' ].value.set( 1.0 / texture.image.width, 1.0 / texture.image.height );
+
+		}
+
+		uniforms[ 'inputEncoding' ].value = ENCODINGS[ texture.encoding ];
+		uniforms[ 'outputEncoding' ].value = ENCODINGS[ cubeUVRenderTarget.texture.encoding ];
+
+		_setViewport( cubeUVRenderTarget, 0, 0, 3 * SIZE_MAX, 2 * SIZE_MAX );
+
+		renderer.setRenderTarget( cubeUVRenderTarget );
+		renderer.render( mesh, _flatCamera );
+
+	}
+
+	_applyPMREM( cubeUVRenderTarget ) {
+
+		const renderer = this._renderer;
+		const autoClear = renderer.autoClear;
+		renderer.autoClear = false;
+
+		for ( let i = 1; i < TOTAL_LODS; i ++ ) {
+
+			const sigma = Math.sqrt( _sigmas[ i ] * _sigmas[ i ] - _sigmas[ i - 1 ] * _sigmas[ i - 1 ] );
+
+			const poleAxis = _axisDirections[ ( i - 1 ) % _axisDirections.length ];
+
+			this._blur( cubeUVRenderTarget, i - 1, i, sigma, poleAxis );
+
+		}
+
+		renderer.autoClear = autoClear;
+
+	}
+
+	/**
+	 * This is a two-pass Gaussian blur for a cubemap. Normally this is done
+	 * vertically and horizontally, but this breaks down on a cube. Here we apply
+	 * the blur latitudinally (around the poles), and then longitudinally (towards
+	 * the poles) to approximate the orthogonally-separable blur. It is least
+	 * accurate at the poles, but still does a decent job.
+	 */
+	_blur( cubeUVRenderTarget, lodIn, lodOut, sigma, poleAxis ) {
+
+		const pingPongRenderTarget = this._pingPongRenderTarget;
+
+		this._halfBlur(
+			cubeUVRenderTarget,
+			pingPongRenderTarget,
+			lodIn,
+			lodOut,
+			sigma,
+			'latitudinal',
+			poleAxis );
+
+		this._halfBlur(
+			pingPongRenderTarget,
+			cubeUVRenderTarget,
+			lodOut,
+			lodOut,
+			sigma,
+			'longitudinal',
+			poleAxis );
+
+	}
+
+	_halfBlur( targetIn, targetOut, lodIn, lodOut, sigmaRadians, direction, poleAxis ) {
+
+		const renderer = this._renderer;
+		const blurMaterial = this._blurMaterial;
+
+		if ( direction !== 'latitudinal' && direction !== 'longitudinal' ) {
+
+			console.error(
+				'blur direction must be either latitudinal or longitudinal!' );
+
+		}
+
+		// Number of standard deviations at which to cut off the discrete approximation.
+		const STANDARD_DEVIATIONS = 3;
+
+		const blurMesh = new Mesh( _lodPlanes[ lodOut ], blurMaterial );
+		const blurUniforms = blurMaterial.uniforms;
+
+		const pixels = _sizeLods[ lodIn ] - 1;
+		const radiansPerPixel = isFinite( sigmaRadians ) ? Math.PI / ( 2 * pixels ) : 2 * Math.PI / ( 2 * MAX_SAMPLES - 1 );
+		const sigmaPixels = sigmaRadians / radiansPerPixel;
+		const samples = isFinite( sigmaRadians ) ? 1 + Math.floor( STANDARD_DEVIATIONS * sigmaPixels ) : MAX_SAMPLES;
+
+		if ( samples > MAX_SAMPLES ) {
+
+			console.warn( `sigmaRadians, ${
+				sigmaRadians}, is too large and will clip, as it requested ${
+				samples} samples when the maximum is set to ${MAX_SAMPLES}` );
+
+		}
+
+		const weights = [];
+		let sum = 0;
+
+		for ( let i = 0; i < MAX_SAMPLES; ++ i ) {
+
+			const x = i / sigmaPixels;
+			const weight = Math.exp( - x * x / 2 );
+			weights.push( weight );
+
+			if ( i == 0 ) {
+
+				sum += weight;
+
+			} else if ( i < samples ) {
+
+				sum += 2 * weight;
+
+			}
+
+		}
+
+		for ( let i = 0; i < weights.length; i ++ ) {
+
+			weights[ i ] = weights[ i ] / sum;
+
+		}
+
+		blurUniforms[ 'envMap' ].value = targetIn.texture;
+		blurUniforms[ 'samples' ].value = samples;
+		blurUniforms[ 'weights' ].value = weights;
+		blurUniforms[ 'latitudinal' ].value = direction === 'latitudinal';
+
+		if ( poleAxis ) {
+
+			blurUniforms[ 'poleAxis' ].value = poleAxis;
+
+		}
+
+		blurUniforms[ 'dTheta' ].value = radiansPerPixel;
+		blurUniforms[ 'mipInt' ].value = LOD_MAX - lodIn;
+		blurUniforms[ 'inputEncoding' ].value = ENCODINGS[ targetIn.texture.encoding ];
+		blurUniforms[ 'outputEncoding' ].value = ENCODINGS[ targetIn.texture.encoding ];
+
+		const outputSize = _sizeLods[ lodOut ];
+		const x = 3 * Math.max( 0, SIZE_MAX - 2 * outputSize );
+		const y = ( lodOut === 0 ? 0 : 2 * SIZE_MAX ) + 2 * outputSize * ( lodOut > LOD_MAX - LOD_MIN ? lodOut - LOD_MAX + LOD_MIN : 0 );
+
+		_setViewport( targetOut, x, y, 3 * outputSize, 2 * outputSize );
+		renderer.setRenderTarget( targetOut );
+		renderer.render( blurMesh, _flatCamera );
+
+	}
+
+}
+
+function _isLDR( texture ) {
+
+	if ( texture === undefined || texture.type !== UnsignedByteType ) return false;
+
+	return texture.encoding === LinearEncoding || texture.encoding === sRGBEncoding || texture.encoding === GammaEncoding;
+
+}
+
+function _createPlanes() {
+
+	const _lodPlanes = [];
+	const _sizeLods = [];
+	const _sigmas = [];
+
+	let lod = LOD_MAX;
+
+	for ( let i = 0; i < TOTAL_LODS; i ++ ) {
+
+		const sizeLod = Math.pow( 2, lod );
+		_sizeLods.push( sizeLod );
+		let sigma = 1.0 / sizeLod;
+
+		if ( i > LOD_MAX - LOD_MIN ) {
+
+			sigma = EXTRA_LOD_SIGMA[ i - LOD_MAX + LOD_MIN - 1 ];
+
+		} else if ( i == 0 ) {
+
+			sigma = 0;
+
+		}
+
+		_sigmas.push( sigma );
+
+		const texelSize = 1.0 / ( sizeLod - 1 );
+		const min = - texelSize / 2;
+		const max = 1 + texelSize / 2;
+		const uv1 = [ min, min, max, min, max, max, min, min, max, max, min, max ];
+
+		const cubeFaces = 6;
+		const vertices = 6;
+		const positionSize = 3;
+		const uvSize = 2;
+		const faceIndexSize = 1;
+
+		const position = new Float32Array( positionSize * vertices * cubeFaces );
+		const uv = new Float32Array( uvSize * vertices * cubeFaces );
+		const faceIndex = new Float32Array( faceIndexSize * vertices * cubeFaces );
+
+		for ( let face = 0; face < cubeFaces; face ++ ) {
+
+			const x = ( face % 3 ) * 2 / 3 - 1;
+			const y = face > 2 ? 0 : - 1;
+			const coordinates = [
+				x, y, 0,
+				x + 2 / 3, y, 0,
+				x + 2 / 3, y + 1, 0,
+				x, y, 0,
+				x + 2 / 3, y + 1, 0,
+				x, y + 1, 0
+			];
+			position.set( coordinates, positionSize * vertices * face );
+			uv.set( uv1, uvSize * vertices * face );
+			const fill = [ face, face, face, face, face, face ];
+			faceIndex.set( fill, faceIndexSize * vertices * face );
+
+		}
+
+		const planes = new BufferGeometry();
+		planes.setAttribute( 'position', new BufferAttribute( position, positionSize ) );
+		planes.setAttribute( 'uv', new BufferAttribute( uv, uvSize ) );
+		planes.setAttribute( 'faceIndex', new BufferAttribute( faceIndex, faceIndexSize ) );
+		_lodPlanes.push( planes );
+
+		if ( lod > LOD_MIN ) {
+
+			lod --;
+
+		}
+
+	}
+
+	return { _lodPlanes, _sizeLods, _sigmas };
+
+}
+
+function _createRenderTarget( params ) {
+
+	const cubeUVRenderTarget = new WebGLRenderTarget( 3 * SIZE_MAX, 3 * SIZE_MAX, params );
+	cubeUVRenderTarget.texture.mapping = CubeUVReflectionMapping;
+	cubeUVRenderTarget.texture.name = 'PMREM.cubeUv';
+	cubeUVRenderTarget.scissorTest = true;
+	return cubeUVRenderTarget;
+
+}
+
+function _setViewport( target, x, y, width, height ) {
+
+	target.viewport.set( x, y, width, height );
+	target.scissor.set( x, y, width, height );
+
+}
+
+function _getBlurShader( maxSamples ) {
+
+	const weights = new Float32Array( maxSamples );
+	const poleAxis = new Vector3( 0, 1, 0 );
+	const shaderMaterial = new RawShaderMaterial( {
+
+		name: 'SphericalGaussianBlur',
+
+		defines: { 'n': maxSamples },
+
+		uniforms: {
+			'envMap': { value: null },
+			'samples': { value: 1 },
+			'weights': { value: weights },
+			'latitudinal': { value: false },
+			'dTheta': { value: 0 },
+			'mipInt': { value: 0 },
+			'poleAxis': { value: poleAxis },
+			'inputEncoding': { value: ENCODINGS[ LinearEncoding ] },
+			'outputEncoding': { value: ENCODINGS[ LinearEncoding ] }
+		},
+
+		vertexShader: _getCommonVertexShader(),
+
+		fragmentShader: /* glsl */`
+
+			precision mediump float;
+			precision mediump int;
+
+			varying vec3 vOutputDirection;
+
+			uniform sampler2D envMap;
+			uniform int samples;
+			uniform float weights[ n ];
+			uniform bool latitudinal;
+			uniform float dTheta;
+			uniform float mipInt;
+			uniform vec3 poleAxis;
+
+			${ _getEncodings() }
+
+			#define ENVMAP_TYPE_CUBE_UV
+			#include <cube_uv_reflection_fragment>
+
+			vec3 getSample( float theta, vec3 axis ) {
+
+				float cosTheta = cos( theta );
+				// Rodrigues' axis-angle rotation
+				vec3 sampleDirection = vOutputDirection * cosTheta
+					+ cross( axis, vOutputDirection ) * sin( theta )
+					+ axis * dot( axis, vOutputDirection ) * ( 1.0 - cosTheta );
+
+				return bilinearCubeUV( envMap, sampleDirection, mipInt );
+
+			}
+
+			void main() {
+
+				vec3 axis = latitudinal ? poleAxis : cross( poleAxis, vOutputDirection );
+
+				if ( all( equal( axis, vec3( 0.0 ) ) ) ) {
+
+					axis = vec3( vOutputDirection.z, 0.0, - vOutputDirection.x );
+
+				}
+
+				axis = normalize( axis );
+
+				gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
+				gl_FragColor.rgb += weights[ 0 ] * getSample( 0.0, axis );
+
+				for ( int i = 1; i < n; i++ ) {
+
+					if ( i >= samples ) {
+
+						break;
+
+					}
+
+					float theta = dTheta * float( i );
+					gl_FragColor.rgb += weights[ i ] * getSample( -1.0 * theta, axis );
+					gl_FragColor.rgb += weights[ i ] * getSample( theta, axis );
+
+				}
+
+				gl_FragColor = linearToOutputTexel( gl_FragColor );
+
+			}
+		`,
+
+		blending: NoBlending,
+		depthTest: false,
+		depthWrite: false
+
+	} );
+
+	return shaderMaterial;
+
+}
+
+function _getEquirectShader() {
+
+	const texelSize = new Vector2( 1, 1 );
+	const shaderMaterial = new RawShaderMaterial( {
+
+		name: 'EquirectangularToCubeUV',
+
+		uniforms: {
+			'envMap': { value: null },
+			'texelSize': { value: texelSize },
+			'inputEncoding': { value: ENCODINGS[ LinearEncoding ] },
+			'outputEncoding': { value: ENCODINGS[ LinearEncoding ] }
+		},
+
+		vertexShader: _getCommonVertexShader(),
+
+		fragmentShader: /* glsl */`
+
+			precision mediump float;
+			precision mediump int;
+
+			varying vec3 vOutputDirection;
+
+			uniform sampler2D envMap;
+			uniform vec2 texelSize;
+
+			${ _getEncodings() }
+
+			#include <common>
+
+			void main() {
+
+				gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
+
+				vec3 outputDirection = normalize( vOutputDirection );
+				vec2 uv = equirectUv( outputDirection );
+
+				vec2 f = fract( uv / texelSize - 0.5 );
+				uv -= f * texelSize;
+				vec3 tl = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+				uv.x += texelSize.x;
+				vec3 tr = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+				uv.y += texelSize.y;
+				vec3 br = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+				uv.x -= texelSize.x;
+				vec3 bl = envMapTexelToLinear( texture2D ( envMap, uv ) ).rgb;
+
+				vec3 tm = mix( tl, tr, f.x );
+				vec3 bm = mix( bl, br, f.x );
+				gl_FragColor.rgb = mix( tm, bm, f.y );
+
+				gl_FragColor = linearToOutputTexel( gl_FragColor );
+
+			}
+		`,
+
+		blending: NoBlending,
+		depthTest: false,
+		depthWrite: false
+
+	} );
+
+	return shaderMaterial;
+
+}
+
+function _getCubemapShader() {
+
+	const shaderMaterial = new RawShaderMaterial( {
+
+		name: 'CubemapToCubeUV',
+
+		uniforms: {
+			'envMap': { value: null },
+			'inputEncoding': { value: ENCODINGS[ LinearEncoding ] },
+			'outputEncoding': { value: ENCODINGS[ LinearEncoding ] }
+		},
+
+		vertexShader: _getCommonVertexShader(),
+
+		fragmentShader: /* glsl */`
+
+			precision mediump float;
+			precision mediump int;
+
+			varying vec3 vOutputDirection;
+
+			uniform samplerCube envMap;
+
+			${ _getEncodings() }
+
+			void main() {
+
+				gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
+				gl_FragColor.rgb = envMapTexelToLinear( textureCube( envMap, vec3( - vOutputDirection.x, vOutputDirection.yz ) ) ).rgb;
+				gl_FragColor = linearToOutputTexel( gl_FragColor );
+
+			}
+		`,
+
+		blending: NoBlending,
+		depthTest: false,
+		depthWrite: false
+
+	} );
+
+	return shaderMaterial;
+
+}
+
+function _getCommonVertexShader() {
+
+	return /* glsl */`
+
+		precision mediump float;
+		precision mediump int;
+
+		attribute vec3 position;
+		attribute vec2 uv;
+		attribute float faceIndex;
+
+		varying vec3 vOutputDirection;
+
+		// RH coordinate system; PMREM face-indexing convention
+		vec3 getDirection( vec2 uv, float face ) {
+
+			uv = 2.0 * uv - 1.0;
+
+			vec3 direction = vec3( uv, 1.0 );
+
+			if ( face == 0.0 ) {
+
+				direction = direction.zyx; // ( 1, v, u ) pos x
+
+			} else if ( face == 1.0 ) {
+
+				direction = direction.xzy;
+				direction.xz *= -1.0; // ( -u, 1, -v ) pos y
+
+			} else if ( face == 2.0 ) {
+
+				direction.x *= -1.0; // ( -u, v, 1 ) pos z
+
+			} else if ( face == 3.0 ) {
+
+				direction = direction.zyx;
+				direction.xz *= -1.0; // ( -1, v, -u ) neg x
+
+			} else if ( face == 4.0 ) {
+
+				direction = direction.xzy;
+				direction.xy *= -1.0; // ( -u, -1, v ) neg y
+
+			} else if ( face == 5.0 ) {
+
+				direction.z *= -1.0; // ( u, v, -1 ) neg z
+
+			}
+
+			return direction;
+
+		}
+
+		void main() {
+
+			vOutputDirection = getDirection( uv, faceIndex );
+			gl_Position = vec4( position, 1.0 );
+
+		}
+	`;
+
+}
+
+function _getEncodings() {
+
+	return /* glsl */`
+
+		uniform int inputEncoding;
+		uniform int outputEncoding;
+
+		#include <encodings_pars_fragment>
+
+		vec4 inputTexelToLinear( vec4 value ) {
+
+			if ( inputEncoding == 0 ) {
+
+				return value;
+
+			} else if ( inputEncoding == 1 ) {
+
+				return sRGBToLinear( value );
+
+			} else if ( inputEncoding == 2 ) {
+
+				return RGBEToLinear( value );
+
+			} else if ( inputEncoding == 3 ) {
+
+				return RGBMToLinear( value, 7.0 );
+
+			} else if ( inputEncoding == 4 ) {
+
+				return RGBMToLinear( value, 16.0 );
+
+			} else if ( inputEncoding == 5 ) {
+
+				return RGBDToLinear( value, 256.0 );
+
+			} else {
+
+				return GammaToLinear( value, 2.2 );
+
+			}
+
+		}
+
+		vec4 linearToOutputTexel( vec4 value ) {
+
+			if ( outputEncoding == 0 ) {
+
+				return value;
+
+			} else if ( outputEncoding == 1 ) {
+
+				return LinearTosRGB( value );
+
+			} else if ( outputEncoding == 2 ) {
+
+				return LinearToRGBE( value );
+
+			} else if ( outputEncoding == 3 ) {
+
+				return LinearToRGBM( value, 7.0 );
+
+			} else if ( outputEncoding == 4 ) {
+
+				return LinearToRGBM( value, 16.0 );
+
+			} else if ( outputEncoding == 5 ) {
+
+				return LinearToRGBD( value, 256.0 );
+
+			} else {
+
+				return LinearToGamma( value, 2.2 );
+
+			}
+
+		}
+
+		vec4 envMapTexelToLinear( vec4 color ) {
+
+			return inputTexelToLinear( color );
+
+		}
+	`;
+
+}
+
+function WebGLCubeUVMaps( renderer ) {
+
+	let cubeUVmaps = new WeakMap();
+
+	let pmremGenerator = null;
+
+	function get( texture ) {
+
+		if ( texture && texture.isTexture && texture.isRenderTargetTexture === false ) {
+
+			const mapping = texture.mapping;
+
+			const isEquirectMap = ( mapping === EquirectangularReflectionMapping || mapping === EquirectangularRefractionMapping );
+			const isCubeMap = ( mapping === CubeReflectionMapping || mapping === CubeRefractionMapping );
+
+			if ( isEquirectMap || isCubeMap ) {
+
+				// equirect/cube map to cubeUV conversion
+
+				if ( cubeUVmaps.has( texture ) ) {
+
+					return cubeUVmaps.get( texture ).texture;
+
+				} else {
+
+					const image = texture.image;
+
+					if ( ( isEquirectMap && image && image.height > 0 ) || ( isCubeMap && image && isCubeTextureComplete( image ) ) ) {
+
+						const currentRenderTarget = renderer.getRenderTarget();
+
+						if ( pmremGenerator === null ) pmremGenerator = new PMREMGenerator( renderer );
+
+						const renderTarget = isEquirectMap ? pmremGenerator.fromEquirectangular( texture ) : pmremGenerator.fromCubemap( texture );
+						cubeUVmaps.set( texture, renderTarget );
+
+						renderer.setRenderTarget( currentRenderTarget );
+
+						texture.addEventListener( 'dispose', onTextureDispose );
+
+						return renderTarget.texture;
+
+					} else {
+
+						// image not yet ready. try the conversion next frame
+
+						return null;
+
+					}
+
+				}
+
+			}
+
+		}
+
+		return texture;
+
+	}
+
+	function isCubeTextureComplete( image ) {
+
+		let count = 0;
+		const length = 6;
+
+		for ( let i = 0; i < length; i ++ ) {
+
+			if ( image[ i ] !== undefined ) count ++;
+
+		}
+
+		return count === length;
+
+
+	}
+
+	function onTextureDispose( event ) {
+
+		const texture = event.target;
+
+		texture.removeEventListener( 'dispose', onTextureDispose );
+
+		const cubemapUV = cubeUVmaps.get( texture );
+
+		if ( cubemapUV !== undefined ) {
+
+			cubeUVmaps.delete( texture );
+			cubemapUV.dispose();
+
+		}
+
+	}
+
+	function dispose() {
+
+		cubeUVmaps = new WeakMap();
+
+		if ( pmremGenerator !== null ) {
+
+			pmremGenerator.dispose();
+			pmremGenerator = null;
+
+		}
 
 	}
 
@@ -14924,7 +16081,7 @@ function WebGLMorphtargets( gl ) {
 
 		let influences = influencesList[ geometry.id ];
 
-		if ( influences === undefined ) {
+		if ( influences === undefined || influences.length !== length ) {
 
 			// initialise list
 
@@ -14971,8 +16128,8 @@ function WebGLMorphtargets( gl ) {
 
 		workInfluences.sort( numericalSort );
 
-		const morphTargets = material.morphTargets && geometry.morphAttributes.position;
-		const morphNormals = material.morphNormals && geometry.morphAttributes.normal;
+		const morphTargets = geometry.morphAttributes.position;
+		const morphNormals = geometry.morphAttributes.normal;
 
 		let morphInfluencesSum = 0;
 
@@ -16192,16 +17349,14 @@ function getEncodingComponents( encoding ) {
 function getShaderErrors( gl, shader, type ) {
 
 	const status = gl.getShaderParameter( shader, 35713 );
-	const log = gl.getShaderInfoLog( shader ).trim();
+	const errors = gl.getShaderInfoLog( shader ).trim();
 
-	if ( status && log === '' ) return '';
+	if ( status && errors === '' ) return '';
 
 	// --enable-privileged-webgl-extension
 	// console.log( '**' + type + '**', gl.getExtension( 'WEBGL_debug_shaders' ).getTranslatedShaderSource( shader ) );
 
-	const source = gl.getShaderSource( shader );
-
-	return 'THREE.WebGLShader: gl.getShaderInfoLog() ' + type + '\n' + log + addLineNumbers( source );
+	return type.toUpperCase() + '\n\n' + errors + '\n\n' + addLineNumbers( gl.getShaderSource( shader ) );
 
 }
 
@@ -16261,7 +17416,7 @@ function generateExtensions( parameters ) {
 		( parameters.extensionDerivatives || parameters.envMapCubeUV || parameters.bumpMap || parameters.tangentSpaceNormalMap || parameters.clearcoatNormalMap || parameters.flatShading || parameters.shaderID === 'physical' ) ? '#extension GL_OES_standard_derivatives : enable' : '',
 		( parameters.extensionFragDepth || parameters.logarithmicDepthBuffer ) && parameters.rendererExtensionFragDepth ? '#extension GL_EXT_frag_depth : enable' : '',
 		( parameters.extensionDrawBuffers && parameters.rendererExtensionDrawBuffers ) ? '#extension GL_EXT_draw_buffers : require' : '',
-		( parameters.extensionShaderTextureLOD || parameters.envMap ) && parameters.rendererExtensionShaderTextureLod ? '#extension GL_EXT_shader_texture_lod : enable' : ''
+		( parameters.extensionShaderTextureLOD || parameters.envMap || parameters.transmission ) && parameters.rendererExtensionShaderTextureLod ? '#extension GL_EXT_shader_texture_lod : enable' : ''
 	];
 
 	return chunks.filter( filterEmptyLine ).join( '\n' );
@@ -16297,9 +17452,18 @@ function fetchAttributeLocations( gl, program ) {
 		const info = gl.getActiveAttrib( program, i );
 		const name = info.name;
 
+		let locationSize = 1;
+		if ( info.type === 35674 ) locationSize = 2;
+		if ( info.type === 35675 ) locationSize = 3;
+		if ( info.type === 35676 ) locationSize = 4;
+
 		// console.log( 'THREE.WebGLProgram: ACTIVE VERTEX ATTRIBUTE:', name, i );
 
-		attributes[ name ] = gl.getAttribLocation( program, name );
+		attributes[ name ] = {
+			type: info.type,
+			location: gl.getAttribLocation( program, name ),
+			locationSize: locationSize
+		};
 
 	}
 
@@ -16519,6 +17683,9 @@ function generateEnvMapBlendingDefine( parameters ) {
 
 function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 
+	// TODO Send this event to Three.js DevTools
+	// console.log( 'WebGLProgram', cacheKey );
+
 	const gl = renderer.getContext();
 
 	const defines = parameters.defines;
@@ -16605,12 +17772,20 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 			parameters.clearcoatMap ? '#define USE_CLEARCOATMAP' : '',
 			parameters.clearcoatRoughnessMap ? '#define USE_CLEARCOAT_ROUGHNESSMAP' : '',
 			parameters.clearcoatNormalMap ? '#define USE_CLEARCOAT_NORMALMAP' : '',
+
 			parameters.displacementMap && parameters.supportsVertexTextures ? '#define USE_DISPLACEMENTMAP' : '',
+
 			parameters.specularMap ? '#define USE_SPECULARMAP' : '',
+			parameters.specularIntensityMap ? '#define USE_SPECULARINTENSITYMAP' : '',
+			parameters.specularTintMap ? '#define USE_SPECULARTINTMAP' : '',
+
 			parameters.roughnessMap ? '#define USE_ROUGHNESSMAP' : '',
 			parameters.metalnessMap ? '#define USE_METALNESSMAP' : '',
 			parameters.alphaMap ? '#define USE_ALPHAMAP' : '',
+
+			parameters.transmission ? '#define USE_TRANSMISSION' : '',
 			parameters.transmissionMap ? '#define USE_TRANSMISSIONMAP' : '',
+			parameters.thicknessMap ? '#define USE_THICKNESSMAP' : '',
 
 			parameters.vertexTangents ? '#define USE_TANGENT' : '',
 			parameters.vertexColors ? '#define USE_COLOR' : '',
@@ -16722,8 +17897,6 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 
 			customDefines,
 
-			parameters.alphaTest ? '#define ALPHATEST ' + parameters.alphaTest + ( parameters.alphaTest % 1 ? '' : '.0' ) : '', // add '.0' if integer
-
 			'#define GAMMA_FACTOR ' + gammaFactorDefine,
 
 			( parameters.useFog && parameters.fog ) ? '#define USE_FOG' : '',
@@ -16742,16 +17915,25 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 			parameters.normalMap ? '#define USE_NORMALMAP' : '',
 			( parameters.normalMap && parameters.objectSpaceNormalMap ) ? '#define OBJECTSPACE_NORMALMAP' : '',
 			( parameters.normalMap && parameters.tangentSpaceNormalMap ) ? '#define TANGENTSPACE_NORMALMAP' : '',
+
+			parameters.clearcoat ? '#define USE_CLEARCOAT' : '',
 			parameters.clearcoatMap ? '#define USE_CLEARCOATMAP' : '',
 			parameters.clearcoatRoughnessMap ? '#define USE_CLEARCOAT_ROUGHNESSMAP' : '',
 			parameters.clearcoatNormalMap ? '#define USE_CLEARCOAT_NORMALMAP' : '',
+
 			parameters.specularMap ? '#define USE_SPECULARMAP' : '',
+			parameters.specularIntensityMap ? '#define USE_SPECULARINTENSITYMAP' : '',
+			parameters.specularTintMap ? '#define USE_SPECULARTINTMAP' : '',
 			parameters.roughnessMap ? '#define USE_ROUGHNESSMAP' : '',
 			parameters.metalnessMap ? '#define USE_METALNESSMAP' : '',
-			parameters.alphaMap ? '#define USE_ALPHAMAP' : '',
 
-			parameters.sheen ? '#define USE_SHEEN' : '',
+			parameters.alphaMap ? '#define USE_ALPHAMAP' : '',
+			parameters.alphaTest ? '#define USE_ALPHATEST' : '',
+
+			parameters.sheenTint ? '#define USE_SHEEN' : '',
+			parameters.transmission ? '#define USE_TRANSMISSION' : '',
 			parameters.transmissionMap ? '#define USE_TRANSMISSIONMAP' : '',
+			parameters.thicknessMap ? '#define USE_THICKNESSMAP' : '',
 
 			parameters.vertexTangents ? '#define USE_TANGENT' : '',
 			parameters.vertexColors || parameters.instancingColor ? '#define USE_COLOR' : '',
@@ -16787,12 +17969,14 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 			( parameters.toneMapping !== NoToneMapping ) ? getToneMappingFunction( 'toneMapping', parameters.toneMapping ) : '',
 
 			parameters.dithering ? '#define DITHERING' : '',
+			parameters.format === RGBFormat ? '#define OPAQUE' : '',
 
 			ShaderChunk[ 'encodings_pars_fragment' ], // this code is required here because it is used by the various encoding/decoding function defined below
 			parameters.map ? getTexelDecodingFunction( 'mapTexelToLinear', parameters.mapEncoding ) : '',
 			parameters.matcap ? getTexelDecodingFunction( 'matcapTexelToLinear', parameters.matcapEncoding ) : '',
 			parameters.envMap ? getTexelDecodingFunction( 'envMapTexelToLinear', parameters.envMapEncoding ) : '',
 			parameters.emissiveMap ? getTexelDecodingFunction( 'emissiveMapTexelToLinear', parameters.emissiveMapEncoding ) : '',
+			parameters.specularTintMap ? getTexelDecodingFunction( 'specularTintMapTexelToLinear', parameters.specularTintMapEncoding ) : '',
 			parameters.lightMap ? getTexelDecodingFunction( 'lightMapTexelToLinear', parameters.lightMapEncoding ) : '',
 			getTexelEncodingFunction( 'linearToOutputTexel', parameters.outputEncoding ),
 
@@ -16889,11 +18073,17 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 			const vertexErrors = getShaderErrors( gl, glVertexShader, 'vertex' );
 			const fragmentErrors = getShaderErrors( gl, glFragmentShader, 'fragment' );
 
-			console.error( 'THREE.WebGLProgram: shader error: ', gl.getError(), '35715', gl.getProgramParameter( program, 35715 ), 'gl.getProgramInfoLog', programLog, vertexErrors, fragmentErrors );
+			console.error(
+				'THREE.WebGLProgram: Shader Error ' + gl.getError() + ' - ' +
+				'VALIDATE_STATUS ' + gl.getProgramParameter( program, 35715 ) + '\n\n' +
+				'Program Info Log: ' + programLog + '\n' +
+				vertexErrors + '\n' +
+				fragmentErrors
+			);
 
 		} else if ( programLog !== '' ) {
 
-			console.warn( 'THREE.WebGLProgram: gl.getProgramInfoLog()', programLog );
+			console.warn( 'THREE.WebGLProgram: Program Info Log:', programLog );
 
 		} else if ( vertexLog === '' || fragmentLog === '' ) {
 
@@ -16995,7 +18185,7 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 
 }
 
-function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingStates, clipping ) {
+function WebGLPrograms( renderer, cubemaps, cubeuvmaps, extensions, capabilities, bindingStates, clipping ) {
 
 	const programs = [];
 
@@ -17028,16 +18218,19 @@ function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingSta
 	const parameterNames = [
 		'precision', 'isWebGL2', 'supportsVertexTextures', 'outputEncoding', 'instancing', 'instancingColor',
 		'map', 'mapEncoding', 'matcap', 'matcapEncoding', 'envMap', 'envMapMode', 'envMapEncoding', 'envMapCubeUV',
-		'lightMap', 'lightMapEncoding', 'aoMap', 'emissiveMap', 'emissiveMapEncoding', 'bumpMap', 'normalMap', 'objectSpaceNormalMap', 'tangentSpaceNormalMap', 'clearcoatMap', 'clearcoatRoughnessMap', 'clearcoatNormalMap', 'displacementMap', 'specularMap',
-		'roughnessMap', 'metalnessMap', 'gradientMap',
-		'alphaMap', 'combine', 'vertexColors', 'vertexAlphas', 'vertexTangents', 'vertexUvs', 'uvsVertexOnly', 'fog', 'useFog', 'fogExp2',
+		'lightMap', 'lightMapEncoding', 'aoMap', 'emissiveMap', 'emissiveMapEncoding', 'bumpMap', 'normalMap',
+		'objectSpaceNormalMap', 'tangentSpaceNormalMap',
+		'clearcoat', 'clearcoatMap', 'clearcoatRoughnessMap', 'clearcoatNormalMap',
+		'displacementMap',
+		'specularMap', 'specularIntensityMap', 'specularTintMap', 'specularTintMapEncoding', 'roughnessMap', 'metalnessMap', 'gradientMap',
+		'alphaMap', 'alphaTest', 'combine', 'vertexColors', 'vertexAlphas', 'vertexTangents', 'vertexUvs', 'uvsVertexOnly', 'fog', 'useFog', 'fogExp2',
 		'flatShading', 'sizeAttenuation', 'logarithmicDepthBuffer', 'skinning',
 		'maxBones', 'useVertexTexture', 'morphTargets', 'morphNormals', 'premultipliedAlpha',
 		'numDirLights', 'numPointLights', 'numSpotLights', 'numHemiLights', 'numRectAreaLights',
 		'numDirLightShadows', 'numPointLightShadows', 'numSpotLightShadows',
 		'shadowMapEnabled', 'shadowMapType', 'toneMapping', 'physicallyCorrectLights',
-		'alphaTest', 'doubleSided', 'flipSided', 'numClippingPlanes', 'numClipIntersection', 'depthPacking', 'dithering',
-		'sheen', 'transmissionMap'
+		'doubleSided', 'flipSided', 'numClippingPlanes', 'numClipIntersection', 'depthPacking', 'dithering', 'format',
+		'sheenTint', 'transmission', 'transmissionMap', 'thicknessMap'
 	];
 
 	function getMaxBones( object ) {
@@ -17104,7 +18297,7 @@ function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingSta
 		const fog = scene.fog;
 		const environment = material.isMeshStandardMaterial ? scene.environment : null;
 
-		const envMap = cubemaps.get( material.envMap || environment );
+		const envMap = ( material.isMeshStandardMaterial ? cubeuvmaps : cubemaps ).get( material.envMap || environment );
 
 		const shaderID = shaderIDs[ material.type ];
 
@@ -17142,6 +18335,9 @@ function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingSta
 		}
 
 		const currentRenderTarget = renderer.getRenderTarget();
+
+		const useAlphaTest = material.alphaTest > 0;
+		const useClearcoat = material.clearcoat > 0;
 
 		const parameters = {
 
@@ -17181,28 +18377,38 @@ function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingSta
 			normalMap: !! material.normalMap,
 			objectSpaceNormalMap: material.normalMapType === ObjectSpaceNormalMap,
 			tangentSpaceNormalMap: material.normalMapType === TangentSpaceNormalMap,
-			clearcoatMap: !! material.clearcoatMap,
-			clearcoatRoughnessMap: !! material.clearcoatRoughnessMap,
-			clearcoatNormalMap: !! material.clearcoatNormalMap,
+
+			clearcoat: useClearcoat,
+			clearcoatMap: useClearcoat && !! material.clearcoatMap,
+			clearcoatRoughnessMap: useClearcoat && !! material.clearcoatRoughnessMap,
+			clearcoatNormalMap: useClearcoat && !! material.clearcoatNormalMap,
+
 			displacementMap: !! material.displacementMap,
 			roughnessMap: !! material.roughnessMap,
 			metalnessMap: !! material.metalnessMap,
 			specularMap: !! material.specularMap,
+			specularIntensityMap: !! material.specularIntensityMap,
+			specularTintMap: !! material.specularTintMap,
+			specularTintMapEncoding: getTextureEncodingFromMap( material.specularTintMap ),
+
 			alphaMap: !! material.alphaMap,
+			alphaTest: useAlphaTest,
 
 			gradientMap: !! material.gradientMap,
 
-			sheen: !! material.sheen,
+			sheenTint: ( !! material.sheenTint && ( material.sheenTint.r > 0 || material.sheenTint.g > 0 || material.sheenTint.b > 0 ) ),
 
+			transmission: material.transmission > 0,
 			transmissionMap: !! material.transmissionMap,
+			thicknessMap: !! material.thicknessMap,
 
 			combine: material.combine,
 
-			vertexTangents: ( material.normalMap && material.vertexTangents ),
+			vertexTangents: ( !! material.normalMap && !! object.geometry && !! object.geometry.attributes.tangent ),
 			vertexColors: material.vertexColors,
-			vertexAlphas: material.vertexColors === true && object.geometry && object.geometry.attributes.color && object.geometry.attributes.color.itemSize === 4,
-			vertexUvs: !! material.map || !! material.bumpMap || !! material.normalMap || !! material.specularMap || !! material.alphaMap || !! material.emissiveMap || !! material.roughnessMap || !! material.metalnessMap || !! material.clearcoatMap || !! material.clearcoatRoughnessMap || !! material.clearcoatNormalMap || !! material.displacementMap || !! material.transmissionMap,
-			uvsVertexOnly: ! ( !! material.map || !! material.bumpMap || !! material.normalMap || !! material.specularMap || !! material.alphaMap || !! material.emissiveMap || !! material.roughnessMap || !! material.metalnessMap || !! material.clearcoatNormalMap || !! material.transmissionMap ) && !! material.displacementMap,
+			vertexAlphas: material.vertexColors === true && !! object.geometry && !! object.geometry.attributes.color && object.geometry.attributes.color.itemSize === 4,
+			vertexUvs: !! material.map || !! material.bumpMap || !! material.normalMap || !! material.specularMap || !! material.alphaMap || !! material.emissiveMap || !! material.roughnessMap || !! material.metalnessMap || !! material.clearcoatMap || !! material.clearcoatRoughnessMap || !! material.clearcoatNormalMap || !! material.displacementMap || !! material.transmissionMap || !! material.thicknessMap || !! material.specularIntensityMap || !! material.specularTintMap,
+			uvsVertexOnly: ! ( !! material.map || !! material.bumpMap || !! material.normalMap || !! material.specularMap || !! material.alphaMap || !! material.emissiveMap || !! material.roughnessMap || !! material.metalnessMap || !! material.clearcoatNormalMap || material.transmission > 0 || !! material.transmissionMap || !! material.thicknessMap || !! material.specularIntensityMap || !! material.specularTintMap ) && !! material.displacementMap,
 
 			fog: !! fog,
 			useFog: material.fog,
@@ -17213,12 +18419,12 @@ function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingSta
 			sizeAttenuation: material.sizeAttenuation,
 			logarithmicDepthBuffer: logarithmicDepthBuffer,
 
-			skinning: material.skinning && maxBones > 0,
+			skinning: object.isSkinnedMesh === true && maxBones > 0,
 			maxBones: maxBones,
 			useVertexTexture: floatVertexTextures,
 
-			morphTargets: material.morphTargets,
-			morphNormals: material.morphNormals,
+			morphTargets: !! object.geometry && !! object.geometry.morphAttributes.position,
+			morphNormals: !! object.geometry && !! object.geometry.morphAttributes.normal,
 
 			numDirLights: lights.directional.length,
 			numPointLights: lights.point.length,
@@ -17233,6 +18439,7 @@ function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingSta
 			numClippingPlanes: clipping.numPlanes,
 			numClipIntersection: clipping.numIntersection,
 
+			format: material.format,
 			dithering: material.dithering,
 
 			shadowMapEnabled: renderer.shadowMap.enabled && shadows.length > 0,
@@ -17243,7 +18450,6 @@ function WebGLPrograms( renderer, cubemaps, extensions, capabilities, bindingSta
 
 			premultipliedAlpha: material.premultipliedAlpha,
 
-			alphaTest: material.alphaTest,
 			doubleSided: material.side === DoubleSide,
 			flipSided: material.side === BackSide,
 
@@ -17497,6 +18703,7 @@ function WebGLRenderList( properties ) {
 	let renderItemsIndex = 0;
 
 	const opaque = [];
+	const transmissive = [];
 	const transparent = [];
 
 	const defaultProgram = { id: - 1 };
@@ -17506,6 +18713,7 @@ function WebGLRenderList( properties ) {
 		renderItemsIndex = 0;
 
 		opaque.length = 0;
+		transmissive.length = 0;
 		transparent.length = 0;
 
 	}
@@ -17555,7 +18763,19 @@ function WebGLRenderList( properties ) {
 
 		const renderItem = getNextRenderItem( object, geometry, material, groupOrder, z, group );
 
-		( material.transparent === true ? transparent : opaque ).push( renderItem );
+		if ( material.transmission > 0.0 ) {
+
+			transmissive.push( renderItem );
+
+		} else if ( material.transparent === true ) {
+
+			transparent.push( renderItem );
+
+		} else {
+
+			opaque.push( renderItem );
+
+		}
 
 	}
 
@@ -17563,13 +18783,26 @@ function WebGLRenderList( properties ) {
 
 		const renderItem = getNextRenderItem( object, geometry, material, groupOrder, z, group );
 
-		( material.transparent === true ? transparent : opaque ).unshift( renderItem );
+		if ( material.transmission > 0.0 ) {
+
+			transmissive.unshift( renderItem );
+
+		} else if ( material.transparent === true ) {
+
+			transparent.unshift( renderItem );
+
+		} else {
+
+			opaque.unshift( renderItem );
+
+		}
 
 	}
 
 	function sort( customOpaqueSort, customTransparentSort ) {
 
 		if ( opaque.length > 1 ) opaque.sort( customOpaqueSort || painterSortStable );
+		if ( transmissive.length > 1 ) transmissive.sort( customTransparentSort || reversePainterSortStable );
 		if ( transparent.length > 1 ) transparent.sort( customTransparentSort || reversePainterSortStable );
 
 	}
@@ -17598,6 +18831,7 @@ function WebGLRenderList( properties ) {
 	return {
 
 		opaque: opaque,
+		transmissive: transmissive,
 		transparent: transparent,
 
 		init: init,
@@ -17850,7 +19084,7 @@ function WebGLLights( extensions, capabilities ) {
 	const matrix4 = new Matrix4();
 	const matrix42 = new Matrix4();
 
-	function setup( lights ) {
+	function setup( lights, physicallyCorrectLights ) {
 
 		let r = 0, g = 0, b = 0;
 
@@ -17868,6 +19102,9 @@ function WebGLLights( extensions, capabilities ) {
 
 		lights.sort( shadowCastingLightsFirst );
 
+		// artist-friendly light intensity scaling factor
+		const scaleFactor = ( physicallyCorrectLights !== true ) ? Math.PI : 1;
+
 		for ( let i = 0, l = lights.length; i < l; i ++ ) {
 
 			const light = lights[ i ];
@@ -17880,9 +19117,9 @@ function WebGLLights( extensions, capabilities ) {
 
 			if ( light.isAmbientLight ) {
 
-				r += color.r * intensity;
-				g += color.g * intensity;
-				b += color.b * intensity;
+				r += color.r * intensity * scaleFactor;
+				g += color.g * intensity * scaleFactor;
+				b += color.b * intensity * scaleFactor;
 
 			} else if ( light.isLightProbe ) {
 
@@ -17896,7 +19133,7 @@ function WebGLLights( extensions, capabilities ) {
 
 				const uniforms = cache.get( light );
 
-				uniforms.color.copy( light.color ).multiplyScalar( light.intensity );
+				uniforms.color.copy( light.color ).multiplyScalar( light.intensity * scaleFactor );
 
 				if ( light.castShadow ) {
 
@@ -17927,7 +19164,7 @@ function WebGLLights( extensions, capabilities ) {
 
 				uniforms.position.setFromMatrixPosition( light.matrixWorld );
 
-				uniforms.color.copy( color ).multiplyScalar( intensity );
+				uniforms.color.copy( color ).multiplyScalar( intensity * scaleFactor );
 				uniforms.distance = distance;
 
 				uniforms.coneCos = Math.cos( light.angle );
@@ -17978,7 +19215,7 @@ function WebGLLights( extensions, capabilities ) {
 
 				const uniforms = cache.get( light );
 
-				uniforms.color.copy( light.color ).multiplyScalar( light.intensity );
+				uniforms.color.copy( light.color ).multiplyScalar( light.intensity * scaleFactor );
 				uniforms.distance = light.distance;
 				uniforms.decay = light.decay;
 
@@ -18011,8 +19248,8 @@ function WebGLLights( extensions, capabilities ) {
 
 				const uniforms = cache.get( light );
 
-				uniforms.skyColor.copy( light.color ).multiplyScalar( intensity );
-				uniforms.groundColor.copy( light.groundColor ).multiplyScalar( intensity );
+				uniforms.skyColor.copy( light.color ).multiplyScalar( intensity * scaleFactor );
+				uniforms.groundColor.copy( light.groundColor ).multiplyScalar( intensity * scaleFactor );
 
 				state.hemi[ hemiLength ] = uniforms;
 
@@ -18221,9 +19458,9 @@ function WebGLRenderState( extensions, capabilities ) {
 
 	}
 
-	function setupLights() {
+	function setupLights( physicallyCorrectLights ) {
 
-		lights.setup( lightsArray );
+		lights.setup( lightsArray, physicallyCorrectLights );
 
 	}
 
@@ -18325,9 +19562,6 @@ class MeshDepthMaterial extends Material {
 
 		this.depthPacking = BasicDepthPacking;
 
-		this.skinning = false;
-		this.morphTargets = false;
-
 		this.map = null;
 
 		this.alphaMap = null;
@@ -18350,9 +19584,6 @@ class MeshDepthMaterial extends Material {
 		super.copy( source );
 
 		this.depthPacking = source.depthPacking;
-
-		this.skinning = source.skinning;
-		this.morphTargets = source.morphTargets;
 
 		this.map = source.map;
 
@@ -18380,9 +19611,6 @@ MeshDepthMaterial.prototype.isMeshDepthMaterial = true;
  *  nearDistance: <float>,
  *  farDistance: <float>,
  *
- *  skinning: <bool>,
- *  morphTargets: <bool>,
- *
  *  map: new THREE.Texture( <Image> ),
  *
  *  alphaMap: new THREE.Texture( <Image> ),
@@ -18406,9 +19634,6 @@ class MeshDistanceMaterial extends Material {
 		this.nearDistance = 1;
 		this.farDistance = 1000;
 
-		this.skinning = false;
-		this.morphTargets = false;
-
 		this.map = null;
 
 		this.alphaMap = null;
@@ -18431,9 +19656,6 @@ class MeshDistanceMaterial extends Material {
 		this.nearDistance = source.nearDistance;
 		this.farDistance = source.farDistance;
 
-		this.skinning = source.skinning;
-		this.morphTargets = source.morphTargets;
-
 		this.map = source.map;
 
 		this.alphaMap = source.alphaMap;
@@ -18450,7 +19672,7 @@ class MeshDistanceMaterial extends Material {
 
 MeshDistanceMaterial.prototype.isMeshDistanceMaterial = true;
 
-var vsm_frag = "uniform sampler2D shadow_pass;\nuniform vec2 resolution;\nuniform float radius;\n#include <packing>\nvoid main() {\n\tfloat mean = 0.0;\n\tfloat squared_mean = 0.0;\n\tfloat depth = unpackRGBAToDepth( texture2D( shadow_pass, ( gl_FragCoord.xy ) / resolution ) );\n\tfor ( float i = -1.0; i < 1.0 ; i += SAMPLE_RATE) {\n\t\t#ifdef HORIZONTAL_PASS\n\t\t\tvec2 distribution = unpackRGBATo2Half( texture2D( shadow_pass, ( gl_FragCoord.xy + vec2( i, 0.0 ) * radius ) / resolution ) );\n\t\t\tmean += distribution.x;\n\t\t\tsquared_mean += distribution.y * distribution.y + distribution.x * distribution.x;\n\t\t#else\n\t\t\tfloat depth = unpackRGBAToDepth( texture2D( shadow_pass, ( gl_FragCoord.xy + vec2( 0.0, i ) * radius ) / resolution ) );\n\t\t\tmean += depth;\n\t\t\tsquared_mean += depth * depth;\n\t\t#endif\n\t}\n\tmean = mean * HALF_SAMPLE_RATE;\n\tsquared_mean = squared_mean * HALF_SAMPLE_RATE;\n\tfloat std_dev = sqrt( squared_mean - mean * mean );\n\tgl_FragColor = pack2HalfToRGBA( vec2( mean, std_dev ) );\n}";
+var vsm_frag = "uniform sampler2D shadow_pass;\nuniform vec2 resolution;\nuniform float radius;\nuniform float samples;\n#include <packing>\nvoid main() {\n\tfloat mean = 0.0;\n\tfloat squared_mean = 0.0;\n\tfloat uvStride = samples <= 1.0 ? 0.0 : 2.0 / ( samples - 1.0 );\n\tfloat uvStart = samples <= 1.0 ? 0.0 : - 1.0;\n\tfor ( float i = 0.0; i < samples; i ++ ) {\n\t\tfloat uvOffset = uvStart + i * uvStride;\n\t\t#ifdef HORIZONTAL_PASS\n\t\t\tvec2 distribution = unpackRGBATo2Half( texture2D( shadow_pass, ( gl_FragCoord.xy + vec2( uvOffset, 0.0 ) * radius ) / resolution ) );\n\t\t\tmean += distribution.x;\n\t\t\tsquared_mean += distribution.y * distribution.y + distribution.x * distribution.x;\n\t\t#else\n\t\t\tfloat depth = unpackRGBAToDepth( texture2D( shadow_pass, ( gl_FragCoord.xy + vec2( 0.0, uvOffset ) * radius ) / resolution ) );\n\t\t\tmean += depth;\n\t\t\tsquared_mean += depth * depth;\n\t\t#endif\n\t}\n\tmean = mean / samples;\n\tsquared_mean = squared_mean / samples;\n\tfloat std_dev = sqrt( squared_mean - mean * mean );\n\tgl_FragColor = pack2HalfToRGBA( vec2( mean, std_dev ) );\n}";
 
 var vsm_vert = "void main() {\n\tgl_Position = vec4( position, 1.0 );\n}";
 
@@ -18463,8 +19685,8 @@ function WebGLShadowMap( _renderer, _objects, _capabilities ) {
 
 		_viewport = new Vector4(),
 
-		_depthMaterials = [],
-		_distanceMaterials = [],
+		_depthMaterial = new MeshDepthMaterial( { depthPacking: RGBADepthPacking } ),
+		_distanceMaterial = new MeshDistanceMaterial(),
 
 		_materialCache = {},
 
@@ -18474,15 +19696,11 @@ function WebGLShadowMap( _renderer, _objects, _capabilities ) {
 
 	const shadowMaterialVertical = new ShaderMaterial( {
 
-		defines: {
-			SAMPLE_RATE: 2.0 / 8.0,
-			HALF_SAMPLE_RATE: 1.0 / 8.0
-		},
-
 		uniforms: {
 			shadow_pass: { value: null },
 			resolution: { value: new Vector2() },
-			radius: { value: 4.0 }
+			radius: { value: 4.0 },
+			samples: { value: 8.0 }
 		},
 
 		vertexShader: vsm_vert,
@@ -18654,6 +19872,7 @@ function WebGLShadowMap( _renderer, _objects, _capabilities ) {
 		shadowMaterialVertical.uniforms.shadow_pass.value = shadow.map.texture;
 		shadowMaterialVertical.uniforms.resolution.value = shadow.mapSize;
 		shadowMaterialVertical.uniforms.radius.value = shadow.radius;
+		shadowMaterialVertical.uniforms.samples.value = shadow.blurSamples;
 		_renderer.setRenderTarget( shadow.mapPass );
 		_renderer.clear();
 		_renderer.renderBufferDirect( camera, null, geometry, shadowMaterialVertical, fullScreenMesh, null );
@@ -18663,57 +19882,10 @@ function WebGLShadowMap( _renderer, _objects, _capabilities ) {
 		shadowMaterialHorizontal.uniforms.shadow_pass.value = shadow.mapPass.texture;
 		shadowMaterialHorizontal.uniforms.resolution.value = shadow.mapSize;
 		shadowMaterialHorizontal.uniforms.radius.value = shadow.radius;
+		shadowMaterialHorizontal.uniforms.samples.value = shadow.blurSamples;
 		_renderer.setRenderTarget( shadow.map );
 		_renderer.clear();
 		_renderer.renderBufferDirect( camera, null, geometry, shadowMaterialHorizontal, fullScreenMesh, null );
-
-	}
-
-	function getDepthMaterialVariant( useMorphing, useSkinning, useInstancing ) {
-
-		const index = useMorphing << 0 | useSkinning << 1 | useInstancing << 2;
-
-		let material = _depthMaterials[ index ];
-
-		if ( material === undefined ) {
-
-			material = new MeshDepthMaterial( {
-
-				depthPacking: RGBADepthPacking,
-
-				morphTargets: useMorphing,
-				skinning: useSkinning
-
-			} );
-
-			_depthMaterials[ index ] = material;
-
-		}
-
-		return material;
-
-	}
-
-	function getDistanceMaterialVariant( useMorphing, useSkinning, useInstancing ) {
-
-		const index = useMorphing << 0 | useSkinning << 1 | useInstancing << 2;
-
-		let material = _distanceMaterials[ index ];
-
-		if ( material === undefined ) {
-
-			material = new MeshDistanceMaterial( {
-
-				morphTargets: useMorphing,
-				skinning: useSkinning
-
-			} );
-
-			_distanceMaterials[ index ] = material;
-
-		}
-
-		return material;
 
 	}
 
@@ -18721,55 +19893,21 @@ function WebGLShadowMap( _renderer, _objects, _capabilities ) {
 
 		let result = null;
 
-		let getMaterialVariant = getDepthMaterialVariant;
-		let customMaterial = object.customDepthMaterial;
+		const customMaterial = ( light.isPointLight === true ) ? object.customDistanceMaterial : object.customDepthMaterial;
 
-		if ( light.isPointLight === true ) {
-
-			getMaterialVariant = getDistanceMaterialVariant;
-			customMaterial = object.customDistanceMaterial;
-
-		}
-
-		if ( customMaterial === undefined ) {
-
-			let useMorphing = false;
-
-			if ( material.morphTargets === true ) {
-
-				useMorphing = geometry.morphAttributes && geometry.morphAttributes.position && geometry.morphAttributes.position.length > 0;
-
-			}
-
-			let useSkinning = false;
-
-			if ( object.isSkinnedMesh === true ) {
-
-				if ( material.skinning === true ) {
-
-					useSkinning = true;
-
-				} else {
-
-					console.warn( 'THREE.WebGLShadowMap: THREE.SkinnedMesh with material.skinning set to false:', object );
-
-				}
-
-			}
-
-			const useInstancing = object.isInstancedMesh === true;
-
-			result = getMaterialVariant( useMorphing, useSkinning, useInstancing );
-
-		} else {
+		if ( customMaterial !== undefined ) {
 
 			result = customMaterial;
 
+		} else {
+
+			result = ( light.isPointLight === true ) ? _distanceMaterial : _depthMaterial;
+
 		}
 
-		if ( _renderer.localClippingEnabled &&
-				material.clipShadows === true &&
-				material.clippingPlanes.length !== 0 ) {
+		if ( ( _renderer.localClippingEnabled && material.clipShadows === true && material.clippingPlanes.length !== 0 ) ||
+			( material.displacementMap && material.displacementScale !== 0 ) ||
+			( material.alphaMap && material.alphaTest > 0 ) ) {
 
 			// in this case we need a unique material instance reflecting the
 			// appropriate state
@@ -18811,9 +19949,16 @@ function WebGLShadowMap( _renderer, _objects, _capabilities ) {
 
 		}
 
+		result.alphaMap = material.alphaMap;
+		result.alphaTest = material.alphaTest;
+
 		result.clipShadows = material.clipShadows;
 		result.clippingPlanes = material.clippingPlanes;
 		result.clipIntersection = material.clipIntersection;
+
+		result.displacementMap = material.displacementMap;
+		result.displacementScale = material.displacementScale;
+		result.displacementBias = material.displacementBias;
 
 		result.wireframeLinewidth = material.wireframeLinewidth;
 		result.linewidth = material.linewidth;
@@ -19247,8 +20392,11 @@ function WebGLState( gl, extensions, capabilities ) {
 	let currentTextureSlot = null;
 	let currentBoundTextures = {};
 
-	const currentScissor = new Vector4( 0, 0, gl.canvas.width, gl.canvas.height );
-	const currentViewport = new Vector4( 0, 0, gl.canvas.width, gl.canvas.height );
+	const scissorParam = gl.getParameter( 3088 );
+	const viewportParam = gl.getParameter( 2978 );
+
+	const currentScissor = new Vector4().fromArray( scissorParam );
+	const currentViewport = new Vector4().fromArray( viewportParam );
 
 	function createTexture( type, target, count ) {
 
@@ -19352,7 +20500,11 @@ function WebGLState( gl, extensions, capabilities ) {
 
 			}
 
+			return true;
+
 		}
+
+		return false;
 
 	}
 
@@ -20067,13 +21219,13 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 	}
 
-	function generateMipmap( target, texture, width, height ) {
+	function generateMipmap( target, texture, width, height, depth = 1 ) {
 
 		_gl.generateMipmap( target );
 
 		const textureProperties = properties.get( texture );
 
-		textureProperties.__maxMipLevel = Math.log2( Math.max( width, height ) );
+		textureProperties.__maxMipLevel = Math.log2( Math.max( width, height, depth ) );
 
 	}
 
@@ -20168,8 +21320,6 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 		deallocateRenderTarget( renderTarget );
 
-		info.memory.textures --;
-
 	}
 
 	//
@@ -20199,6 +21349,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			_gl.deleteTexture( textureProperties.__webglTexture );
 
+			info.memory.textures --;
+
 		}
 
 		if ( renderTarget.depthTexture ) {
@@ -20223,6 +21375,26 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 			if ( renderTargetProperties.__webglMultisampledFramebuffer ) _gl.deleteFramebuffer( renderTargetProperties.__webglMultisampledFramebuffer );
 			if ( renderTargetProperties.__webglColorRenderbuffer ) _gl.deleteRenderbuffer( renderTargetProperties.__webglColorRenderbuffer );
 			if ( renderTargetProperties.__webglDepthRenderbuffer ) _gl.deleteRenderbuffer( renderTargetProperties.__webglDepthRenderbuffer );
+
+		}
+
+		if ( renderTarget.isWebGLMultipleRenderTargets ) {
+
+			for ( let i = 0, il = texture.length; i < il; i ++ ) {
+
+				const attachmentProperties = properties.get( texture[ i ] );
+
+				if ( attachmentProperties.__webglTexture ) {
+
+					_gl.deleteTexture( attachmentProperties.__webglTexture );
+
+					info.memory.textures --;
+
+				}
+
+				properties.remove( texture[ i ] );
+
+			}
 
 		}
 
@@ -20778,9 +21950,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 	// Render targets
 
 	// Setup storage for target texture and bind it to correct framebuffer
-	function setupFrameBufferTexture( framebuffer, renderTarget, attachment, textureTarget ) {
-
-		const texture = renderTarget.texture;
+	function setupFrameBufferTexture( framebuffer, renderTarget, texture, attachment, textureTarget ) {
 
 		const glFormat = utils.convert( texture.format );
 		const glType = utils.convert( texture.type );
@@ -20860,7 +22030,8 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 		} else {
 
-			const texture = renderTarget.texture;
+			// Use the first texture for MRT so far
+			const texture = renderTarget.isWebGLMultipleRenderTargets === true ? renderTarget.texture[ 0 ] : renderTarget.texture;
 
 			const glFormat = utils.convert( texture.format );
 			const glType = utils.convert( texture.type );
@@ -20980,12 +22151,16 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 		renderTarget.addEventListener( 'dispose', onRenderTargetDispose );
 
-		textureProperties.__webglTexture = _gl.createTexture();
-		textureProperties.__version = texture.version;
+		if ( renderTarget.isWebGLMultipleRenderTargets !== true ) {
 
-		info.memory.textures ++;
+			textureProperties.__webglTexture = _gl.createTexture();
+			textureProperties.__version = texture.version;
+			info.memory.textures ++;
+
+		}
 
 		const isCube = ( renderTarget.isWebGLCubeRenderTarget === true );
+		const isMultipleRenderTargets = ( renderTarget.isWebGLMultipleRenderTargets === true );
 		const isMultisample = ( renderTarget.isWebGLMultisampleRenderTarget === true );
 		const isRenderTarget3D = texture.isDataTexture3D || texture.isDataTexture2DArray;
 		const supportsMips = isPowerOfTwo$1( renderTarget ) || isWebGL2;
@@ -21016,7 +22191,33 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			renderTargetProperties.__webglFramebuffer = _gl.createFramebuffer();
 
-			if ( isMultisample ) {
+			if ( isMultipleRenderTargets ) {
+
+				if ( capabilities.drawBuffers ) {
+
+					const textures = renderTarget.texture;
+
+					for ( let i = 0, il = textures.length; i < il; i ++ ) {
+
+						const attachmentProperties = properties.get( textures[ i ] );
+
+						if ( attachmentProperties.__webglTexture === undefined ) {
+
+							attachmentProperties.__webglTexture = _gl.createTexture();
+
+							info.memory.textures ++;
+
+						}
+
+					}
+
+				} else {
+
+					console.warn( 'THREE.WebGLRenderer: WebGLMultipleRenderTargets can only be used with WebGL2 or WEBGL_draw_buffers extension.' );
+
+				}
+
+			} else if ( isMultisample ) {
 
 				if ( isWebGL2 ) {
 
@@ -21064,7 +22265,7 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			for ( let i = 0; i < 6; i ++ ) {
 
-				setupFrameBufferTexture( renderTargetProperties.__webglFramebuffer[ i ], renderTarget, 36064, 34069 + i );
+				setupFrameBufferTexture( renderTargetProperties.__webglFramebuffer[ i ], renderTarget, texture, 36064, 34069 + i );
 
 			}
 
@@ -21074,7 +22275,30 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			}
 
-			state.bindTexture( 34067, null );
+			state.unbindTexture();
+
+		} else if ( isMultipleRenderTargets ) {
+
+			const textures = renderTarget.texture;
+
+			for ( let i = 0, il = textures.length; i < il; i ++ ) {
+
+				const attachment = textures[ i ];
+				const attachmentProperties = properties.get( attachment );
+
+				state.bindTexture( 3553, attachmentProperties.__webglTexture );
+				setTextureParameters( 3553, attachment, supportsMips );
+				setupFrameBufferTexture( renderTargetProperties.__webglFramebuffer, renderTarget, attachment, 36064 + i, 3553 );
+
+				if ( textureNeedsGenerateMipmaps( attachment, supportsMips ) ) {
+
+					generateMipmap( 3553, attachment, renderTarget.width, renderTarget.height );
+
+				}
+
+			}
+
+			state.unbindTexture();
 
 		} else {
 
@@ -21099,15 +22323,15 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 			state.bindTexture( glTextureType, textureProperties.__webglTexture );
 			setTextureParameters( glTextureType, texture, supportsMips );
-			setupFrameBufferTexture( renderTargetProperties.__webglFramebuffer, renderTarget, 36064, glTextureType );
+			setupFrameBufferTexture( renderTargetProperties.__webglFramebuffer, renderTarget, texture, 36064, glTextureType );
 
 			if ( textureNeedsGenerateMipmaps( texture, supportsMips ) ) {
 
-				generateMipmap( 3553, texture, renderTarget.width, renderTarget.height );
+				generateMipmap( glTextureType, texture, renderTarget.width, renderTarget.height, renderTarget.depth );
 
 			}
 
-			state.bindTexture( 3553, null );
+			state.unbindTexture();
 
 		}
 
@@ -21123,18 +22347,24 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 	function updateRenderTargetMipmap( renderTarget ) {
 
-		const texture = renderTarget.texture;
-
 		const supportsMips = isPowerOfTwo$1( renderTarget ) || isWebGL2;
 
-		if ( textureNeedsGenerateMipmaps( texture, supportsMips ) ) {
+		const textures = renderTarget.isWebGLMultipleRenderTargets === true ? renderTarget.texture : [ renderTarget.texture ];
 
-			const target = renderTarget.isWebGLCubeRenderTarget ? 34067 : 3553;
-			const webglTexture = properties.get( texture ).__webglTexture;
+		for ( let i = 0, il = textures.length; i < il; i ++ ) {
 
-			state.bindTexture( target, webglTexture );
-			generateMipmap( target, texture, renderTarget.width, renderTarget.height );
-			state.bindTexture( target, null );
+			const texture = textures[ i ];
+
+			if ( textureNeedsGenerateMipmaps( texture, supportsMips ) ) {
+
+				const target = renderTarget.isWebGLCubeRenderTarget ? 34067 : 3553;
+				const webglTexture = properties.get( texture ).__webglTexture;
+
+				state.bindTexture( target, webglTexture );
+				generateMipmap( target, texture, renderTarget.width, renderTarget.height );
+				state.unbindTexture();
+
+			}
 
 		}
 
@@ -21782,13 +23012,23 @@ class WebXRManager extends EventDispatcher {
 		const state = renderer.state;
 
 		let session = null;
-
 		let framebufferScaleFactor = 1.0;
 
 		let referenceSpace = null;
 		let referenceSpaceType = 'local-floor';
 
 		let pose = null;
+		let glBinding = null;
+		let glFramebuffer = null;
+		let glProjLayer = null;
+		let glBaseLayer = null;
+		let isMultisample = false;
+		let glMultisampledFramebuffer = null;
+		let glColorRenderbuffer = null;
+		let glDepthRenderbuffer = null;
+		let xrFrame = null;
+		let depthStyle = null;
+		let clearStyle = null;
 
 		const controllers = [];
 		const inputSourcesMap = new Map();
@@ -21814,6 +23054,7 @@ class WebXRManager extends EventDispatcher {
 
 		//
 
+		this.cameraAutoUpdate = true;
 		this.enabled = false;
 
 		this.isPresenting = false;
@@ -21895,6 +23136,19 @@ class WebXRManager extends EventDispatcher {
 			state.bindXRFramebuffer( null );
 			renderer.setRenderTarget( renderer.getRenderTarget() );
 
+			if ( glFramebuffer ) gl.deleteFramebuffer( glFramebuffer );
+			if ( glMultisampledFramebuffer ) gl.deleteFramebuffer( glMultisampledFramebuffer );
+			if ( glColorRenderbuffer ) gl.deleteRenderbuffer( glColorRenderbuffer );
+			if ( glDepthRenderbuffer ) gl.deleteRenderbuffer( glDepthRenderbuffer );
+			glFramebuffer = null;
+			glMultisampledFramebuffer = null;
+			glColorRenderbuffer = null;
+			glDepthRenderbuffer = null;
+			glBaseLayer = null;
+			glProjLayer = null;
+			glBinding = null;
+			session = null;
+
 			//
 
 			animation.stop();
@@ -21935,6 +23189,24 @@ class WebXRManager extends EventDispatcher {
 
 		};
 
+		this.getBaseLayer = function () {
+
+			return glProjLayer !== null ? glProjLayer : glBaseLayer;
+
+		};
+
+		this.getBinding = function () {
+
+			return glBinding;
+
+		};
+
+		this.getFrame = function () {
+
+			return xrFrame;
+
+		};
+
 		this.getSession = function () {
 
 			return session;
@@ -21964,18 +23236,98 @@ class WebXRManager extends EventDispatcher {
 
 				}
 
-				const layerInit = {
-					antialias: attributes.antialias,
-					alpha: attributes.alpha,
-					depth: attributes.depth,
-					stencil: attributes.stencil,
-					framebufferScaleFactor: framebufferScaleFactor
-				};
+				if ( session.renderState.layers === undefined ) {
 
-				// eslint-disable-next-line no-undef
-				const baseLayer = new XRWebGLLayer( session, gl, layerInit );
+					const layerInit = {
+						antialias: attributes.antialias,
+						alpha: attributes.alpha,
+						depth: attributes.depth,
+						stencil: attributes.stencil,
+						framebufferScaleFactor: framebufferScaleFactor
+					};
 
-				session.updateRenderState( { baseLayer: baseLayer } );
+					glBaseLayer = new XRWebGLLayer( session, gl, layerInit );
+
+					session.updateRenderState( { baseLayer: glBaseLayer } );
+
+				} else if ( gl instanceof WebGLRenderingContext ) {
+
+					// Use old style webgl layer because we can't use MSAA
+					// WebGL2 support.
+
+					const layerInit = {
+						antialias: true,
+						alpha: attributes.alpha,
+						depth: attributes.depth,
+						stencil: attributes.stencil,
+						framebufferScaleFactor: framebufferScaleFactor
+					};
+
+					glBaseLayer = new XRWebGLLayer( session, gl, layerInit );
+
+					session.updateRenderState( { layers: [ glBaseLayer ] } );
+
+				} else {
+
+					isMultisample = attributes.antialias;
+					let depthFormat = null;
+
+
+					if ( attributes.depth ) {
+
+						clearStyle = 256;
+
+						if ( attributes.stencil ) clearStyle |= 1024;
+
+						depthStyle = attributes.stencil ? 33306 : 36096;
+						depthFormat = attributes.stencil ? 35056 : 33190;
+
+					}
+
+					const projectionlayerInit = {
+						colorFormat: attributes.alpha ? 32856 : 32849,
+						depthFormat: depthFormat,
+						scaleFactor: framebufferScaleFactor
+					};
+
+					glBinding = new XRWebGLBinding( session, gl );
+
+					glProjLayer = glBinding.createProjectionLayer( projectionlayerInit );
+
+					glFramebuffer = gl.createFramebuffer();
+
+					session.updateRenderState( { layers: [ glProjLayer ] } );
+
+					if ( isMultisample ) {
+
+						glMultisampledFramebuffer = gl.createFramebuffer();
+						glColorRenderbuffer = gl.createRenderbuffer();
+						gl.bindRenderbuffer( 36161, glColorRenderbuffer );
+						gl.renderbufferStorageMultisample(
+							36161,
+							4,
+							32856,
+							glProjLayer.textureWidth,
+							glProjLayer.textureHeight );
+						state.bindFramebuffer( 36160, glMultisampledFramebuffer );
+						gl.framebufferRenderbuffer( 36160, 36064, 36161, glColorRenderbuffer );
+						gl.bindRenderbuffer( 36161, null );
+
+						if ( depthFormat !== null ) {
+
+							glDepthRenderbuffer = gl.createRenderbuffer();
+							gl.bindRenderbuffer( 36161, glDepthRenderbuffer );
+							gl.renderbufferStorageMultisample( 36161, 4, depthFormat, glProjLayer.textureWidth, glProjLayer.textureHeight );
+							gl.framebufferRenderbuffer( 36160, depthStyle, 36161, glDepthRenderbuffer );
+							gl.bindRenderbuffer( 36161, null );
+
+						}
+
+						state.bindFramebuffer( 36160, null );
+
+					}
+
+				}
 
 				referenceSpace = await session.requestReferenceSpace( referenceSpaceType );
 
@@ -22111,7 +23463,9 @@ class WebXRManager extends EventDispatcher {
 
 		}
 
-		this.getCamera = function ( camera ) {
+		this.updateCamera = function ( camera ) {
+
+			if ( session === null ) return;
 
 			cameraVR.near = cameraR.near = cameraL.near = camera.near;
 			cameraVR.far = cameraR.far = cameraL.far = camera.far;
@@ -22141,11 +23495,15 @@ class WebXRManager extends EventDispatcher {
 
 			}
 
-			// update camera and its children
+			cameraVR.matrixWorld.decompose( cameraVR.position, cameraVR.quaternion, cameraVR.scale );
 
-			camera.matrixWorld.copy( cameraVR.matrixWorld );
+			// update user camera and its children
+
+			camera.position.copy( cameraVR.position );
+			camera.quaternion.copy( cameraVR.quaternion );
+			camera.scale.copy( cameraVR.scale );
 			camera.matrix.copy( cameraVR.matrix );
-			camera.matrix.decompose( camera.position, camera.quaternion, camera.scale );
+			camera.matrixWorld.copy( cameraVR.matrixWorld );
 
 			const children = camera.children;
 
@@ -22169,7 +23527,48 @@ class WebXRManager extends EventDispatcher {
 
 			}
 
+		};
+
+		this.getCamera = function () {
+
 			return cameraVR;
+
+		};
+
+		this.getFoveation = function () {
+
+			if ( glProjLayer !== null ) {
+
+				return glProjLayer.fixedFoveation;
+
+			}
+
+			if ( glBaseLayer !== null ) {
+
+				return glBaseLayer.fixedFoveation;
+
+			}
+
+			return undefined;
+
+		};
+
+		this.setFoveation = function ( foveation ) {
+
+			// 0 = no foveation = full resolution
+			// 1 = maximum foveation = the edges render at lower resolution
+
+			if ( glProjLayer !== null ) {
+
+				glProjLayer.fixedFoveation = foveation;
+
+			}
+
+			if ( glBaseLayer !== null && glBaseLayer.fixedFoveation !== undefined ) {
+
+				glBaseLayer.fixedFoveation = foveation;
+
+			}
 
 		};
 
@@ -22180,13 +23579,17 @@ class WebXRManager extends EventDispatcher {
 		function onAnimationFrame( time, frame ) {
 
 			pose = frame.getViewerPose( referenceSpace );
+			xrFrame = frame;
 
 			if ( pose !== null ) {
 
 				const views = pose.views;
-				const baseLayer = session.renderState.baseLayer;
 
-				state.bindXRFramebuffer( baseLayer.framebuffer );
+				if ( glBaseLayer !== null ) {
+
+					state.bindXRFramebuffer( glBaseLayer.framebuffer );
+
+				}
 
 				let cameraVRNeedsUpdate = false;
 
@@ -22195,6 +23598,7 @@ class WebXRManager extends EventDispatcher {
 				if ( views.length !== cameraVR.cameras.length ) {
 
 					cameraVR.cameras.length = 0;
+
 					cameraVRNeedsUpdate = true;
 
 				}
@@ -22202,9 +23606,33 @@ class WebXRManager extends EventDispatcher {
 				for ( let i = 0; i < views.length; i ++ ) {
 
 					const view = views[ i ];
-					const viewport = baseLayer.getViewport( view );
+
+					let viewport = null;
+
+					if ( glBaseLayer !== null ) {
+
+						viewport = glBaseLayer.getViewport( view );
+
+					} else {
+
+						const glSubImage = glBinding.getViewSubImage( glProjLayer, view );
+
+						state.bindXRFramebuffer( glFramebuffer );
+
+						if ( glSubImage.depthStencilTexture !== undefined ) {
+
+							gl.framebufferTexture2D( 36160, depthStyle, 3553, glSubImage.depthStencilTexture, 0 );
+
+						}
+
+						gl.framebufferTexture2D( 36160, 36064, 3553, glSubImage.colorTexture, 0 );
+
+						viewport = glSubImage.viewport;
+
+					}
 
 					const camera = cameras[ i ];
+
 					camera.matrix.fromArray( view.transform.matrix );
 					camera.projectionMatrix.fromArray( view.projectionMatrix );
 					camera.viewport.set( viewport.x, viewport.y, viewport.width, viewport.height );
@@ -22220,6 +23648,14 @@ class WebXRManager extends EventDispatcher {
 						cameraVR.cameras.push( camera );
 
 					}
+
+				}
+
+				if ( isMultisample ) {
+
+					state.bindXRFramebuffer( glMultisampledFramebuffer );
+
+					if ( clearStyle !== null ) gl.clear( clearStyle );
 
 				}
 
@@ -22240,9 +23676,32 @@ class WebXRManager extends EventDispatcher {
 
 			if ( onAnimationFrameCallback ) onAnimationFrameCallback( time, frame );
 
+			if ( isMultisample ) {
+
+				const width = glProjLayer.textureWidth;
+				const height = glProjLayer.textureHeight;
+
+				state.bindFramebuffer( 36008, glMultisampledFramebuffer );
+				state.bindFramebuffer( 36009, glFramebuffer );
+				// Invalidate the depth here to avoid flush of the depth data to main memory.
+				gl.invalidateFramebuffer( 36008, [ depthStyle ] );
+				gl.invalidateFramebuffer( 36009, [ depthStyle ] );
+				gl.blitFramebuffer( 0, 0, width, height, 0, 0, width, height, 16384, 9728 );
+				// Invalidate the MSAA buffer because it's not needed anymore.
+				gl.invalidateFramebuffer( 36008, [ 36064 ] );
+				state.bindFramebuffer( 36008, null );
+				state.bindFramebuffer( 36009, null );
+
+				state.bindFramebuffer( 36160, glMultisampledFramebuffer );
+
+			}
+
+			xrFrame = null;
+
 		}
 
 		const animation = new WebGLAnimation();
+
 		animation.setAnimationLoop( onAnimationFrame );
 
 		this.setAnimationLoop = function ( callback ) {
@@ -22276,7 +23735,7 @@ function WebGLMaterials( properties ) {
 
 	}
 
-	function refreshMaterialUniforms( uniforms, material, pixelRatio, height ) {
+	function refreshMaterialUniforms( uniforms, material, pixelRatio, height, transmissionRenderTarget ) {
 
 		if ( material.isMeshBasicMaterial ) {
 
@@ -22303,7 +23762,7 @@ function WebGLMaterials( properties ) {
 
 			if ( material.isMeshPhysicalMaterial ) {
 
-				refreshUniformsPhysical( uniforms, material );
+				refreshUniformsPhysical( uniforms, material, transmissionRenderTarget );
 
 			} else {
 
@@ -22396,15 +23855,22 @@ function WebGLMaterials( properties ) {
 
 		}
 
+		if ( material.alphaTest > 0 ) {
+
+			uniforms.alphaTest.value = material.alphaTest;
+
+		}
+
 		const envMap = properties.get( material ).envMap;
 
 		if ( envMap ) {
 
 			uniforms.envMap.value = envMap;
 
-			uniforms.flipEnvMap.value = ( envMap.isCubeTexture && envMap._needsFlipEnvMap ) ? - 1 : 1;
+			uniforms.flipEnvMap.value = ( envMap.isCubeTexture && envMap.isRenderTargetTexture === false ) ? - 1 : 1;
 
 			uniforms.reflectivity.value = material.reflectivity;
+			uniforms.ior.value = material.ior;
 			uniforms.refractionRatio.value = material.refractionRatio;
 
 			const maxMipLevel = properties.get( envMap ).__maxMipLevel;
@@ -22444,6 +23910,10 @@ function WebGLMaterials( properties ) {
 		// 10. clearcoat map
 		// 11. clearcoat normal map
 		// 12. clearcoat roughnessMap map
+		// 13. specular intensity map
+		// 14. specular tint map
+		// 15. transmission map
+		// 16. thickness map
 
 		let uvScaleMap;
 
@@ -22494,6 +23964,22 @@ function WebGLMaterials( properties ) {
 		} else if ( material.clearcoatRoughnessMap ) {
 
 			uvScaleMap = material.clearcoatRoughnessMap;
+
+		} else if ( material.specularIntensityMap ) {
+
+			uvScaleMap = material.specularIntensityMap;
+
+		} else if ( material.specularTintMap ) {
+
+			uvScaleMap = material.specularTintMap;
+
+		} else if ( material.transmissionMap ) {
+
+			uvScaleMap = material.transmissionMap;
+
+		} else if ( material.thicknessMap ) {
+
+			uvScaleMap = material.thicknessMap;
 
 		}
 
@@ -22587,6 +24073,12 @@ function WebGLMaterials( properties ) {
 
 		}
 
+		if ( material.alphaTest > 0 ) {
+
+			uniforms.alphaTest.value = material.alphaTest;
+
+		}
+
 		// uv repeat and offset setting priorities
 		// 1. color map
 		// 2. alpha map
@@ -22632,6 +24124,12 @@ function WebGLMaterials( properties ) {
 		if ( material.alphaMap ) {
 
 			uniforms.alphaMap.value = material.alphaMap;
+
+		}
+
+		if ( material.alphaTest > 0 ) {
+
+			uniforms.alphaTest.value = material.alphaTest;
 
 		}
 
@@ -22810,46 +24308,83 @@ function WebGLMaterials( properties ) {
 
 	}
 
-	function refreshUniformsPhysical( uniforms, material ) {
+	function refreshUniformsPhysical( uniforms, material, transmissionRenderTarget ) {
 
 		refreshUniformsStandard( uniforms, material );
 
-		uniforms.reflectivity.value = material.reflectivity; // also part of uniforms common
+		uniforms.ior.value = material.ior; // also part of uniforms common
 
-		uniforms.clearcoat.value = material.clearcoat;
-		uniforms.clearcoatRoughness.value = material.clearcoatRoughness;
-		if ( material.sheen ) uniforms.sheen.value.copy( material.sheen );
+		if ( material.sheenTint ) uniforms.sheenTint.value.copy( material.sheenTint );
 
-		if ( material.clearcoatMap ) {
+		if ( material.clearcoat > 0 ) {
 
-			uniforms.clearcoatMap.value = material.clearcoatMap;
+			uniforms.clearcoat.value = material.clearcoat;
+			uniforms.clearcoatRoughness.value = material.clearcoatRoughness;
 
-		}
+			if ( material.clearcoatMap ) {
 
-		if ( material.clearcoatRoughnessMap ) {
+				uniforms.clearcoatMap.value = material.clearcoatMap;
 
-			uniforms.clearcoatRoughnessMap.value = material.clearcoatRoughnessMap;
+			}
 
-		}
+			if ( material.clearcoatRoughnessMap ) {
 
-		if ( material.clearcoatNormalMap ) {
+				uniforms.clearcoatRoughnessMap.value = material.clearcoatRoughnessMap;
 
-			uniforms.clearcoatNormalScale.value.copy( material.clearcoatNormalScale );
-			uniforms.clearcoatNormalMap.value = material.clearcoatNormalMap;
+			}
 
-			if ( material.side === BackSide ) {
+			if ( material.clearcoatNormalMap ) {
 
-				uniforms.clearcoatNormalScale.value.negate();
+				uniforms.clearcoatNormalScale.value.copy( material.clearcoatNormalScale );
+				uniforms.clearcoatNormalMap.value = material.clearcoatNormalMap;
+
+				if ( material.side === BackSide ) {
+
+					uniforms.clearcoatNormalScale.value.negate();
+
+				}
 
 			}
 
 		}
 
-		uniforms.transmission.value = material.transmission;
+		if ( material.transmission > 0 ) {
 
-		if ( material.transmissionMap ) {
+			uniforms.transmission.value = material.transmission;
+			uniforms.transmissionSamplerMap.value = transmissionRenderTarget.texture;
+			uniforms.transmissionSamplerSize.value.set( transmissionRenderTarget.width, transmissionRenderTarget.height );
 
-			uniforms.transmissionMap.value = material.transmissionMap;
+			if ( material.transmissionMap ) {
+
+				uniforms.transmissionMap.value = material.transmissionMap;
+
+			}
+
+			uniforms.thickness.value = material.thickness;
+
+			if ( material.thicknessMap ) {
+
+				uniforms.thicknessMap.value = material.thicknessMap;
+
+			}
+
+			uniforms.attenuationDistance.value = material.attenuationDistance;
+			uniforms.attenuationTint.value.copy( material.attenuationTint );
+
+		}
+
+		uniforms.specularIntensity.value = material.specularIntensity;
+		uniforms.specularTint.value.copy( material.specularTint );
+
+		if ( material.specularIntensityMap ) {
+
+			uniforms.specularIntensityMap.value = material.specularIntensityMap;
+
+		}
+
+		if ( material.specularTintMap ) {
+
+			uniforms.specularTintMap.value = material.specularTintMap;
 
 		}
 
@@ -22960,9 +24495,7 @@ function createCanvasElement() {
 
 }
 
-function WebGLRenderer( parameters ) {
-
-	parameters = parameters || {};
+function WebGLRenderer( parameters = {} ) {
 
 	const _canvas = parameters.canvas !== undefined ? parameters.canvas : createCanvasElement(),
 		_context = parameters.context !== undefined ? parameters.context : null,
@@ -23061,6 +24594,10 @@ function WebGLRenderer( parameters ) {
 	const _scissor = new Vector4( 0, 0, _width, _height );
 	let _scissorTest = false;
 
+	//
+
+	const _currentDrawBuffers = [];
+
 	// frustum
 
 	const _frustum = new Frustum();
@@ -23069,6 +24606,10 @@ function WebGLRenderer( parameters ) {
 
 	let _clippingEnabled = false;
 	let _localClippingEnabled = false;
+
+	// transmission
+
+	let _transmissionRenderTarget = null;
 
 	// camera matrices cache
 
@@ -23168,7 +24709,7 @@ function WebGLRenderer( parameters ) {
 	}
 
 	let extensions, capabilities, state, info;
-	let properties, textures, cubemaps, attributes, geometries, objects;
+	let properties, textures, cubemaps, cubeuvmaps, attributes, geometries, objects;
 	let programCache, materials, renderLists, renderStates, clipping, shadowMap;
 
 	let background, morphtargets, bufferRenderer, indexedBufferRenderer;
@@ -23187,17 +24728,20 @@ function WebGLRenderer( parameters ) {
 
 		state = new WebGLState( _gl, extensions, capabilities );
 
+		_currentDrawBuffers[ 0 ] = 1029;
+
 		info = new WebGLInfo( _gl );
 		properties = new WebGLProperties();
 		textures = new WebGLTextures( _gl, extensions, state, properties, capabilities, utils, info );
 		cubemaps = new WebGLCubeMaps( _this );
+		cubeuvmaps = new WebGLCubeUVMaps( _this );
 		attributes = new WebGLAttributes( _gl, capabilities );
 		bindingStates = new WebGLBindingStates( _gl, extensions, attributes, capabilities );
 		geometries = new WebGLGeometries( _gl, attributes, info, bindingStates );
 		objects = new WebGLObjects( _gl, geometries, attributes, info );
 		morphtargets = new WebGLMorphtargets( _gl );
 		clipping = new WebGLClipping( properties );
-		programCache = new WebGLPrograms( _this, cubemaps, extensions, capabilities, bindingStates, clipping );
+		programCache = new WebGLPrograms( _this, cubemaps, cubeuvmaps, extensions, capabilities, bindingStates, clipping );
 		materials = new WebGLMaterials( properties );
 		renderLists = new WebGLRenderLists( properties );
 		renderStates = new WebGLRenderStates( extensions, capabilities );
@@ -23273,14 +24817,6 @@ function WebGLRenderer( parameters ) {
 
 	this.getSize = function ( target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'WebGLRenderer: .getsize() now requires a Vector2 as an argument' );
-
-			target = new Vector2();
-
-		}
-
 		return target.set( _width, _height );
 
 	};
@@ -23313,14 +24849,6 @@ function WebGLRenderer( parameters ) {
 
 	this.getDrawingBufferSize = function ( target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'WebGLRenderer: .getdrawingBufferSize() now requires a Vector2 as an argument' );
-
-			target = new Vector2();
-
-		}
-
 		return target.set( _width * _pixelRatio, _height * _pixelRatio ).floor();
 
 	};
@@ -23340,14 +24868,6 @@ function WebGLRenderer( parameters ) {
 	};
 
 	this.getCurrentViewport = function ( target ) {
-
-		if ( target === undefined ) {
-
-			console.warn( 'WebGLRenderer: .getCurrentViewport() now requires a Vector4 as an argument' );
-
-			target = new Vector4();
-
-		}
 
 		return target.copy( _currentViewport );
 
@@ -23425,14 +24945,6 @@ function WebGLRenderer( parameters ) {
 
 	this.getClearColor = function ( target ) {
 
-		if ( target === undefined ) {
-
-			console.warn( 'WebGLRenderer: .getClearColor() now requires a Color as an argument' );
-
-			target = new Color();
-
-		}
-
 		return target.copy( background.getClearColor() );
 
 	};
@@ -23496,6 +25008,7 @@ function WebGLRenderer( parameters ) {
 		renderStates.dispose();
 		properties.dispose();
 		cubemaps.dispose();
+		cubeuvmaps.dispose();
 		objects.dispose();
 		bindingStates.dispose();
 
@@ -23503,6 +25016,13 @@ function WebGLRenderer( parameters ) {
 
 		xr.removeEventListener( 'sessionstart', onXRSessionStart );
 		xr.removeEventListener( 'sessionend', onXRSessionEnd );
+
+		if ( _transmissionRenderTarget ) {
+
+			_transmissionRenderTarget.dispose();
+			_transmissionRenderTarget = null;
+
+		}
 
 		animation.stop();
 
@@ -23609,8 +25129,8 @@ function WebGLRenderer( parameters ) {
 			_gl.bindBuffer( 34962, buffers.position );
 			_gl.bufferData( 34962, object.positionArray, 35048 );
 
-			bindingStates.enableAttribute( programAttributes.position );
-			_gl.vertexAttribPointer( programAttributes.position, 3, 5126, false, 0, 0 );
+			bindingStates.enableAttribute( programAttributes.position.location );
+			_gl.vertexAttribPointer( programAttributes.position.location, 3, 5126, false, 0, 0 );
 
 		}
 
@@ -23619,8 +25139,8 @@ function WebGLRenderer( parameters ) {
 			_gl.bindBuffer( 34962, buffers.normal );
 			_gl.bufferData( 34962, object.normalArray, 35048 );
 
-			bindingStates.enableAttribute( programAttributes.normal );
-			_gl.vertexAttribPointer( programAttributes.normal, 3, 5126, false, 0, 0 );
+			bindingStates.enableAttribute( programAttributes.normal.location );
+			_gl.vertexAttribPointer( programAttributes.normal.location, 3, 5126, false, 0, 0 );
 
 		}
 
@@ -23629,8 +25149,8 @@ function WebGLRenderer( parameters ) {
 			_gl.bindBuffer( 34962, buffers.uv );
 			_gl.bufferData( 34962, object.uvArray, 35048 );
 
-			bindingStates.enableAttribute( programAttributes.uv );
-			_gl.vertexAttribPointer( programAttributes.uv, 2, 5126, false, 0, 0 );
+			bindingStates.enableAttribute( programAttributes.uv.location );
+			_gl.vertexAttribPointer( programAttributes.uv.location, 2, 5126, false, 0, 0 );
 
 		}
 
@@ -23639,8 +25159,8 @@ function WebGLRenderer( parameters ) {
 			_gl.bindBuffer( 34962, buffers.color );
 			_gl.bufferData( 34962, object.colorArray, 35048 );
 
-			bindingStates.enableAttribute( programAttributes.color );
-			_gl.vertexAttribPointer( programAttributes.color, 3, 5126, false, 0, 0 );
+			bindingStates.enableAttribute( programAttributes.color.location );
+			_gl.vertexAttribPointer( programAttributes.color.location, 3, 5126, false, 0, 0 );
 
 		}
 
@@ -23690,7 +25210,7 @@ function WebGLRenderer( parameters ) {
 
 		}
 
-		if ( material.morphTargets || material.morphNormals ) {
+		if ( geometry.morphAttributes.position !== undefined || geometry.morphAttributes.normal !== undefined ) {
 
 			morphtargets.update( object, geometry, material, program );
 
@@ -23799,6 +25319,8 @@ function WebGLRenderer( parameters ) {
 		currentRenderState = renderStates.get( scene );
 		currentRenderState.init();
 
+		renderStateStack.push( currentRenderState );
+
 		scene.traverseVisible( function ( object ) {
 
 			if ( object.isLight && object.layers.test( camera.layers ) ) {
@@ -23815,7 +25337,7 @@ function WebGLRenderer( parameters ) {
 
 		} );
 
-		currentRenderState.setupLights();
+		currentRenderState.setupLights( _this.physicallyCorrectLights );
 
 		scene.traverse( function ( object ) {
 
@@ -23842,6 +25364,9 @@ function WebGLRenderer( parameters ) {
 			}
 
 		} );
+
+		renderStateStack.pop();
+		currentRenderState = null;
 
 	};
 
@@ -23888,22 +25413,6 @@ function WebGLRenderer( parameters ) {
 
 	this.render = function ( scene, camera ) {
 
-		let renderTarget, forceClear;
-
-		if ( arguments[ 2 ] !== undefined ) {
-
-			console.warn( 'THREE.WebGLRenderer.render(): the renderTarget argument has been removed. Use .setRenderTarget() instead.' );
-			renderTarget = arguments[ 2 ];
-
-		}
-
-		if ( arguments[ 3 ] !== undefined ) {
-
-			console.warn( 'THREE.WebGLRenderer.render(): the forceClear argument has been removed. Use .clear() instead.' );
-			forceClear = arguments[ 3 ];
-
-		}
-
 		if ( camera !== undefined && camera.isCamera !== true ) {
 
 			console.error( 'THREE.WebGLRenderer.render: camera is not an instance of THREE.Camera.' );
@@ -23923,12 +25432,14 @@ function WebGLRenderer( parameters ) {
 
 		if ( xr.enabled === true && xr.isPresenting === true ) {
 
-			camera = xr.getCamera( camera );
+			if ( xr.cameraAutoUpdate === true ) xr.updateCamera( camera );
+
+			camera = xr.getCamera(); // use XR camera for rendering
 
 		}
 
 		//
-		if ( scene.isScene === true ) scene.onBeforeRender( _this, scene, camera, renderTarget || _currentRenderTarget );
+		if ( scene.isScene === true ) scene.onBeforeRender( _this, scene, camera, _currentRenderTarget );
 
 		currentRenderState = renderStates.get( scene, renderStateStack.length );
 		currentRenderState.init();
@@ -23964,44 +25475,49 @@ function WebGLRenderer( parameters ) {
 
 		shadowMap.render( shadowsArray, scene, camera );
 
-		currentRenderState.setupLights();
-		currentRenderState.setupLightsView( camera );
-
 		if ( _clippingEnabled === true ) clipping.endShadows();
 
 		//
 
 		if ( this.info.autoReset === true ) this.info.reset();
 
-		if ( renderTarget !== undefined ) {
+		//
 
-			this.setRenderTarget( renderTarget );
+		background.render( currentRenderList, scene );
+
+		// render scene
+
+		currentRenderState.setupLights( _this.physicallyCorrectLights );
+
+		if ( camera.isArrayCamera ) {
+
+			const cameras = camera.cameras;
+
+			for ( let i = 0, l = cameras.length; i < l; i ++ ) {
+
+				const camera2 = cameras[ i ];
+
+				renderScene( currentRenderList, scene, camera2, camera2.viewport );
+
+			}
+
+		} else {
+
+			renderScene( currentRenderList, scene, camera );
 
 		}
 
 		//
 
-		background.render( currentRenderList, scene, camera, forceClear );
-
-		// render scene
-
-		const opaqueObjects = currentRenderList.opaque;
-		const transparentObjects = currentRenderList.transparent;
-
-		if ( opaqueObjects.length > 0 ) renderObjects( opaqueObjects, scene, camera );
-		if ( transparentObjects.length > 0 ) renderObjects( transparentObjects, scene, camera );
-
-		//
-
 		if ( _currentRenderTarget !== null ) {
-
-			// Generate mipmap if we're using any kind of mipmap filtering
-
-			textures.updateRenderTargetMipmap( _currentRenderTarget );
 
 			// resolve multisample renderbuffers to a single-sample texture if necessary
 
 			textures.updateMultisampleRenderTarget( _currentRenderTarget );
+
+			// Generate mipmap if we're using any kind of mipmap filtering
+
+			textures.updateRenderTargetMipmap( _currentRenderTarget );
 
 		}
 
@@ -24174,6 +25690,62 @@ function WebGLRenderer( parameters ) {
 
 	}
 
+	function renderScene( currentRenderList, scene, camera, viewport ) {
+
+		const opaqueObjects = currentRenderList.opaque;
+		const transmissiveObjects = currentRenderList.transmissive;
+		const transparentObjects = currentRenderList.transparent;
+
+		currentRenderState.setupLightsView( camera );
+
+		if ( transmissiveObjects.length > 0 ) renderTransmissionPass( opaqueObjects, scene, camera );
+
+		if ( viewport ) state.viewport( _currentViewport.copy( viewport ) );
+
+		if ( opaqueObjects.length > 0 ) renderObjects( opaqueObjects, scene, camera );
+		if ( transmissiveObjects.length > 0 ) renderObjects( transmissiveObjects, scene, camera );
+		if ( transparentObjects.length > 0 ) renderObjects( transparentObjects, scene, camera );
+
+	}
+
+	function renderTransmissionPass( opaqueObjects, scene, camera ) {
+
+		if ( _transmissionRenderTarget === null ) {
+
+			const needsAntialias = _antialias === true && capabilities.isWebGL2 === true;
+			const renderTargetType = needsAntialias ? WebGLMultisampleRenderTarget : WebGLRenderTarget;
+
+			_transmissionRenderTarget = new renderTargetType( 1024, 1024, {
+				generateMipmaps: true,
+				type: utils.convert( HalfFloatType ) !== null ? HalfFloatType : UnsignedByteType,
+				minFilter: LinearMipmapLinearFilter,
+				magFilter: NearestFilter,
+				wrapS: ClampToEdgeWrapping,
+				wrapT: ClampToEdgeWrapping
+			} );
+
+		}
+
+		const currentRenderTarget = _this.getRenderTarget();
+		_this.setRenderTarget( _transmissionRenderTarget );
+		_this.clear();
+
+		// Turn off the features which can affect the frag color for opaque objects pass.
+		// Otherwise they are applied twice in opaque objects pass and transmission objects pass.
+		const currentToneMapping = _this.toneMapping;
+		_this.toneMapping = NoToneMapping;
+
+		renderObjects( opaqueObjects, scene, camera );
+
+		_this.toneMapping = currentToneMapping;
+
+		textures.updateMultisampleRenderTarget( _transmissionRenderTarget );
+		textures.updateRenderTargetMipmap( _transmissionRenderTarget );
+
+		_this.setRenderTarget( currentRenderTarget );
+
+	}
+
 	function renderObjects( renderList, scene, camera ) {
 
 		const overrideMaterial = scene.isScene === true ? scene.overrideMaterial : null;
@@ -24187,27 +25759,7 @@ function WebGLRenderer( parameters ) {
 			const material = overrideMaterial === null ? renderItem.material : overrideMaterial;
 			const group = renderItem.group;
 
-			if ( camera.isArrayCamera ) {
-
-				const cameras = camera.cameras;
-
-				for ( let j = 0, jl = cameras.length; j < jl; j ++ ) {
-
-					const camera2 = cameras[ j ];
-
-					if ( object.layers.test( camera2.layers ) ) {
-
-						state.viewport( _currentViewport.copy( camera2.viewport ) );
-
-						currentRenderState.setupLightsView( camera2 );
-
-						renderObject( object, scene, camera2, geometry, material, group );
-
-					}
-
-				}
-
-			} else {
+			if ( object.layers.test( camera.layers ) ) {
 
 				renderObject( object, scene, camera, geometry, material, group );
 
@@ -24236,7 +25788,23 @@ function WebGLRenderer( parameters ) {
 
 		} else {
 
-			_this.renderBufferDirect( camera, scene, geometry, material, object, group );
+			if ( material.transparent === true && material.side === DoubleSide ) {
+
+				material.side = BackSide;
+				material.needsUpdate = true;
+				_this.renderBufferDirect( camera, scene, geometry, material, object, group );
+
+				material.side = FrontSide;
+				material.needsUpdate = true;
+				_this.renderBufferDirect( camera, scene, geometry, material, object, group );
+
+				material.side = DoubleSide;
+
+			} else {
+
+				_this.renderBufferDirect( camera, scene, geometry, material, object, group );
+
+			}
 
 		}
 
@@ -24264,7 +25832,7 @@ function WebGLRenderer( parameters ) {
 
 		materialProperties.environment = material.isMeshStandardMaterial ? scene.environment : null;
 		materialProperties.fog = scene.fog;
-		materialProperties.envMap = cubemaps.get( material.envMap || materialProperties.environment );
+		materialProperties.envMap = ( material.isMeshStandardMaterial ? cubeuvmaps : cubemaps ).get( material.envMap || materialProperties.environment );
 
 		if ( programs === undefined ) {
 
@@ -24364,9 +25932,13 @@ function WebGLRenderer( parameters ) {
 
 		materialProperties.outputEncoding = parameters.outputEncoding;
 		materialProperties.instancing = parameters.instancing;
+		materialProperties.skinning = parameters.skinning;
+		materialProperties.morphTargets = parameters.morphTargets;
+		materialProperties.morphNormals = parameters.morphNormals;
 		materialProperties.numClippingPlanes = parameters.numClippingPlanes;
 		materialProperties.numIntersection = parameters.numClipIntersection;
 		materialProperties.vertexAlphas = parameters.vertexAlphas;
+		materialProperties.vertexTangents = parameters.vertexTangents;
 
 	}
 
@@ -24379,8 +25951,11 @@ function WebGLRenderer( parameters ) {
 		const fog = scene.fog;
 		const environment = material.isMeshStandardMaterial ? scene.environment : null;
 		const encoding = ( _currentRenderTarget === null ) ? _this.outputEncoding : _currentRenderTarget.texture.encoding;
-		const envMap = cubemaps.get( material.envMap || environment );
-		const vertexAlphas = material.vertexColors === true && object.geometry && object.geometry.attributes.color && object.geometry.attributes.color.itemSize === 4;
+		const envMap = ( material.isMeshStandardMaterial ? cubeuvmaps : cubemaps ).get( material.envMap || environment );
+		const vertexAlphas = material.vertexColors === true && !! object.geometry && !! object.geometry.attributes.color && object.geometry.attributes.color.itemSize === 4;
+		const vertexTangents = !! object.geometry && !! object.geometry.attributes.tangent;
+		const morphTargets = !! object.geometry && !! object.geometry.morphAttributes.position;
+		const morphNormals = !! object.geometry && !! object.geometry.morphAttributes.normal;
 
 		const materialProperties = properties.get( material );
 		const lights = currentRenderState.state.lights;
@@ -24424,6 +25999,14 @@ function WebGLRenderer( parameters ) {
 
 				needsProgramChange = true;
 
+			} else if ( object.isSkinnedMesh && materialProperties.skinning === false ) {
+
+				needsProgramChange = true;
+
+			} else if ( ! object.isSkinnedMesh && materialProperties.skinning === true ) {
+
+				needsProgramChange = true;
+
 			} else if ( materialProperties.envMap !== envMap ) {
 
 				needsProgramChange = true;
@@ -24439,6 +26022,18 @@ function WebGLRenderer( parameters ) {
 				needsProgramChange = true;
 
 			} else if ( materialProperties.vertexAlphas !== vertexAlphas ) {
+
+				needsProgramChange = true;
+
+			} else if ( materialProperties.vertexTangents !== vertexTangents ) {
+
+				needsProgramChange = true;
+
+			} else if ( materialProperties.morphTargets !== morphTargets ) {
+
+				needsProgramChange = true;
+
+			} else if ( materialProperties.morphNormals !== morphNormals ) {
 
 				needsProgramChange = true;
 
@@ -24546,7 +26141,7 @@ function WebGLRenderer( parameters ) {
 				material.isMeshStandardMaterial ||
 				material.isShaderMaterial ||
 				material.isShadowMaterial ||
-				material.skinning ) {
+				object.isSkinnedMesh ) {
 
 				p_uniforms.setValue( _gl, 'viewMatrix', camera.matrixWorldInverse );
 
@@ -24558,7 +26153,7 @@ function WebGLRenderer( parameters ) {
 		// auto-setting of texture unit for bone texture must go before other textures
 		// otherwise textures used for skinning can take over texture units reserved for other material textures
 
-		if ( material.skinning ) {
+		if ( object.isSkinnedMesh ) {
 
 			p_uniforms.setOptional( _gl, object, 'bindMatrix' );
 			p_uniforms.setOptional( _gl, object, 'bindMatrixInverse' );
@@ -24567,34 +26162,9 @@ function WebGLRenderer( parameters ) {
 
 			if ( skeleton ) {
 
-				const bones = skeleton.bones;
-
 				if ( capabilities.floatVertexTextures ) {
 
-					if ( skeleton.boneTexture === null ) {
-
-						// layout (1 matrix = 4 pixels)
-						//      RGBA RGBA RGBA RGBA (=> column1, column2, column3, column4)
-						//  with  8x8  pixel texture max   16 bones * 4 pixels =  (8 * 8)
-						//       16x16 pixel texture max   64 bones * 4 pixels = (16 * 16)
-						//       32x32 pixel texture max  256 bones * 4 pixels = (32 * 32)
-						//       64x64 pixel texture max 1024 bones * 4 pixels = (64 * 64)
-
-
-						let size = Math.sqrt( bones.length * 4 ); // 4 pixels needed for 1 matrix
-						size = ceilPowerOfTwo( size );
-						size = Math.max( size, 4 );
-
-						const boneMatrices = new Float32Array( size * size * 4 ); // 4 floats per RGBA pixel
-						boneMatrices.set( skeleton.boneMatrices ); // copy current values
-
-						const boneTexture = new DataTexture( boneMatrices, size, size, RGBAFormat, FloatType );
-
-						skeleton.boneMatrices = boneMatrices;
-						skeleton.boneTexture = boneTexture;
-						skeleton.boneTextureSize = size;
-
-					}
+					if ( skeleton.boneTexture === null ) skeleton.computeBoneTexture();
 
 					p_uniforms.setValue( _gl, 'boneTexture', skeleton.boneTexture, textures );
 					p_uniforms.setValue( _gl, 'boneTextureSize', skeleton.boneTextureSize );
@@ -24643,7 +26213,7 @@ function WebGLRenderer( parameters ) {
 
 			}
 
-			materials.refreshMaterialUniforms( m_uniforms, material, _pixelRatio, _height );
+			materials.refreshMaterialUniforms( m_uniforms, material, _pixelRatio, _height, _transmissionRenderTarget );
 
 			WebGLUniforms.upload( _gl, materialProperties.uniformsList, m_uniforms, textures );
 
@@ -24771,7 +26341,73 @@ function WebGLRenderer( parameters ) {
 
 		}
 
-		state.bindFramebuffer( 36160, framebuffer );
+		const framebufferBound = state.bindFramebuffer( 36160, framebuffer );
+
+		if ( framebufferBound && capabilities.drawBuffers ) {
+
+			let needsUpdate = false;
+
+			if ( renderTarget ) {
+
+				if ( renderTarget.isWebGLMultipleRenderTargets ) {
+
+					const textures = renderTarget.texture;
+
+					if ( _currentDrawBuffers.length !== textures.length || _currentDrawBuffers[ 0 ] !== 36064 ) {
+
+						for ( let i = 0, il = textures.length; i < il; i ++ ) {
+
+							_currentDrawBuffers[ i ] = 36064 + i;
+
+						}
+
+						_currentDrawBuffers.length = textures.length;
+
+						needsUpdate = true;
+
+					}
+
+				} else {
+
+					if ( _currentDrawBuffers.length !== 1 || _currentDrawBuffers[ 0 ] !== 36064 ) {
+
+						_currentDrawBuffers[ 0 ] = 36064;
+						_currentDrawBuffers.length = 1;
+
+						needsUpdate = true;
+
+					}
+
+				}
+
+			} else {
+
+				if ( _currentDrawBuffers.length !== 1 || _currentDrawBuffers[ 0 ] !== 1029 ) {
+
+					_currentDrawBuffers[ 0 ] = 1029;
+					_currentDrawBuffers.length = 1;
+
+					needsUpdate = true;
+
+				}
+
+			}
+
+			if ( needsUpdate ) {
+
+				if ( capabilities.isWebGL2 ) {
+
+					_gl.drawBuffers( _currentDrawBuffers );
+
+				} else {
+
+					extensions.get( 'WEBGL_draw_buffers' ).drawBuffersWEBGL( _currentDrawBuffers );
+
+				}
+
+			}
+
+		}
 
 		state.viewport( _currentViewport );
 		state.scissor( _currentScissor );
@@ -24789,6 +26425,8 @@ function WebGLRenderer( parameters ) {
 			_gl.framebufferTextureLayer( 36160, 36064, textureProperties.__webglTexture, activeMipmapLevel || 0, layer );
 
 		}
+
+		_currentMaterialId = - 1; // reset current material to ensure correct uniform bindings
 
 	};
 
@@ -24871,7 +26509,18 @@ function WebGLRenderer( parameters ) {
 		const levelScale = Math.pow( 2, - level );
 		const width = Math.floor( texture.image.width * levelScale );
 		const height = Math.floor( texture.image.height * levelScale );
-		const glFormat = utils.convert( texture.format );
+
+		let glFormat = utils.convert( texture.format );
+
+		if ( capabilities.isWebGL2 ) {
+
+			// Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1120100
+			// Not needed in Chrome 93+
+
+			if ( glFormat === 6407 ) glFormat = 32849;
+			if ( glFormat === 6408 ) glFormat = 32856;
+
+		}
 
 		textures.setTexture2D( texture, 0 );
 
@@ -24930,7 +26579,9 @@ function WebGLRenderer( parameters ) {
 
 		}
 
-		const { width, height, data } = srcTexture.image;
+		const width = sourceBox.max.x - sourceBox.min.x + 1;
+		const height = sourceBox.max.y - sourceBox.min.y + 1;
+		const depth = sourceBox.max.z - sourceBox.min.z + 1;
 		const glFormat = utils.convert( dstTexture.format );
 		const glType = utils.convert( dstTexture.type );
 		let glTarget;
@@ -24962,25 +26613,32 @@ function WebGLRenderer( parameters ) {
 		const unpackSkipRows = _gl.getParameter( 3315 );
 		const unpackSkipImages = _gl.getParameter( 32877 );
 
-		_gl.pixelStorei( 3314, width );
-		_gl.pixelStorei( 32878, height );
+		const image = srcTexture.isCompressedTexture ? srcTexture.mipmaps[ 0 ] : srcTexture.image;
+
+		_gl.pixelStorei( 3314, image.width );
+		_gl.pixelStorei( 32878, image.height );
 		_gl.pixelStorei( 3316, sourceBox.min.x );
 		_gl.pixelStorei( 3315, sourceBox.min.y );
 		_gl.pixelStorei( 32877, sourceBox.min.z );
 
-		_gl.texSubImage3D(
-			glTarget,
-			level,
-			position.x,
-			position.y,
-			position.z,
-			sourceBox.max.x - sourceBox.min.x + 1,
-			sourceBox.max.y - sourceBox.min.y + 1,
-			sourceBox.max.z - sourceBox.min.z + 1,
-			glFormat,
-			glType,
-			data
-		);
+		if ( srcTexture.isDataTexture || srcTexture.isDataTexture3D ) {
+
+			_gl.texSubImage3D( glTarget, level, position.x, position.y, position.z, width, height, depth, glFormat, glType, image.data );
+
+		} else {
+
+			if ( srcTexture.isCompressedTexture ) {
+
+				console.warn( 'THREE.WebGLRenderer.copyTextureToTexture3D: untested support for compressed srcTexture.' );
+				_gl.compressedTexSubImage3D( glTarget, level, position.x, position.y, position.z, width, height, depth, glFormat, image.data );
+
+			} else {
+
+				_gl.texSubImage3D( glTarget, level, position.x, position.y, position.z, width, height, depth, glFormat, glType, image );
+
+			}
+
+		}
 
 		_gl.pixelStorei( 3314, unpackRowLen );
 		_gl.pixelStorei( 32878, unpackImageHeight );
@@ -25067,8 +26725,6 @@ class Scene extends Object3D {
 
 		const data = super.toJSON( meta );
 
-		if ( this.background !== null ) data.object.background = this.background.toJSON( meta );
-		if ( this.environment !== null ) data.object.environment = this.environment.toJSON( meta );
 		if ( this.fog !== null ) data.object.fog = this.fog.toJSON();
 
 		return data;
@@ -25078,430 +26734,6 @@ class Scene extends Object3D {
 }
 
 Scene.prototype.isScene = true;
-
-class InterleavedBuffer {
-
-	constructor( array, stride ) {
-
-		this.array = array;
-		this.stride = stride;
-		this.count = array !== undefined ? array.length / stride : 0;
-
-		this.usage = StaticDrawUsage;
-		this.updateRange = { offset: 0, count: - 1 };
-
-		this.version = 0;
-
-		this.uuid = generateUUID();
-
-		this.onUploadCallback = function () {};
-
-	}
-
-	set needsUpdate( value ) {
-
-		if ( value === true ) this.version ++;
-
-	}
-
-	setUsage( value ) {
-
-		this.usage = value;
-
-		return this;
-
-	}
-
-	copy( source ) {
-
-		this.array = new source.array.constructor( source.array );
-		this.count = source.count;
-		this.stride = source.stride;
-		this.usage = source.usage;
-
-		return this;
-
-	}
-
-	copyAt( index1, attribute, index2 ) {
-
-		index1 *= this.stride;
-		index2 *= attribute.stride;
-
-		for ( let i = 0, l = this.stride; i < l; i ++ ) {
-
-			this.array[ index1 + i ] = attribute.array[ index2 + i ];
-
-		}
-
-		return this;
-
-	}
-
-	set( value, offset = 0 ) {
-
-		this.array.set( value, offset );
-
-		return this;
-
-	}
-
-	clone( data ) {
-
-		if ( data.arrayBuffers === undefined ) {
-
-			data.arrayBuffers = {};
-
-		}
-
-		if ( this.array.buffer._uuid === undefined ) {
-
-			this.array.buffer._uuid = generateUUID();
-
-		}
-
-		if ( data.arrayBuffers[ this.array.buffer._uuid ] === undefined ) {
-
-			data.arrayBuffers[ this.array.buffer._uuid ] = this.array.slice( 0 ).buffer;
-
-		}
-
-		const array = new this.array.constructor( data.arrayBuffers[ this.array.buffer._uuid ] );
-
-		const ib = new InterleavedBuffer( array, this.stride );
-		ib.setUsage( this.usage );
-
-		return ib;
-
-	}
-
-	onUpload( callback ) {
-
-		this.onUploadCallback = callback;
-
-		return this;
-
-	}
-
-	toJSON( data ) {
-
-		if ( data.arrayBuffers === undefined ) {
-
-			data.arrayBuffers = {};
-
-		}
-
-		// generate UUID for array buffer if necessary
-
-		if ( this.array.buffer._uuid === undefined ) {
-
-			this.array.buffer._uuid = generateUUID();
-
-		}
-
-		if ( data.arrayBuffers[ this.array.buffer._uuid ] === undefined ) {
-
-			data.arrayBuffers[ this.array.buffer._uuid ] = Array.prototype.slice.call( new Uint32Array( this.array.buffer ) );
-
-		}
-
-		//
-
-		return {
-			uuid: this.uuid,
-			buffer: this.array.buffer._uuid,
-			type: this.array.constructor.name,
-			stride: this.stride
-		};
-
-	}
-
-}
-
-InterleavedBuffer.prototype.isInterleavedBuffer = true;
-
-const _vector$6 = new /*@__PURE__*/ Vector3();
-
-class InterleavedBufferAttribute {
-
-	constructor( interleavedBuffer, itemSize, offset, normalized ) {
-
-		this.name = '';
-
-		this.data = interleavedBuffer;
-		this.itemSize = itemSize;
-		this.offset = offset;
-
-		this.normalized = normalized === true;
-
-	}
-
-	get count() {
-
-		return this.data.count;
-
-	}
-
-	get array() {
-
-		return this.data.array;
-
-	}
-
-	set needsUpdate( value ) {
-
-		this.data.needsUpdate = value;
-
-	}
-
-	applyMatrix4( m ) {
-
-		for ( let i = 0, l = this.data.count; i < l; i ++ ) {
-
-			_vector$6.x = this.getX( i );
-			_vector$6.y = this.getY( i );
-			_vector$6.z = this.getZ( i );
-
-			_vector$6.applyMatrix4( m );
-
-			this.setXYZ( i, _vector$6.x, _vector$6.y, _vector$6.z );
-
-		}
-
-		return this;
-
-	}
-
-	applyNormalMatrix( m ) {
-
-		for ( let i = 0, l = this.count; i < l; i ++ ) {
-
-			_vector$6.x = this.getX( i );
-			_vector$6.y = this.getY( i );
-			_vector$6.z = this.getZ( i );
-
-			_vector$6.applyNormalMatrix( m );
-
-			this.setXYZ( i, _vector$6.x, _vector$6.y, _vector$6.z );
-
-		}
-
-		return this;
-
-	}
-
-	transformDirection( m ) {
-
-		for ( let i = 0, l = this.count; i < l; i ++ ) {
-
-			_vector$6.x = this.getX( i );
-			_vector$6.y = this.getY( i );
-			_vector$6.z = this.getZ( i );
-
-			_vector$6.transformDirection( m );
-
-			this.setXYZ( i, _vector$6.x, _vector$6.y, _vector$6.z );
-
-		}
-
-		return this;
-
-	}
-
-	setX( index, x ) {
-
-		this.data.array[ index * this.data.stride + this.offset ] = x;
-
-		return this;
-
-	}
-
-	setY( index, y ) {
-
-		this.data.array[ index * this.data.stride + this.offset + 1 ] = y;
-
-		return this;
-
-	}
-
-	setZ( index, z ) {
-
-		this.data.array[ index * this.data.stride + this.offset + 2 ] = z;
-
-		return this;
-
-	}
-
-	setW( index, w ) {
-
-		this.data.array[ index * this.data.stride + this.offset + 3 ] = w;
-
-		return this;
-
-	}
-
-	getX( index ) {
-
-		return this.data.array[ index * this.data.stride + this.offset ];
-
-	}
-
-	getY( index ) {
-
-		return this.data.array[ index * this.data.stride + this.offset + 1 ];
-
-	}
-
-	getZ( index ) {
-
-		return this.data.array[ index * this.data.stride + this.offset + 2 ];
-
-	}
-
-	getW( index ) {
-
-		return this.data.array[ index * this.data.stride + this.offset + 3 ];
-
-	}
-
-	setXY( index, x, y ) {
-
-		index = index * this.data.stride + this.offset;
-
-		this.data.array[ index + 0 ] = x;
-		this.data.array[ index + 1 ] = y;
-
-		return this;
-
-	}
-
-	setXYZ( index, x, y, z ) {
-
-		index = index * this.data.stride + this.offset;
-
-		this.data.array[ index + 0 ] = x;
-		this.data.array[ index + 1 ] = y;
-		this.data.array[ index + 2 ] = z;
-
-		return this;
-
-	}
-
-	setXYZW( index, x, y, z, w ) {
-
-		index = index * this.data.stride + this.offset;
-
-		this.data.array[ index + 0 ] = x;
-		this.data.array[ index + 1 ] = y;
-		this.data.array[ index + 2 ] = z;
-		this.data.array[ index + 3 ] = w;
-
-		return this;
-
-	}
-
-	clone( data ) {
-
-		if ( data === undefined ) {
-
-			console.log( 'THREE.InterleavedBufferAttribute.clone(): Cloning an interlaved buffer attribute will deinterleave buffer data.' );
-
-			const array = [];
-
-			for ( let i = 0; i < this.count; i ++ ) {
-
-				const index = i * this.data.stride + this.offset;
-
-				for ( let j = 0; j < this.itemSize; j ++ ) {
-
-					array.push( this.data.array[ index + j ] );
-
-				}
-
-			}
-
-			return new BufferAttribute( new this.array.constructor( array ), this.itemSize, this.normalized );
-
-		} else {
-
-			if ( data.interleavedBuffers === undefined ) {
-
-				data.interleavedBuffers = {};
-
-			}
-
-			if ( data.interleavedBuffers[ this.data.uuid ] === undefined ) {
-
-				data.interleavedBuffers[ this.data.uuid ] = this.data.clone( data );
-
-			}
-
-			return new InterleavedBufferAttribute( data.interleavedBuffers[ this.data.uuid ], this.itemSize, this.offset, this.normalized );
-
-		}
-
-	}
-
-	toJSON( data ) {
-
-		if ( data === undefined ) {
-
-			console.log( 'THREE.InterleavedBufferAttribute.toJSON(): Serializing an interlaved buffer attribute will deinterleave buffer data.' );
-
-			const array = [];
-
-			for ( let i = 0; i < this.count; i ++ ) {
-
-				const index = i * this.data.stride + this.offset;
-
-				for ( let j = 0; j < this.itemSize; j ++ ) {
-
-					array.push( this.data.array[ index + j ] );
-
-				}
-
-			}
-
-			// deinterleave data and save it as an ordinary buffer attribute for now
-
-			return {
-				itemSize: this.itemSize,
-				type: this.array.constructor.name,
-				array: array,
-				normalized: this.normalized
-			};
-
-		} else {
-
-			// save as true interlaved attribtue
-
-			if ( data.interleavedBuffers === undefined ) {
-
-				data.interleavedBuffers = {};
-
-			}
-
-			if ( data.interleavedBuffers[ this.data.uuid ] === undefined ) {
-
-				data.interleavedBuffers[ this.data.uuid ] = this.data.toJSON( data );
-
-			}
-
-			return {
-				isInterleavedBufferAttribute: true,
-				itemSize: this.itemSize,
-				data: this.data.uuid,
-				offset: this.offset,
-				normalized: this.normalized
-			};
-
-		}
-
-	}
-
-}
-
-InterleavedBufferAttribute.prototype.isInterleavedBufferAttribute = true;
 
 /**
  * parameters = {
@@ -25528,8 +26760,6 @@ class LineBasicMaterial extends Material {
 		this.linecap = 'round';
 		this.linejoin = 'round';
 
-		this.morphTargets = false;
-
 		this.setValues( parameters );
 
 	}
@@ -25544,8 +26774,6 @@ class LineBasicMaterial extends Material {
 		this.linewidth = source.linewidth;
 		this.linecap = source.linecap;
 		this.linejoin = source.linejoin;
-
-		this.morphTargets = source.morphTargets;
 
 		return this;
 
@@ -25884,9 +27112,6 @@ LineSegments.prototype.isLineSegments = true;
  *  wireframe: <boolean>,
  *  wireframeLinewidth: <float>,
  *
- *  skinning: <bool>,
- *  morphTargets: <bool>,
- *  morphNormals: <bool>
  * }
  */
 
@@ -25926,10 +27151,6 @@ class MeshLambertMaterial extends Material {
 		this.wireframeLinecap = 'round';
 		this.wireframeLinejoin = 'round';
 
-		this.skinning = false;
-		this.morphTargets = false;
-		this.morphNormals = false;
-
 		this.setValues( parameters );
 
 	}
@@ -25965,10 +27186,6 @@ class MeshLambertMaterial extends Material {
 		this.wireframeLinewidth = source.wireframeLinewidth;
 		this.wireframeLinecap = source.wireframeLinecap;
 		this.wireframeLinejoin = source.wireframeLinejoin;
-
-		this.skinning = source.skinning;
-		this.morphTargets = source.morphTargets;
-		this.morphNormals = source.morphNormals;
 
 		return this;
 
@@ -26755,6 +27972,7 @@ class LightShadow {
 		this.bias = 0;
 		this.normalBias = 0;
 		this.radius = 1;
+		this.blurSamples = 8;
 
 		this.mapSize = new Vector2( 512, 512 );
 
@@ -26881,139 +28099,6 @@ class LightShadow {
 	}
 
 }
-
-class OrthographicCamera extends Camera {
-
-	constructor( left = - 1, right = 1, top = 1, bottom = - 1, near = 0.1, far = 2000 ) {
-
-		super();
-
-		this.type = 'OrthographicCamera';
-
-		this.zoom = 1;
-		this.view = null;
-
-		this.left = left;
-		this.right = right;
-		this.top = top;
-		this.bottom = bottom;
-
-		this.near = near;
-		this.far = far;
-
-		this.updateProjectionMatrix();
-
-	}
-
-	copy( source, recursive ) {
-
-		super.copy( source, recursive );
-
-		this.left = source.left;
-		this.right = source.right;
-		this.top = source.top;
-		this.bottom = source.bottom;
-		this.near = source.near;
-		this.far = source.far;
-
-		this.zoom = source.zoom;
-		this.view = source.view === null ? null : Object.assign( {}, source.view );
-
-		return this;
-
-	}
-
-	setViewOffset( fullWidth, fullHeight, x, y, width, height ) {
-
-		if ( this.view === null ) {
-
-			this.view = {
-				enabled: true,
-				fullWidth: 1,
-				fullHeight: 1,
-				offsetX: 0,
-				offsetY: 0,
-				width: 1,
-				height: 1
-			};
-
-		}
-
-		this.view.enabled = true;
-		this.view.fullWidth = fullWidth;
-		this.view.fullHeight = fullHeight;
-		this.view.offsetX = x;
-		this.view.offsetY = y;
-		this.view.width = width;
-		this.view.height = height;
-
-		this.updateProjectionMatrix();
-
-	}
-
-	clearViewOffset() {
-
-		if ( this.view !== null ) {
-
-			this.view.enabled = false;
-
-		}
-
-		this.updateProjectionMatrix();
-
-	}
-
-	updateProjectionMatrix() {
-
-		const dx = ( this.right - this.left ) / ( 2 * this.zoom );
-		const dy = ( this.top - this.bottom ) / ( 2 * this.zoom );
-		const cx = ( this.right + this.left ) / 2;
-		const cy = ( this.top + this.bottom ) / 2;
-
-		let left = cx - dx;
-		let right = cx + dx;
-		let top = cy + dy;
-		let bottom = cy - dy;
-
-		if ( this.view !== null && this.view.enabled ) {
-
-			const scaleW = ( this.right - this.left ) / this.view.fullWidth / this.zoom;
-			const scaleH = ( this.top - this.bottom ) / this.view.fullHeight / this.zoom;
-
-			left += scaleW * this.view.offsetX;
-			right = left + scaleW * this.view.width;
-			top -= scaleH * this.view.offsetY;
-			bottom = top - scaleH * this.view.height;
-
-		}
-
-		this.projectionMatrix.makeOrthographic( left, right, top, bottom, this.near, this.far );
-
-		this.projectionMatrixInverse.copy( this.projectionMatrix ).invert();
-
-	}
-
-	toJSON( meta ) {
-
-		const data = super.toJSON( meta );
-
-		data.object.zoom = this.zoom;
-		data.object.left = this.left;
-		data.object.right = this.right;
-		data.object.top = this.top;
-		data.object.bottom = this.bottom;
-		data.object.near = this.near;
-		data.object.far = this.far;
-
-		if ( this.view !== null ) data.object.view = Object.assign( {}, this.view );
-
-		return data;
-
-	}
-
-}
-
-OrthographicCamera.prototype.isOrthographicCamera = true;
 
 class DirectionalLightShadow extends LightShadow {
 
@@ -27303,6 +28388,29 @@ class AxesHelper extends LineSegments {
 
 	}
 
+	setColors( xAxisColor, yAxisColor, zAxisColor ) {
+
+		const color = new Color();
+		const array = this.geometry.attributes.color.array;
+
+		color.set( xAxisColor );
+		color.toArray( array, 0 );
+		color.toArray( array, 3 );
+
+		color.set( yAxisColor );
+		color.toArray( array, 6 );
+		color.toArray( array, 9 );
+
+		color.set( zAxisColor );
+		color.toArray( array, 12 );
+		color.toArray( array, 15 );
+
+		this.geometry.attributes.color.needsUpdate = true;
+
+		return this;
+
+	}
+
 	dispose() {
 
 		this.geometry.dispose();
@@ -27311,13 +28419,6 @@ class AxesHelper extends LineSegments {
 	}
 
 }
-
-const backgroundMaterial = new MeshBasicMaterial( {
-	side: BackSide,
-	depthWrite: false,
-	depthTest: false,
-} );
-new Mesh( new BoxGeometry(), backgroundMaterial );
 
 GridHelper.prototype.setColors = function () {
 
@@ -28128,20 +29229,6 @@ Object.defineProperties( BufferGeometry.prototype, {
 
 } );
 
-InterleavedBuffer.prototype.setDynamic = function ( value ) {
-
-	console.warn( 'THREE.InterleavedBuffer: .setDynamic() has been deprecated. Use .setUsage() instead.' );
-	this.setUsage( value === true ? DynamicDrawUsage : StaticDrawUsage );
-	return this;
-
-};
-
-InterleavedBuffer.prototype.setArray = function ( /* array */ ) {
-
-	console.error( 'THREE.InterleavedBuffer: .setArray has been removed. Use BufferGeometry .setAttribute to replace/resize attribute buffers' );
-
-};
-
 //
 
 Scene.prototype.dispose = function () {
@@ -28216,7 +29303,20 @@ Object.defineProperties( Material.prototype, {
 			this.stencilFuncMask = value;
 
 		}
-	}
+	},
+
+	vertexTangents: {
+		get: function () {
+
+			console.warn( 'THREE.' + this.type + ': .vertexTangents has been removed.' );
+
+		},
+		set: function () {
+
+			console.warn( 'THREE.' + this.type + ': .vertexTangents has been removed.' );
+
+		}
+	},
 
 } );
 
@@ -28805,6 +29905,7 @@ class OrbitControls extends EventDispatcher {
 
 		this.object = object;
 		this.domElement = domElement;
+		this.domElement.style.touchAction = 'none'; // disable touch scroll
 
 		// Set to false to disable this control
 		this.enabled = true;
@@ -28885,6 +29986,12 @@ class OrbitControls extends EventDispatcher {
 		this.getAzimuthalAngle = function () {
 
 			return spherical.theta;
+
+		};
+
+		this.getDistance = function () {
+
+			return this.object.position.distanceTo( this.target );
 
 		};
 
@@ -29065,14 +30172,11 @@ class OrbitControls extends EventDispatcher {
 			scope.domElement.removeEventListener( 'contextmenu', onContextMenu );
 
 			scope.domElement.removeEventListener( 'pointerdown', onPointerDown );
+			scope.domElement.removeEventListener( 'pointercancel', onPointerCancel );
 			scope.domElement.removeEventListener( 'wheel', onMouseWheel );
 
-			scope.domElement.removeEventListener( 'touchstart', onTouchStart );
-			scope.domElement.removeEventListener( 'touchend', onTouchEnd );
-			scope.domElement.removeEventListener( 'touchmove', onTouchMove );
-
-			scope.domElement.ownerDocument.removeEventListener( 'pointermove', onPointerMove );
-			scope.domElement.ownerDocument.removeEventListener( 'pointerup', onPointerUp );
+			scope.domElement.removeEventListener( 'pointermove', onPointerMove );
+			scope.domElement.removeEventListener( 'pointerup', onPointerUp );
 
 
 			if ( scope._domElementKeyEvents !== null ) {
@@ -29125,6 +30229,9 @@ class OrbitControls extends EventDispatcher {
 		const dollyStart = new Vector2();
 		const dollyEnd = new Vector2();
 		const dollyDelta = new Vector2();
+
+		const pointers = [];
+		const pointerPositions = {};
 
 		function getAutoRotationAngle() {
 
@@ -29405,16 +30512,16 @@ class OrbitControls extends EventDispatcher {
 
 		}
 
-		function handleTouchStartRotate( event ) {
+		function handleTouchStartRotate() {
 
-			if ( event.touches.length == 1 ) {
+			if ( pointers.length === 1 ) {
 
-				rotateStart.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				rotateStart.set( pointers[ 0 ].pageX, pointers[ 0 ].pageY );
 
 			} else {
 
-				const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
-				const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
+				const x = 0.5 * ( pointers[ 0 ].pageX + pointers[ 1 ].pageX );
+				const y = 0.5 * ( pointers[ 0 ].pageY + pointers[ 1 ].pageY );
 
 				rotateStart.set( x, y );
 
@@ -29422,16 +30529,16 @@ class OrbitControls extends EventDispatcher {
 
 		}
 
-		function handleTouchStartPan( event ) {
+		function handleTouchStartPan() {
 
-			if ( event.touches.length == 1 ) {
+			if ( pointers.length === 1 ) {
 
-				panStart.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				panStart.set( pointers[ 0 ].pageX, pointers[ 0 ].pageY );
 
 			} else {
 
-				const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
-				const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
+				const x = 0.5 * ( pointers[ 0 ].pageX + pointers[ 1 ].pageX );
+				const y = 0.5 * ( pointers[ 0 ].pageY + pointers[ 1 ].pageY );
 
 				panStart.set( x, y );
 
@@ -29439,10 +30546,10 @@ class OrbitControls extends EventDispatcher {
 
 		}
 
-		function handleTouchStartDolly( event ) {
+		function handleTouchStartDolly() {
 
-			const dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
-			const dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+			const dx = pointers[ 0 ].pageX - pointers[ 1 ].pageX;
+			const dy = pointers[ 0 ].pageY - pointers[ 1 ].pageY;
 
 			const distance = Math.sqrt( dx * dx + dy * dy );
 
@@ -29450,32 +30557,34 @@ class OrbitControls extends EventDispatcher {
 
 		}
 
-		function handleTouchStartDollyPan( event ) {
+		function handleTouchStartDollyPan() {
 
-			if ( scope.enableZoom ) handleTouchStartDolly( event );
+			if ( scope.enableZoom ) handleTouchStartDolly();
 
-			if ( scope.enablePan ) handleTouchStartPan( event );
+			if ( scope.enablePan ) handleTouchStartPan();
 
 		}
 
-		function handleTouchStartDollyRotate( event ) {
+		function handleTouchStartDollyRotate() {
 
-			if ( scope.enableZoom ) handleTouchStartDolly( event );
+			if ( scope.enableZoom ) handleTouchStartDolly();
 
-			if ( scope.enableRotate ) handleTouchStartRotate( event );
+			if ( scope.enableRotate ) handleTouchStartRotate();
 
 		}
 
 		function handleTouchMoveRotate( event ) {
 
-			if ( event.touches.length == 1 ) {
+			if ( pointers.length == 1 ) {
 
-				rotateEnd.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				rotateEnd.set( event.pageX, event.pageY );
 
 			} else {
 
-				const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
-				const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
+				const position = getSecondPointerPosition( event );
+
+				const x = 0.5 * ( event.pageX + position.x );
+				const y = 0.5 * ( event.pageY + position.y );
 
 				rotateEnd.set( x, y );
 
@@ -29495,14 +30604,16 @@ class OrbitControls extends EventDispatcher {
 
 		function handleTouchMovePan( event ) {
 
-			if ( event.touches.length == 1 ) {
+			if ( pointers.length === 1 ) {
 
-				panEnd.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+				panEnd.set( event.pageX, event.pageY );
 
 			} else {
 
-				const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
-				const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
+				const position = getSecondPointerPosition( event );
+
+				const x = 0.5 * ( event.pageX + position.x );
+				const y = 0.5 * ( event.pageY + position.y );
 
 				panEnd.set( x, y );
 
@@ -29518,8 +30629,10 @@ class OrbitControls extends EventDispatcher {
 
 		function handleTouchMoveDolly( event ) {
 
-			const dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
-			const dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+			const position = getSecondPointerPosition( event );
+
+			const dx = event.pageX - position.x;
+			const dy = event.pageY - position.y;
 
 			const distance = Math.sqrt( dx * dx + dy * dy );
 
@@ -29557,14 +30670,26 @@ class OrbitControls extends EventDispatcher {
 
 			if ( scope.enabled === false ) return;
 
-			switch ( event.pointerType ) {
+			if ( pointers.length === 0 ) {
 
-				case 'mouse':
-				case 'pen':
-					onMouseDown( event );
-					break;
+				scope.domElement.setPointerCapture( event.pointerId );
 
-				// TODO touch
+				scope.domElement.addEventListener( 'pointermove', onPointerMove );
+				scope.domElement.addEventListener( 'pointerup', onPointerUp );
+
+			}
+
+			//
+
+			addPointer( event );
+
+			if ( event.pointerType === 'touch' ) {
+
+				onTouchStart( event );
+
+			} else {
+
+				onMouseDown( event );
 
 			}
 
@@ -29574,14 +30699,13 @@ class OrbitControls extends EventDispatcher {
 
 			if ( scope.enabled === false ) return;
 
-			switch ( event.pointerType ) {
+			if ( event.pointerType === 'touch' ) {
 
-				case 'mouse':
-				case 'pen':
-					onMouseMove( event );
-					break;
+				onTouchMove( event );
 
-				// TODO touch
+			} else {
+
+				onMouseMove( event );
 
 			}
 
@@ -29589,28 +30713,40 @@ class OrbitControls extends EventDispatcher {
 
 		function onPointerUp( event ) {
 
-			switch ( event.pointerType ) {
+			if ( scope.enabled === false ) return;
 
-				case 'mouse':
-				case 'pen':
-					onMouseUp();
-					break;
+			if ( event.pointerType === 'touch' ) {
 
-				// TODO touch
+				onTouchEnd();
+
+			} else {
+
+				onMouseUp();
+
+			}
+
+			removePointer( event );
+
+			//
+
+			if ( pointers.length === 0 ) {
+
+				scope.domElement.releasePointerCapture( event.pointerId );
+
+				scope.domElement.removeEventListener( 'pointermove', onPointerMove );
+				scope.domElement.removeEventListener( 'pointerup', onPointerUp );
 
 			}
 
 		}
 
+		function onPointerCancel( event ) {
+
+			removePointer( event );
+
+		}
+
 		function onMouseDown( event ) {
-
-			// Prevent the browser from scrolling.
-			event.preventDefault();
-
-			// Manually set the focus since calling preventDefault above
-			// prevents the browser from setting it automatically.
-
-			scope.domElement.focus ? scope.domElement.focus() : window.focus();
 
 			let mouseAction;
 
@@ -29701,9 +30837,6 @@ class OrbitControls extends EventDispatcher {
 
 			if ( state !== STATE.NONE ) {
 
-				scope.domElement.ownerDocument.addEventListener( 'pointermove', onPointerMove );
-				scope.domElement.ownerDocument.addEventListener( 'pointerup', onPointerUp );
-
 				scope.dispatchEvent( _startEvent );
 
 			}
@@ -29713,8 +30846,6 @@ class OrbitControls extends EventDispatcher {
 		function onMouseMove( event ) {
 
 			if ( scope.enabled === false ) return;
-
-			event.preventDefault();
 
 			switch ( state ) {
 
@@ -29748,11 +30879,6 @@ class OrbitControls extends EventDispatcher {
 
 		function onMouseUp( event ) {
 
-			scope.domElement.ownerDocument.removeEventListener( 'pointermove', onPointerMove );
-			scope.domElement.ownerDocument.removeEventListener( 'pointerup', onPointerUp );
-
-			if ( scope.enabled === false ) return;
-
 			scope.dispatchEvent( _endEvent );
 
 			state = STATE.NONE;
@@ -29783,11 +30909,9 @@ class OrbitControls extends EventDispatcher {
 
 		function onTouchStart( event ) {
 
-			if ( scope.enabled === false ) return;
+			trackPointer( event );
 
-			event.preventDefault(); // prevent scrolling
-
-			switch ( event.touches.length ) {
+			switch ( pointers.length ) {
 
 				case 1:
 
@@ -29797,7 +30921,7 @@ class OrbitControls extends EventDispatcher {
 
 							if ( scope.enableRotate === false ) return;
 
-							handleTouchStartRotate( event );
+							handleTouchStartRotate();
 
 							state = STATE.TOUCH_ROTATE;
 
@@ -29807,7 +30931,7 @@ class OrbitControls extends EventDispatcher {
 
 							if ( scope.enablePan === false ) return;
 
-							handleTouchStartPan( event );
+							handleTouchStartPan();
 
 							state = STATE.TOUCH_PAN;
 
@@ -29829,7 +30953,7 @@ class OrbitControls extends EventDispatcher {
 
 							if ( scope.enableZoom === false && scope.enablePan === false ) return;
 
-							handleTouchStartDollyPan( event );
+							handleTouchStartDollyPan();
 
 							state = STATE.TOUCH_DOLLY_PAN;
 
@@ -29839,7 +30963,7 @@ class OrbitControls extends EventDispatcher {
 
 							if ( scope.enableZoom === false && scope.enableRotate === false ) return;
 
-							handleTouchStartDollyRotate( event );
+							handleTouchStartDollyRotate();
 
 							state = STATE.TOUCH_DOLLY_ROTATE;
 
@@ -29869,9 +30993,7 @@ class OrbitControls extends EventDispatcher {
 
 		function onTouchMove( event ) {
 
-			if ( scope.enabled === false ) return;
-
-			event.preventDefault(); // prevent scrolling
+			trackPointer( event );
 
 			switch ( state ) {
 
@@ -29925,8 +31047,6 @@ class OrbitControls extends EventDispatcher {
 
 		function onTouchEnd( event ) {
 
-			if ( scope.enabled === false ) return;
-
 			scope.dispatchEvent( _endEvent );
 
 			state = STATE.NONE;
@@ -29941,16 +31061,59 @@ class OrbitControls extends EventDispatcher {
 
 		}
 
+		function addPointer( event ) {
+
+			pointers.push( event );
+
+		}
+
+		function removePointer( event ) {
+
+			delete pointerPositions[ event.pointerId ];
+
+			for ( let i = 0; i < pointers.length; i ++ ) {
+
+				if ( pointers[ i ].pointerId == event.pointerId ) {
+
+					pointers.splice( i, 1 );
+					return;
+
+				}
+
+			}
+
+		}
+
+		function trackPointer( event ) {
+
+			let position = pointerPositions[ event.pointerId ];
+
+			if ( position === undefined ) {
+
+				position = new Vector2();
+				pointerPositions[ event.pointerId ] = position;
+
+			}
+
+			position.set( event.pageX, event.pageY );
+
+		}
+
+		function getSecondPointerPosition( event ) {
+
+			const pointer = ( event.pointerId === pointers[ 0 ].pointerId ) ? pointers[ 1 ] : pointers[ 0 ];
+
+			return pointerPositions[ pointer.pointerId ];
+
+		}
+
 		//
 
 		scope.domElement.addEventListener( 'contextmenu', onContextMenu );
 
 		scope.domElement.addEventListener( 'pointerdown', onPointerDown );
+		scope.domElement.addEventListener( 'pointercancel', onPointerCancel );
 		scope.domElement.addEventListener( 'wheel', onMouseWheel, { passive: false } );
-
-		scope.domElement.addEventListener( 'touchstart', onTouchStart, { passive: false } );
-		scope.domElement.addEventListener( 'touchend', onTouchEnd );
-		scope.domElement.addEventListener( 'touchmove', onTouchMove, { passive: false } );
 
 		// force an update at start
 
@@ -29960,2244 +31123,827 @@ class OrbitControls extends EventDispatcher {
 
 }
 
-var __commonJS = (callback, module) => () => {
-  if (!module) {
-    module = {exports: {}};
-    callback(module.exports, module);
-  }
-  return module.exports;
+var __defProp = Object.defineProperty;
+var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __propIsEnum = Object.prototype.propertyIsEnumerable;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __spreadValues = (a, b) => {
+  for (var prop in b || (b = {}))
+    if (__hasOwnProp.call(b, prop))
+      __defNormalProp(a, prop, b[prop]);
+  if (__getOwnPropSymbols)
+    for (var prop of __getOwnPropSymbols(b)) {
+      if (__propIsEnum.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    }
+  return a;
+};
+var __require = (x) => {
+  if (typeof require !== "undefined")
+    return require(x);
+  throw new Error('Dynamic require of "' + x + '" is not supported');
+};
+var __commonJS = (cb, mod) => function __require2() {
+  return mod || (0, cb[Object.keys(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
+var __async = (__this, __arguments, generator) => {
+  return new Promise((resolve, reject) => {
+    var fulfilled = (value) => {
+      try {
+        step(generator.next(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var rejected = (value) => {
+      try {
+        step(generator.throw(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var step = (x) => x.done ? resolve(x.value) : Promise.resolve(x.value).then(fulfilled, rejected);
+    step((generator = generator.apply(__this, __arguments)).next());
+  });
 };
 
+// (disabled):crypto
+var require_crypto = __commonJS({
+  "(disabled):crypto"() {
+  }
+});
+
 // dist/web-ifc.js
-var require_web_ifc = __commonJS((exports, module) => {
-  var WebIFCWasm2 = function() {
-    var _scriptDir = typeof document !== "undefined" && document.currentScript ? document.currentScript.src : void 0;
-    if (typeof __filename !== "undefined")
-      _scriptDir = _scriptDir || __filename;
-    return function(WebIFCWasm3) {
-      WebIFCWasm3 = WebIFCWasm3 || {};
-      var Module = typeof WebIFCWasm3 !== "undefined" ? WebIFCWasm3 : {};
-      var readyPromiseResolve, readyPromiseReject;
-      Module["ready"] = new Promise(function(resolve, reject) {
-        readyPromiseResolve = resolve;
-        readyPromiseReject = reject;
-      });
-      var moduleOverrides = {};
-      var key;
-      for (key in Module) {
-        if (Module.hasOwnProperty(key)) {
-          moduleOverrides[key] = Module[key];
-        }
-      }
-      var thisProgram = "./this.program";
-      var quit_ = function(status, toThrow) {
-        throw toThrow;
-      };
-      var ENVIRONMENT_IS_WEB = false;
-      var ENVIRONMENT_IS_WORKER = false;
-      var ENVIRONMENT_IS_NODE = false;
-      var ENVIRONMENT_IS_SHELL = false;
-      ENVIRONMENT_IS_WEB = typeof window === "object";
-      ENVIRONMENT_IS_WORKER = typeof importScripts === "function";
-      ENVIRONMENT_IS_NODE = typeof process === "object" && typeof process.versions === "object" && typeof process.versions.node === "string";
-      ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
-      var scriptDirectory = "";
-      function locateFile(path) {
-        if (Module["locateFile"]) {
-          return Module["locateFile"](path, scriptDirectory);
-        }
-        return scriptDirectory + path;
-      }
-      var read_, readBinary;
-      var nodeFS;
-      var nodePath;
-      if (ENVIRONMENT_IS_NODE) {
-        if (ENVIRONMENT_IS_WORKER) {
-          scriptDirectory = require("path").dirname(scriptDirectory) + "/";
-        } else {
-          scriptDirectory = __dirname + "/";
-        }
-        read_ = function shell_read(filename, binary) {
-          if (!nodeFS)
-            nodeFS = require("fs");
-          if (!nodePath)
-            nodePath = require("path");
-          filename = nodePath["normalize"](filename);
-          return nodeFS["readFileSync"](filename, binary ? null : "utf8");
-        };
-        readBinary = function readBinary2(filename) {
-          var ret = read_(filename, true);
-          if (!ret.buffer) {
-            ret = new Uint8Array(ret);
-          }
-          assert(ret.buffer);
-          return ret;
-        };
-        if (process["argv"].length > 1) {
-          thisProgram = process["argv"][1].replace(/\\/g, "/");
-        }
-        process["argv"].slice(2);
-        process["on"]("uncaughtException", function(ex) {
-          if (!(ex instanceof ExitStatus)) {
-            throw ex;
-          }
+var require_web_ifc = __commonJS({
+  "dist/web-ifc.js"(exports, module) {
+    var WebIFCWasm2 = function() {
+      var _scriptDir = typeof document !== "undefined" && document.currentScript ? document.currentScript.src : void 0;
+      if (typeof __filename !== "undefined")
+        _scriptDir = _scriptDir || __filename;
+      return function(WebIFCWasm3) {
+        WebIFCWasm3 = WebIFCWasm3 || {};
+        var Module = typeof WebIFCWasm3 !== "undefined" ? WebIFCWasm3 : {};
+        var readyPromiseResolve, readyPromiseReject;
+        Module["ready"] = new Promise(function(resolve, reject) {
+          readyPromiseResolve = resolve;
+          readyPromiseReject = reject;
         });
-        process["on"]("unhandledRejection", abort);
-        quit_ = function(status) {
-          process["exit"](status);
-        };
-        Module["inspect"] = function() {
-          return "[Emscripten Module object]";
-        };
-      } else if (ENVIRONMENT_IS_SHELL) {
-        if (typeof read != "undefined") {
-          read_ = function shell_read(f) {
-            return read(f);
-          };
-        }
-        readBinary = function readBinary2(f) {
-          var data;
-          if (typeof readbuffer === "function") {
-            return new Uint8Array(readbuffer(f));
+        var moduleOverrides = {};
+        var key;
+        for (key in Module) {
+          if (Module.hasOwnProperty(key)) {
+            moduleOverrides[key] = Module[key];
           }
-          data = read(f, "binary");
-          assert(typeof data === "object");
-          return data;
+        }
+        var thisProgram = "./this.program";
+        var quit_ = function(status, toThrow) {
+          throw toThrow;
         };
-        if (typeof scriptArgs != "undefined") {
-          scriptArgs;
+        var ENVIRONMENT_IS_WEB = false;
+        var ENVIRONMENT_IS_WORKER = false;
+        var ENVIRONMENT_IS_NODE = false;
+        var ENVIRONMENT_IS_SHELL = false;
+        ENVIRONMENT_IS_WEB = typeof window === "object";
+        ENVIRONMENT_IS_WORKER = typeof importScripts === "function";
+        ENVIRONMENT_IS_NODE = typeof process === "object" && typeof process.versions === "object" && typeof process.versions.node === "string";
+        ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
+        var scriptDirectory = "";
+        function locateFile(path) {
+          if (Module["locateFile"]) {
+            return Module["locateFile"](path, scriptDirectory);
+          }
+          return scriptDirectory + path;
         }
-        if (typeof quit === "function") {
-          quit_ = function(status) {
-            quit(status);
-          };
-        }
-        if (typeof print !== "undefined") {
-          if (typeof console === "undefined")
-            console = {};
-          console.log = print;
-          console.warn = console.error = typeof printErr !== "undefined" ? printErr : print;
-        }
-      } else if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
-        if (ENVIRONMENT_IS_WORKER) {
-          scriptDirectory = self.location.href;
-        } else if (typeof document !== "undefined" && document.currentScript) {
-          scriptDirectory = document.currentScript.src;
-        }
-        if (_scriptDir) {
-          scriptDirectory = _scriptDir;
-        }
-        if (scriptDirectory.indexOf("blob:") !== 0) {
-          scriptDirectory = scriptDirectory.substr(0, scriptDirectory.lastIndexOf("/") + 1);
-        } else {
-          scriptDirectory = "";
-        }
-        {
-          read_ = function shell_read(url) {
-            var xhr = new XMLHttpRequest();
-            xhr.open("GET", url, false);
-            xhr.send(null);
-            return xhr.responseText;
-          };
+        var read_, readBinary;
+        var nodeFS;
+        var nodePath;
+        if (ENVIRONMENT_IS_NODE) {
           if (ENVIRONMENT_IS_WORKER) {
-            readBinary = function readBinary2(url) {
+            scriptDirectory = __require("path").dirname(scriptDirectory) + "/";
+          } else {
+            scriptDirectory = __dirname + "/";
+          }
+          read_ = function shell_read(filename, binary) {
+            if (!nodeFS)
+              nodeFS = __require("fs");
+            if (!nodePath)
+              nodePath = __require("path");
+            filename = nodePath["normalize"](filename);
+            return nodeFS["readFileSync"](filename, binary ? null : "utf8");
+          };
+          readBinary = function readBinary2(filename) {
+            var ret = read_(filename, true);
+            if (!ret.buffer) {
+              ret = new Uint8Array(ret);
+            }
+            assert(ret.buffer);
+            return ret;
+          };
+          if (process["argv"].length > 1) {
+            thisProgram = process["argv"][1].replace(/\\/g, "/");
+          }
+          process["argv"].slice(2);
+          process["on"]("uncaughtException", function(ex) {
+            if (!(ex instanceof ExitStatus)) {
+              throw ex;
+            }
+          });
+          process["on"]("unhandledRejection", abort);
+          quit_ = function(status) {
+            process["exit"](status);
+          };
+          Module["inspect"] = function() {
+            return "[Emscripten Module object]";
+          };
+        } else if (ENVIRONMENT_IS_SHELL) {
+          if (typeof read != "undefined") {
+            read_ = function shell_read(f) {
+              return read(f);
+            };
+          }
+          readBinary = function readBinary2(f) {
+            var data;
+            if (typeof readbuffer === "function") {
+              return new Uint8Array(readbuffer(f));
+            }
+            data = read(f, "binary");
+            assert(typeof data === "object");
+            return data;
+          };
+          if (typeof scriptArgs != "undefined") {
+            scriptArgs;
+          }
+          if (typeof quit === "function") {
+            quit_ = function(status) {
+              quit(status);
+            };
+          }
+          if (typeof print !== "undefined") {
+            if (typeof console === "undefined")
+              console = {};
+            console.log = print;
+            console.warn = console.error = typeof printErr !== "undefined" ? printErr : print;
+          }
+        } else if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
+          if (ENVIRONMENT_IS_WORKER) {
+            scriptDirectory = self.location.href;
+          } else if (typeof document !== "undefined" && document.currentScript) {
+            scriptDirectory = document.currentScript.src;
+          }
+          if (_scriptDir) {
+            scriptDirectory = _scriptDir;
+          }
+          if (scriptDirectory.indexOf("blob:") !== 0) {
+            scriptDirectory = scriptDirectory.substr(0, scriptDirectory.lastIndexOf("/") + 1);
+          } else {
+            scriptDirectory = "";
+          }
+          {
+            read_ = function shell_read(url) {
               var xhr = new XMLHttpRequest();
               xhr.open("GET", url, false);
-              xhr.responseType = "arraybuffer";
               xhr.send(null);
-              return new Uint8Array(xhr.response);
+              return xhr.responseText;
             };
-          }
-        }
-      } else ;
-      var out = Module["print"] || console.log.bind(console);
-      var err = Module["printErr"] || console.warn.bind(console);
-      for (key in moduleOverrides) {
-        if (moduleOverrides.hasOwnProperty(key)) {
-          Module[key] = moduleOverrides[key];
-        }
-      }
-      moduleOverrides = null;
-      if (Module["arguments"])
-        Module["arguments"];
-      if (Module["thisProgram"])
-        thisProgram = Module["thisProgram"];
-      if (Module["quit"])
-        quit_ = Module["quit"];
-      var STACK_ALIGN = 16;
-      function alignMemory(size, factor) {
-        if (!factor)
-          factor = STACK_ALIGN;
-        return Math.ceil(size / factor) * factor;
-      }
-      var wasmBinary;
-      if (Module["wasmBinary"])
-        wasmBinary = Module["wasmBinary"];
-      var noExitRuntime;
-      if (Module["noExitRuntime"])
-        noExitRuntime = Module["noExitRuntime"];
-      if (typeof WebAssembly !== "object") {
-        abort("no native wasm support detected");
-      }
-      var wasmMemory;
-      var ABORT = false;
-      function assert(condition, text) {
-        if (!condition) {
-          abort("Assertion failed: " + text);
-        }
-      }
-      var UTF8Decoder = typeof TextDecoder !== "undefined" ? new TextDecoder("utf8") : void 0;
-      function UTF8ArrayToString(heap, idx, maxBytesToRead) {
-        var endIdx = idx + maxBytesToRead;
-        var endPtr = idx;
-        while (heap[endPtr] && !(endPtr >= endIdx))
-          ++endPtr;
-        if (endPtr - idx > 16 && heap.subarray && UTF8Decoder) {
-          return UTF8Decoder.decode(heap.subarray(idx, endPtr));
-        } else {
-          var str = "";
-          while (idx < endPtr) {
-            var u0 = heap[idx++];
-            if (!(u0 & 128)) {
-              str += String.fromCharCode(u0);
-              continue;
-            }
-            var u1 = heap[idx++] & 63;
-            if ((u0 & 224) == 192) {
-              str += String.fromCharCode((u0 & 31) << 6 | u1);
-              continue;
-            }
-            var u2 = heap[idx++] & 63;
-            if ((u0 & 240) == 224) {
-              u0 = (u0 & 15) << 12 | u1 << 6 | u2;
-            } else {
-              u0 = (u0 & 7) << 18 | u1 << 12 | u2 << 6 | heap[idx++] & 63;
-            }
-            if (u0 < 65536) {
-              str += String.fromCharCode(u0);
-            } else {
-              var ch = u0 - 65536;
-              str += String.fromCharCode(55296 | ch >> 10, 56320 | ch & 1023);
+            if (ENVIRONMENT_IS_WORKER) {
+              readBinary = function readBinary2(url) {
+                var xhr = new XMLHttpRequest();
+                xhr.open("GET", url, false);
+                xhr.responseType = "arraybuffer";
+                xhr.send(null);
+                return new Uint8Array(xhr.response);
+              };
             }
           }
-        }
-        return str;
-      }
-      function UTF8ToString(ptr, maxBytesToRead) {
-        return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead) : "";
-      }
-      function stringToUTF8Array(str, heap, outIdx, maxBytesToWrite) {
-        if (!(maxBytesToWrite > 0))
-          return 0;
-        var startIdx = outIdx;
-        var endIdx = outIdx + maxBytesToWrite - 1;
-        for (var i = 0; i < str.length; ++i) {
-          var u = str.charCodeAt(i);
-          if (u >= 55296 && u <= 57343) {
-            var u1 = str.charCodeAt(++i);
-            u = 65536 + ((u & 1023) << 10) | u1 & 1023;
+        } else ;
+        var out = Module["print"] || console.log.bind(console);
+        var err = Module["printErr"] || console.warn.bind(console);
+        for (key in moduleOverrides) {
+          if (moduleOverrides.hasOwnProperty(key)) {
+            Module[key] = moduleOverrides[key];
           }
-          if (u <= 127) {
-            if (outIdx >= endIdx)
-              break;
-            heap[outIdx++] = u;
-          } else if (u <= 2047) {
-            if (outIdx + 1 >= endIdx)
-              break;
-            heap[outIdx++] = 192 | u >> 6;
-            heap[outIdx++] = 128 | u & 63;
-          } else if (u <= 65535) {
-            if (outIdx + 2 >= endIdx)
-              break;
-            heap[outIdx++] = 224 | u >> 12;
-            heap[outIdx++] = 128 | u >> 6 & 63;
-            heap[outIdx++] = 128 | u & 63;
+        }
+        moduleOverrides = null;
+        if (Module["arguments"])
+          Module["arguments"];
+        if (Module["thisProgram"])
+          thisProgram = Module["thisProgram"];
+        if (Module["quit"])
+          quit_ = Module["quit"];
+        var STACK_ALIGN = 16;
+        function alignMemory(size, factor) {
+          if (!factor)
+            factor = STACK_ALIGN;
+          return Math.ceil(size / factor) * factor;
+        }
+        var wasmBinary;
+        if (Module["wasmBinary"])
+          wasmBinary = Module["wasmBinary"];
+        var noExitRuntime;
+        if (Module["noExitRuntime"])
+          noExitRuntime = Module["noExitRuntime"];
+        if (typeof WebAssembly !== "object") {
+          abort("no native wasm support detected");
+        }
+        var wasmMemory;
+        var ABORT = false;
+        function assert(condition, text) {
+          if (!condition) {
+            abort("Assertion failed: " + text);
+          }
+        }
+        var UTF8Decoder = typeof TextDecoder !== "undefined" ? new TextDecoder("utf8") : void 0;
+        function UTF8ArrayToString(heap, idx, maxBytesToRead) {
+          idx >>>= 0;
+          var endIdx = idx + maxBytesToRead;
+          var endPtr = idx;
+          while (heap[endPtr >>> 0] && !(endPtr >= endIdx))
+            ++endPtr;
+          if (endPtr - idx > 16 && heap.subarray && UTF8Decoder) {
+            return UTF8Decoder.decode(heap.subarray(idx >>> 0, endPtr >>> 0));
           } else {
-            if (outIdx + 3 >= endIdx)
-              break;
-            heap[outIdx++] = 240 | u >> 18;
-            heap[outIdx++] = 128 | u >> 12 & 63;
-            heap[outIdx++] = 128 | u >> 6 & 63;
-            heap[outIdx++] = 128 | u & 63;
-          }
-        }
-        heap[outIdx] = 0;
-        return outIdx - startIdx;
-      }
-      function stringToUTF8(str, outPtr, maxBytesToWrite) {
-        return stringToUTF8Array(str, HEAPU8, outPtr, maxBytesToWrite);
-      }
-      function lengthBytesUTF8(str) {
-        var len = 0;
-        for (var i = 0; i < str.length; ++i) {
-          var u = str.charCodeAt(i);
-          if (u >= 55296 && u <= 57343)
-            u = 65536 + ((u & 1023) << 10) | str.charCodeAt(++i) & 1023;
-          if (u <= 127)
-            ++len;
-          else if (u <= 2047)
-            len += 2;
-          else if (u <= 65535)
-            len += 3;
-          else
-            len += 4;
-        }
-        return len;
-      }
-      var UTF16Decoder = typeof TextDecoder !== "undefined" ? new TextDecoder("utf-16le") : void 0;
-      function UTF16ToString(ptr, maxBytesToRead) {
-        var endPtr = ptr;
-        var idx = endPtr >> 1;
-        var maxIdx = idx + maxBytesToRead / 2;
-        while (!(idx >= maxIdx) && HEAPU16[idx])
-          ++idx;
-        endPtr = idx << 1;
-        if (endPtr - ptr > 32 && UTF16Decoder) {
-          return UTF16Decoder.decode(HEAPU8.subarray(ptr, endPtr));
-        } else {
-          var str = "";
-          for (var i = 0; !(i >= maxBytesToRead / 2); ++i) {
-            var codeUnit = HEAP16[ptr + i * 2 >> 1];
-            if (codeUnit == 0)
-              break;
-            str += String.fromCharCode(codeUnit);
-          }
-          return str;
-        }
-      }
-      function stringToUTF16(str, outPtr, maxBytesToWrite) {
-        if (maxBytesToWrite === void 0) {
-          maxBytesToWrite = 2147483647;
-        }
-        if (maxBytesToWrite < 2)
-          return 0;
-        maxBytesToWrite -= 2;
-        var startPtr = outPtr;
-        var numCharsToWrite = maxBytesToWrite < str.length * 2 ? maxBytesToWrite / 2 : str.length;
-        for (var i = 0; i < numCharsToWrite; ++i) {
-          var codeUnit = str.charCodeAt(i);
-          HEAP16[outPtr >> 1] = codeUnit;
-          outPtr += 2;
-        }
-        HEAP16[outPtr >> 1] = 0;
-        return outPtr - startPtr;
-      }
-      function lengthBytesUTF16(str) {
-        return str.length * 2;
-      }
-      function UTF32ToString(ptr, maxBytesToRead) {
-        var i = 0;
-        var str = "";
-        while (!(i >= maxBytesToRead / 4)) {
-          var utf32 = HEAP32[ptr + i * 4 >> 2];
-          if (utf32 == 0)
-            break;
-          ++i;
-          if (utf32 >= 65536) {
-            var ch = utf32 - 65536;
-            str += String.fromCharCode(55296 | ch >> 10, 56320 | ch & 1023);
-          } else {
-            str += String.fromCharCode(utf32);
-          }
-        }
-        return str;
-      }
-      function stringToUTF32(str, outPtr, maxBytesToWrite) {
-        if (maxBytesToWrite === void 0) {
-          maxBytesToWrite = 2147483647;
-        }
-        if (maxBytesToWrite < 4)
-          return 0;
-        var startPtr = outPtr;
-        var endPtr = startPtr + maxBytesToWrite - 4;
-        for (var i = 0; i < str.length; ++i) {
-          var codeUnit = str.charCodeAt(i);
-          if (codeUnit >= 55296 && codeUnit <= 57343) {
-            var trailSurrogate = str.charCodeAt(++i);
-            codeUnit = 65536 + ((codeUnit & 1023) << 10) | trailSurrogate & 1023;
-          }
-          HEAP32[outPtr >> 2] = codeUnit;
-          outPtr += 4;
-          if (outPtr + 4 > endPtr)
-            break;
-        }
-        HEAP32[outPtr >> 2] = 0;
-        return outPtr - startPtr;
-      }
-      function lengthBytesUTF32(str) {
-        var len = 0;
-        for (var i = 0; i < str.length; ++i) {
-          var codeUnit = str.charCodeAt(i);
-          if (codeUnit >= 55296 && codeUnit <= 57343)
-            ++i;
-          len += 4;
-        }
-        return len;
-      }
-      function writeArrayToMemory(array, buffer2) {
-        HEAP8.set(array, buffer2);
-      }
-      function writeAsciiToMemory(str, buffer2, dontAddNull) {
-        for (var i = 0; i < str.length; ++i) {
-          HEAP8[buffer2++ >> 0] = str.charCodeAt(i);
-        }
-        if (!dontAddNull)
-          HEAP8[buffer2 >> 0] = 0;
-      }
-      function alignUp(x, multiple) {
-        if (x % multiple > 0) {
-          x += multiple - x % multiple;
-        }
-        return x;
-      }
-      var buffer, HEAP8, HEAPU8, HEAP16, HEAPU16, HEAP32, HEAPU32, HEAPF32, HEAPF64;
-      function updateGlobalBufferAndViews(buf) {
-        buffer = buf;
-        Module["HEAP8"] = HEAP8 = new Int8Array(buf);
-        Module["HEAP16"] = HEAP16 = new Int16Array(buf);
-        Module["HEAP32"] = HEAP32 = new Int32Array(buf);
-        Module["HEAPU8"] = HEAPU8 = new Uint8Array(buf);
-        Module["HEAPU16"] = HEAPU16 = new Uint16Array(buf);
-        Module["HEAPU32"] = HEAPU32 = new Uint32Array(buf);
-        Module["HEAPF32"] = HEAPF32 = new Float32Array(buf);
-        Module["HEAPF64"] = HEAPF64 = new Float64Array(buf);
-      }
-      var INITIAL_MEMORY = Module["INITIAL_MEMORY"] || 16777216;
-      if (Module["wasmMemory"]) {
-        wasmMemory = Module["wasmMemory"];
-      } else {
-        wasmMemory = new WebAssembly.Memory({initial: INITIAL_MEMORY / 65536, maximum: 2147483648 / 65536});
-      }
-      if (wasmMemory) {
-        buffer = wasmMemory.buffer;
-      }
-      INITIAL_MEMORY = buffer.byteLength;
-      updateGlobalBufferAndViews(buffer);
-      var wasmTable;
-      var __ATPRERUN__ = [];
-      var __ATINIT__ = [];
-      var __ATMAIN__ = [];
-      var __ATPOSTRUN__ = [];
-      function preRun() {
-        if (Module["preRun"]) {
-          if (typeof Module["preRun"] == "function")
-            Module["preRun"] = [Module["preRun"]];
-          while (Module["preRun"].length) {
-            addOnPreRun(Module["preRun"].shift());
-          }
-        }
-        callRuntimeCallbacks(__ATPRERUN__);
-      }
-      function initRuntime() {
-        if (!Module["noFSInit"] && !FS.init.initialized)
-          FS.init();
-        callRuntimeCallbacks(__ATINIT__);
-      }
-      function preMain() {
-        FS.ignorePermissions = false;
-        callRuntimeCallbacks(__ATMAIN__);
-      }
-      function postRun() {
-        if (Module["postRun"]) {
-          if (typeof Module["postRun"] == "function")
-            Module["postRun"] = [Module["postRun"]];
-          while (Module["postRun"].length) {
-            addOnPostRun(Module["postRun"].shift());
-          }
-        }
-        callRuntimeCallbacks(__ATPOSTRUN__);
-      }
-      function addOnPreRun(cb) {
-        __ATPRERUN__.unshift(cb);
-      }
-      function addOnPostRun(cb) {
-        __ATPOSTRUN__.unshift(cb);
-      }
-      var runDependencies = 0;
-      var dependenciesFulfilled = null;
-      function addRunDependency(id) {
-        runDependencies++;
-        if (Module["monitorRunDependencies"]) {
-          Module["monitorRunDependencies"](runDependencies);
-        }
-      }
-      function removeRunDependency(id) {
-        runDependencies--;
-        if (Module["monitorRunDependencies"]) {
-          Module["monitorRunDependencies"](runDependencies);
-        }
-        if (runDependencies == 0) {
-          if (dependenciesFulfilled) {
-            var callback = dependenciesFulfilled;
-            dependenciesFulfilled = null;
-            callback();
-          }
-        }
-      }
-      Module["preloadedImages"] = {};
-      Module["preloadedAudios"] = {};
-      function abort(what) {
-        if (Module["onAbort"]) {
-          Module["onAbort"](what);
-        }
-        what += "";
-        err(what);
-        ABORT = true;
-        what = "abort(" + what + "). Build with -s ASSERTIONS=1 for more info.";
-        var e = new WebAssembly.RuntimeError(what);
-        readyPromiseReject(e);
-        throw e;
-      }
-      function hasPrefix(str, prefix) {
-        return String.prototype.startsWith ? str.startsWith(prefix) : str.indexOf(prefix) === 0;
-      }
-      var dataURIPrefix = "data:application/octet-stream;base64,";
-      function isDataURI(filename) {
-        return hasPrefix(filename, dataURIPrefix);
-      }
-      var fileURIPrefix = "file://";
-      function isFileURI(filename) {
-        return hasPrefix(filename, fileURIPrefix);
-      }
-      var wasmBinaryFile = WasmPath + "web-ifc.wasm";
-      if (!isDataURI(wasmBinaryFile)) {
-        wasmBinaryFile = locateFile(wasmBinaryFile);
-      }
-      function getBinary() {
-        try {
-          if (wasmBinary) {
-            return new Uint8Array(wasmBinary);
-          }
-          if (readBinary) {
-            return readBinary(wasmBinaryFile);
-          } else {
-            throw "both async and sync fetching of the wasm failed";
-          }
-        } catch (err2) {
-          abort(err2);
-        }
-      }
-      function getBinaryPromise() {
-        if (!wasmBinary && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && typeof fetch === "function" && !isFileURI(wasmBinaryFile)) {
-          return fetch(wasmBinaryFile, {credentials: "same-origin"}).then(function(response) {
-            if (!response["ok"]) {
-              throw "failed to load wasm binary file at '" + wasmBinaryFile + "'";
-            }
-            return response["arrayBuffer"]();
-          }).catch(function() {
-            return getBinary();
-          });
-        }
-        return Promise.resolve().then(getBinary);
-      }
-      function createWasm() {
-        var info = {a: asmLibraryArg};
-        function receiveInstance(instance, module2) {
-          var exports3 = instance.exports;
-          Module["asm"] = exports3;
-          wasmTable = Module["asm"]["W"];
-          removeRunDependency();
-        }
-        addRunDependency();
-        function receiveInstantiatedSource(output) {
-          receiveInstance(output["instance"]);
-        }
-        function instantiateArrayBuffer(receiver) {
-          return getBinaryPromise().then(function(binary) {
-            return WebAssembly.instantiate(binary, info);
-          }).then(receiver, function(reason) {
-            err("failed to asynchronously prepare wasm: " + reason);
-            abort(reason);
-          });
-        }
-        function instantiateAsync() {
-          if (!wasmBinary && typeof WebAssembly.instantiateStreaming === "function" && !isDataURI(wasmBinaryFile) && !isFileURI(wasmBinaryFile) && typeof fetch === "function") {
-            return fetch(wasmBinaryFile, {credentials: "same-origin"}).then(function(response) {
-              var result = WebAssembly.instantiateStreaming(response, info);
-              return result.then(receiveInstantiatedSource, function(reason) {
-                err("wasm streaming compile failed: " + reason);
-                err("falling back to ArrayBuffer instantiation");
-                return instantiateArrayBuffer(receiveInstantiatedSource);
-              });
-            });
-          } else {
-            return instantiateArrayBuffer(receiveInstantiatedSource);
-          }
-        }
-        if (Module["instantiateWasm"]) {
-          try {
-            var exports2 = Module["instantiateWasm"](info, receiveInstance);
-            return exports2;
-          } catch (e) {
-            err("Module.instantiateWasm callback failed with error: " + e);
-            return false;
-          }
-        }
-        instantiateAsync().catch(readyPromiseReject);
-        return {};
-      }
-      var tempDouble;
-      var tempI64;
-      function callRuntimeCallbacks(callbacks) {
-        while (callbacks.length > 0) {
-          var callback = callbacks.shift();
-          if (typeof callback == "function") {
-            callback(Module);
-            continue;
-          }
-          var func = callback.func;
-          if (typeof func === "number") {
-            if (callback.arg === void 0) {
-              wasmTable.get(func)();
-            } else {
-              wasmTable.get(func)(callback.arg);
-            }
-          } else {
-            func(callback.arg === void 0 ? null : callback.arg);
-          }
-        }
-      }
-      function dynCallLegacy(sig, ptr, args) {
-        if (args && args.length) {
-          return Module["dynCall_" + sig].apply(null, [ptr].concat(args));
-        }
-        return Module["dynCall_" + sig].call(null, ptr);
-      }
-      function dynCall(sig, ptr, args) {
-        if (sig.indexOf("j") != -1) {
-          return dynCallLegacy(sig, ptr, args);
-        }
-        return wasmTable.get(ptr).apply(null, args);
-      }
-      function ___assert_fail(condition, filename, line, func) {
-        abort("Assertion failed: " + UTF8ToString(condition) + ", at: " + [filename ? UTF8ToString(filename) : "unknown filename", line, func ? UTF8ToString(func) : "unknown function"]);
-      }
-      function setErrNo(value) {
-        HEAP32[___errno_location() >> 2] = value;
-        return value;
-      }
-      var PATH = {splitPath: function(filename) {
-        var splitPathRe = /^(\/?|)([\s\S]*?)((?:\.{1,2}|[^\/]+?|)(\.[^.\/]*|))(?:[\/]*)$/;
-        return splitPathRe.exec(filename).slice(1);
-      }, normalizeArray: function(parts, allowAboveRoot) {
-        var up = 0;
-        for (var i = parts.length - 1; i >= 0; i--) {
-          var last = parts[i];
-          if (last === ".") {
-            parts.splice(i, 1);
-          } else if (last === "..") {
-            parts.splice(i, 1);
-            up++;
-          } else if (up) {
-            parts.splice(i, 1);
-            up--;
-          }
-        }
-        if (allowAboveRoot) {
-          for (; up; up--) {
-            parts.unshift("..");
-          }
-        }
-        return parts;
-      }, normalize: function(path) {
-        var isAbsolute = path.charAt(0) === "/", trailingSlash = path.substr(-1) === "/";
-        path = PATH.normalizeArray(path.split("/").filter(function(p) {
-          return !!p;
-        }), !isAbsolute).join("/");
-        if (!path && !isAbsolute) {
-          path = ".";
-        }
-        if (path && trailingSlash) {
-          path += "/";
-        }
-        return (isAbsolute ? "/" : "") + path;
-      }, dirname: function(path) {
-        var result = PATH.splitPath(path), root = result[0], dir = result[1];
-        if (!root && !dir) {
-          return ".";
-        }
-        if (dir) {
-          dir = dir.substr(0, dir.length - 1);
-        }
-        return root + dir;
-      }, basename: function(path) {
-        if (path === "/")
-          return "/";
-        path = PATH.normalize(path);
-        path = path.replace(/\/$/, "");
-        var lastSlash = path.lastIndexOf("/");
-        if (lastSlash === -1)
-          return path;
-        return path.substr(lastSlash + 1);
-      }, extname: function(path) {
-        return PATH.splitPath(path)[3];
-      }, join: function() {
-        var paths = Array.prototype.slice.call(arguments, 0);
-        return PATH.normalize(paths.join("/"));
-      }, join2: function(l, r) {
-        return PATH.normalize(l + "/" + r);
-      }};
-      function getRandomDevice() {
-        if (typeof crypto === "object" && typeof crypto["getRandomValues"] === "function") {
-          var randomBuffer = new Uint8Array(1);
-          return function() {
-            crypto.getRandomValues(randomBuffer);
-            return randomBuffer[0];
-          };
-        } else if (ENVIRONMENT_IS_NODE) {
-          try {
-            var crypto_module = require("crypto");
-            return function() {
-              return crypto_module["randomBytes"](1)[0];
-            };
-          } catch (e) {
-          }
-        }
-        return function() {
-          abort("randomDevice");
-        };
-      }
-      var PATH_FS = {resolve: function() {
-        var resolvedPath = "", resolvedAbsolute = false;
-        for (var i = arguments.length - 1; i >= -1 && !resolvedAbsolute; i--) {
-          var path = i >= 0 ? arguments[i] : FS.cwd();
-          if (typeof path !== "string") {
-            throw new TypeError("Arguments to path.resolve must be strings");
-          } else if (!path) {
-            return "";
-          }
-          resolvedPath = path + "/" + resolvedPath;
-          resolvedAbsolute = path.charAt(0) === "/";
-        }
-        resolvedPath = PATH.normalizeArray(resolvedPath.split("/").filter(function(p) {
-          return !!p;
-        }), !resolvedAbsolute).join("/");
-        return (resolvedAbsolute ? "/" : "") + resolvedPath || ".";
-      }, relative: function(from, to) {
-        from = PATH_FS.resolve(from).substr(1);
-        to = PATH_FS.resolve(to).substr(1);
-        function trim(arr) {
-          var start = 0;
-          for (; start < arr.length; start++) {
-            if (arr[start] !== "")
-              break;
-          }
-          var end = arr.length - 1;
-          for (; end >= 0; end--) {
-            if (arr[end] !== "")
-              break;
-          }
-          if (start > end)
-            return [];
-          return arr.slice(start, end - start + 1);
-        }
-        var fromParts = trim(from.split("/"));
-        var toParts = trim(to.split("/"));
-        var length = Math.min(fromParts.length, toParts.length);
-        var samePartsLength = length;
-        for (var i = 0; i < length; i++) {
-          if (fromParts[i] !== toParts[i]) {
-            samePartsLength = i;
-            break;
-          }
-        }
-        var outputParts = [];
-        for (var i = samePartsLength; i < fromParts.length; i++) {
-          outputParts.push("..");
-        }
-        outputParts = outputParts.concat(toParts.slice(samePartsLength));
-        return outputParts.join("/");
-      }};
-      var TTY = {ttys: [], init: function() {
-      }, shutdown: function() {
-      }, register: function(dev, ops) {
-        TTY.ttys[dev] = {input: [], output: [], ops};
-        FS.registerDevice(dev, TTY.stream_ops);
-      }, stream_ops: {open: function(stream) {
-        var tty = TTY.ttys[stream.node.rdev];
-        if (!tty) {
-          throw new FS.ErrnoError(43);
-        }
-        stream.tty = tty;
-        stream.seekable = false;
-      }, close: function(stream) {
-        stream.tty.ops.flush(stream.tty);
-      }, flush: function(stream) {
-        stream.tty.ops.flush(stream.tty);
-      }, read: function(stream, buffer2, offset, length, pos) {
-        if (!stream.tty || !stream.tty.ops.get_char) {
-          throw new FS.ErrnoError(60);
-        }
-        var bytesRead = 0;
-        for (var i = 0; i < length; i++) {
-          var result;
-          try {
-            result = stream.tty.ops.get_char(stream.tty);
-          } catch (e) {
-            throw new FS.ErrnoError(29);
-          }
-          if (result === void 0 && bytesRead === 0) {
-            throw new FS.ErrnoError(6);
-          }
-          if (result === null || result === void 0)
-            break;
-          bytesRead++;
-          buffer2[offset + i] = result;
-        }
-        if (bytesRead) {
-          stream.node.timestamp = Date.now();
-        }
-        return bytesRead;
-      }, write: function(stream, buffer2, offset, length, pos) {
-        if (!stream.tty || !stream.tty.ops.put_char) {
-          throw new FS.ErrnoError(60);
-        }
-        try {
-          for (var i = 0; i < length; i++) {
-            stream.tty.ops.put_char(stream.tty, buffer2[offset + i]);
-          }
-        } catch (e) {
-          throw new FS.ErrnoError(29);
-        }
-        if (length) {
-          stream.node.timestamp = Date.now();
-        }
-        return i;
-      }}, default_tty_ops: {get_char: function(tty) {
-        if (!tty.input.length) {
-          var result = null;
-          if (ENVIRONMENT_IS_NODE) {
-            var BUFSIZE = 256;
-            var buf = Buffer.alloc ? Buffer.alloc(BUFSIZE) : new Buffer(BUFSIZE);
-            var bytesRead = 0;
-            try {
-              bytesRead = nodeFS.readSync(process.stdin.fd, buf, 0, BUFSIZE, null);
-            } catch (e) {
-              if (e.toString().indexOf("EOF") != -1)
-                bytesRead = 0;
-              else
-                throw e;
-            }
-            if (bytesRead > 0) {
-              result = buf.slice(0, bytesRead).toString("utf-8");
-            } else {
-              result = null;
-            }
-          } else if (typeof window != "undefined" && typeof window.prompt == "function") {
-            result = window.prompt("Input: ");
-            if (result !== null) {
-              result += "\n";
-            }
-          } else if (typeof readline == "function") {
-            result = readline();
-            if (result !== null) {
-              result += "\n";
-            }
-          }
-          if (!result) {
-            return null;
-          }
-          tty.input = intArrayFromString(result, true);
-        }
-        return tty.input.shift();
-      }, put_char: function(tty, val) {
-        if (val === null || val === 10) {
-          out(UTF8ArrayToString(tty.output, 0));
-          tty.output = [];
-        } else {
-          if (val != 0)
-            tty.output.push(val);
-        }
-      }, flush: function(tty) {
-        if (tty.output && tty.output.length > 0) {
-          out(UTF8ArrayToString(tty.output, 0));
-          tty.output = [];
-        }
-      }}, default_tty1_ops: {put_char: function(tty, val) {
-        if (val === null || val === 10) {
-          err(UTF8ArrayToString(tty.output, 0));
-          tty.output = [];
-        } else {
-          if (val != 0)
-            tty.output.push(val);
-        }
-      }, flush: function(tty) {
-        if (tty.output && tty.output.length > 0) {
-          err(UTF8ArrayToString(tty.output, 0));
-          tty.output = [];
-        }
-      }}};
-      function mmapAlloc(size) {
-        var alignedSize = alignMemory(size, 16384);
-        var ptr = _malloc(alignedSize);
-        while (size < alignedSize)
-          HEAP8[ptr + size++] = 0;
-        return ptr;
-      }
-      var MEMFS = {ops_table: null, mount: function(mount) {
-        return MEMFS.createNode(null, "/", 16384 | 511, 0);
-      }, createNode: function(parent, name2, mode, dev) {
-        if (FS.isBlkdev(mode) || FS.isFIFO(mode)) {
-          throw new FS.ErrnoError(63);
-        }
-        if (!MEMFS.ops_table) {
-          MEMFS.ops_table = {dir: {node: {getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr, lookup: MEMFS.node_ops.lookup, mknod: MEMFS.node_ops.mknod, rename: MEMFS.node_ops.rename, unlink: MEMFS.node_ops.unlink, rmdir: MEMFS.node_ops.rmdir, readdir: MEMFS.node_ops.readdir, symlink: MEMFS.node_ops.symlink}, stream: {llseek: MEMFS.stream_ops.llseek}}, file: {node: {getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr}, stream: {llseek: MEMFS.stream_ops.llseek, read: MEMFS.stream_ops.read, write: MEMFS.stream_ops.write, allocate: MEMFS.stream_ops.allocate, mmap: MEMFS.stream_ops.mmap, msync: MEMFS.stream_ops.msync}}, link: {node: {getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr, readlink: MEMFS.node_ops.readlink}, stream: {}}, chrdev: {node: {getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr}, stream: FS.chrdev_stream_ops}};
-        }
-        var node = FS.createNode(parent, name2, mode, dev);
-        if (FS.isDir(node.mode)) {
-          node.node_ops = MEMFS.ops_table.dir.node;
-          node.stream_ops = MEMFS.ops_table.dir.stream;
-          node.contents = {};
-        } else if (FS.isFile(node.mode)) {
-          node.node_ops = MEMFS.ops_table.file.node;
-          node.stream_ops = MEMFS.ops_table.file.stream;
-          node.usedBytes = 0;
-          node.contents = null;
-        } else if (FS.isLink(node.mode)) {
-          node.node_ops = MEMFS.ops_table.link.node;
-          node.stream_ops = MEMFS.ops_table.link.stream;
-        } else if (FS.isChrdev(node.mode)) {
-          node.node_ops = MEMFS.ops_table.chrdev.node;
-          node.stream_ops = MEMFS.ops_table.chrdev.stream;
-        }
-        node.timestamp = Date.now();
-        if (parent) {
-          parent.contents[name2] = node;
-        }
-        return node;
-      }, getFileDataAsRegularArray: function(node) {
-        if (node.contents && node.contents.subarray) {
-          var arr = [];
-          for (var i = 0; i < node.usedBytes; ++i)
-            arr.push(node.contents[i]);
-          return arr;
-        }
-        return node.contents;
-      }, getFileDataAsTypedArray: function(node) {
-        if (!node.contents)
-          return new Uint8Array(0);
-        if (node.contents.subarray)
-          return node.contents.subarray(0, node.usedBytes);
-        return new Uint8Array(node.contents);
-      }, expandFileStorage: function(node, newCapacity) {
-        var prevCapacity = node.contents ? node.contents.length : 0;
-        if (prevCapacity >= newCapacity)
-          return;
-        var CAPACITY_DOUBLING_MAX = 1024 * 1024;
-        newCapacity = Math.max(newCapacity, prevCapacity * (prevCapacity < CAPACITY_DOUBLING_MAX ? 2 : 1.125) >>> 0);
-        if (prevCapacity != 0)
-          newCapacity = Math.max(newCapacity, 256);
-        var oldContents = node.contents;
-        node.contents = new Uint8Array(newCapacity);
-        if (node.usedBytes > 0)
-          node.contents.set(oldContents.subarray(0, node.usedBytes), 0);
-        return;
-      }, resizeFileStorage: function(node, newSize) {
-        if (node.usedBytes == newSize)
-          return;
-        if (newSize == 0) {
-          node.contents = null;
-          node.usedBytes = 0;
-          return;
-        }
-        if (!node.contents || node.contents.subarray) {
-          var oldContents = node.contents;
-          node.contents = new Uint8Array(newSize);
-          if (oldContents) {
-            node.contents.set(oldContents.subarray(0, Math.min(newSize, node.usedBytes)));
-          }
-          node.usedBytes = newSize;
-          return;
-        }
-        if (!node.contents)
-          node.contents = [];
-        if (node.contents.length > newSize)
-          node.contents.length = newSize;
-        else
-          while (node.contents.length < newSize)
-            node.contents.push(0);
-        node.usedBytes = newSize;
-      }, node_ops: {getattr: function(node) {
-        var attr = {};
-        attr.dev = FS.isChrdev(node.mode) ? node.id : 1;
-        attr.ino = node.id;
-        attr.mode = node.mode;
-        attr.nlink = 1;
-        attr.uid = 0;
-        attr.gid = 0;
-        attr.rdev = node.rdev;
-        if (FS.isDir(node.mode)) {
-          attr.size = 4096;
-        } else if (FS.isFile(node.mode)) {
-          attr.size = node.usedBytes;
-        } else if (FS.isLink(node.mode)) {
-          attr.size = node.link.length;
-        } else {
-          attr.size = 0;
-        }
-        attr.atime = new Date(node.timestamp);
-        attr.mtime = new Date(node.timestamp);
-        attr.ctime = new Date(node.timestamp);
-        attr.blksize = 4096;
-        attr.blocks = Math.ceil(attr.size / attr.blksize);
-        return attr;
-      }, setattr: function(node, attr) {
-        if (attr.mode !== void 0) {
-          node.mode = attr.mode;
-        }
-        if (attr.timestamp !== void 0) {
-          node.timestamp = attr.timestamp;
-        }
-        if (attr.size !== void 0) {
-          MEMFS.resizeFileStorage(node, attr.size);
-        }
-      }, lookup: function(parent, name2) {
-        throw FS.genericErrors[44];
-      }, mknod: function(parent, name2, mode, dev) {
-        return MEMFS.createNode(parent, name2, mode, dev);
-      }, rename: function(old_node, new_dir, new_name) {
-        if (FS.isDir(old_node.mode)) {
-          var new_node;
-          try {
-            new_node = FS.lookupNode(new_dir, new_name);
-          } catch (e) {
-          }
-          if (new_node) {
-            for (var i in new_node.contents) {
-              throw new FS.ErrnoError(55);
-            }
-          }
-        }
-        delete old_node.parent.contents[old_node.name];
-        old_node.name = new_name;
-        new_dir.contents[new_name] = old_node;
-        old_node.parent = new_dir;
-      }, unlink: function(parent, name2) {
-        delete parent.contents[name2];
-      }, rmdir: function(parent, name2) {
-        var node = FS.lookupNode(parent, name2);
-        for (var i in node.contents) {
-          throw new FS.ErrnoError(55);
-        }
-        delete parent.contents[name2];
-      }, readdir: function(node) {
-        var entries = [".", ".."];
-        for (var key2 in node.contents) {
-          if (!node.contents.hasOwnProperty(key2)) {
-            continue;
-          }
-          entries.push(key2);
-        }
-        return entries;
-      }, symlink: function(parent, newname, oldpath) {
-        var node = MEMFS.createNode(parent, newname, 511 | 40960, 0);
-        node.link = oldpath;
-        return node;
-      }, readlink: function(node) {
-        if (!FS.isLink(node.mode)) {
-          throw new FS.ErrnoError(28);
-        }
-        return node.link;
-      }}, stream_ops: {read: function(stream, buffer2, offset, length, position) {
-        var contents = stream.node.contents;
-        if (position >= stream.node.usedBytes)
-          return 0;
-        var size = Math.min(stream.node.usedBytes - position, length);
-        if (size > 8 && contents.subarray) {
-          buffer2.set(contents.subarray(position, position + size), offset);
-        } else {
-          for (var i = 0; i < size; i++)
-            buffer2[offset + i] = contents[position + i];
-        }
-        return size;
-      }, write: function(stream, buffer2, offset, length, position, canOwn) {
-        if (buffer2.buffer === HEAP8.buffer) {
-          canOwn = false;
-        }
-        if (!length)
-          return 0;
-        var node = stream.node;
-        node.timestamp = Date.now();
-        if (buffer2.subarray && (!node.contents || node.contents.subarray)) {
-          if (canOwn) {
-            node.contents = buffer2.subarray(offset, offset + length);
-            node.usedBytes = length;
-            return length;
-          } else if (node.usedBytes === 0 && position === 0) {
-            node.contents = buffer2.slice(offset, offset + length);
-            node.usedBytes = length;
-            return length;
-          } else if (position + length <= node.usedBytes) {
-            node.contents.set(buffer2.subarray(offset, offset + length), position);
-            return length;
-          }
-        }
-        MEMFS.expandFileStorage(node, position + length);
-        if (node.contents.subarray && buffer2.subarray) {
-          node.contents.set(buffer2.subarray(offset, offset + length), position);
-        } else {
-          for (var i = 0; i < length; i++) {
-            node.contents[position + i] = buffer2[offset + i];
-          }
-        }
-        node.usedBytes = Math.max(node.usedBytes, position + length);
-        return length;
-      }, llseek: function(stream, offset, whence) {
-        var position = offset;
-        if (whence === 1) {
-          position += stream.position;
-        } else if (whence === 2) {
-          if (FS.isFile(stream.node.mode)) {
-            position += stream.node.usedBytes;
-          }
-        }
-        if (position < 0) {
-          throw new FS.ErrnoError(28);
-        }
-        return position;
-      }, allocate: function(stream, offset, length) {
-        MEMFS.expandFileStorage(stream.node, offset + length);
-        stream.node.usedBytes = Math.max(stream.node.usedBytes, offset + length);
-      }, mmap: function(stream, address, length, position, prot, flags) {
-        assert(address === 0);
-        if (!FS.isFile(stream.node.mode)) {
-          throw new FS.ErrnoError(43);
-        }
-        var ptr;
-        var allocated;
-        var contents = stream.node.contents;
-        if (!(flags & 2) && contents.buffer === buffer) {
-          allocated = false;
-          ptr = contents.byteOffset;
-        } else {
-          if (position > 0 || position + length < contents.length) {
-            if (contents.subarray) {
-              contents = contents.subarray(position, position + length);
-            } else {
-              contents = Array.prototype.slice.call(contents, position, position + length);
-            }
-          }
-          allocated = true;
-          ptr = mmapAlloc(length);
-          if (!ptr) {
-            throw new FS.ErrnoError(48);
-          }
-          HEAP8.set(contents, ptr);
-        }
-        return {ptr, allocated};
-      }, msync: function(stream, buffer2, offset, length, mmapFlags) {
-        if (!FS.isFile(stream.node.mode)) {
-          throw new FS.ErrnoError(43);
-        }
-        if (mmapFlags & 2) {
-          return 0;
-        }
-        MEMFS.stream_ops.write(stream, buffer2, 0, length, offset, false);
-        return 0;
-      }}};
-      var FS = {root: null, mounts: [], devices: {}, streams: [], nextInode: 1, nameTable: null, currentPath: "/", initialized: false, ignorePermissions: true, trackingDelegate: {}, tracking: {openFlags: {READ: 1, WRITE: 2}}, ErrnoError: null, genericErrors: {}, filesystems: null, syncFSRequests: 0, lookupPath: function(path, opts) {
-        path = PATH_FS.resolve(FS.cwd(), path);
-        opts = opts || {};
-        if (!path)
-          return {path: "", node: null};
-        var defaults = {follow_mount: true, recurse_count: 0};
-        for (var key2 in defaults) {
-          if (opts[key2] === void 0) {
-            opts[key2] = defaults[key2];
-          }
-        }
-        if (opts.recurse_count > 8) {
-          throw new FS.ErrnoError(32);
-        }
-        var parts = PATH.normalizeArray(path.split("/").filter(function(p) {
-          return !!p;
-        }), false);
-        var current = FS.root;
-        var current_path = "/";
-        for (var i = 0; i < parts.length; i++) {
-          var islast = i === parts.length - 1;
-          if (islast && opts.parent) {
-            break;
-          }
-          current = FS.lookupNode(current, parts[i]);
-          current_path = PATH.join2(current_path, parts[i]);
-          if (FS.isMountpoint(current)) {
-            if (!islast || islast && opts.follow_mount) {
-              current = current.mounted.root;
-            }
-          }
-          if (!islast || opts.follow) {
-            var count = 0;
-            while (FS.isLink(current.mode)) {
-              var link = FS.readlink(current_path);
-              current_path = PATH_FS.resolve(PATH.dirname(current_path), link);
-              var lookup = FS.lookupPath(current_path, {recurse_count: opts.recurse_count});
-              current = lookup.node;
-              if (count++ > 40) {
-                throw new FS.ErrnoError(32);
+            var str = "";
+            while (idx < endPtr) {
+              var u0 = heap[idx++ >>> 0];
+              if (!(u0 & 128)) {
+                str += String.fromCharCode(u0);
+                continue;
+              }
+              var u1 = heap[idx++ >>> 0] & 63;
+              if ((u0 & 224) == 192) {
+                str += String.fromCharCode((u0 & 31) << 6 | u1);
+                continue;
+              }
+              var u2 = heap[idx++ >>> 0] & 63;
+              if ((u0 & 240) == 224) {
+                u0 = (u0 & 15) << 12 | u1 << 6 | u2;
+              } else {
+                u0 = (u0 & 7) << 18 | u1 << 12 | u2 << 6 | heap[idx++ >>> 0] & 63;
+              }
+              if (u0 < 65536) {
+                str += String.fromCharCode(u0);
+              } else {
+                var ch = u0 - 65536;
+                str += String.fromCharCode(55296 | ch >> 10, 56320 | ch & 1023);
               }
             }
           }
+          return str;
         }
-        return {path: current_path, node: current};
-      }, getPath: function(node) {
-        var path;
-        while (true) {
-          if (FS.isRoot(node)) {
-            var mount = node.mount.mountpoint;
-            if (!path)
-              return mount;
-            return mount[mount.length - 1] !== "/" ? mount + "/" + path : mount + path;
+        function UTF8ToString(ptr, maxBytesToRead) {
+          ptr >>>= 0;
+          return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead) : "";
+        }
+        function stringToUTF8Array(str, heap, outIdx, maxBytesToWrite) {
+          outIdx >>>= 0;
+          if (!(maxBytesToWrite > 0))
+            return 0;
+          var startIdx = outIdx;
+          var endIdx = outIdx + maxBytesToWrite - 1;
+          for (var i = 0; i < str.length; ++i) {
+            var u = str.charCodeAt(i);
+            if (u >= 55296 && u <= 57343) {
+              var u1 = str.charCodeAt(++i);
+              u = 65536 + ((u & 1023) << 10) | u1 & 1023;
+            }
+            if (u <= 127) {
+              if (outIdx >= endIdx)
+                break;
+              heap[outIdx++ >>> 0] = u;
+            } else if (u <= 2047) {
+              if (outIdx + 1 >= endIdx)
+                break;
+              heap[outIdx++ >>> 0] = 192 | u >> 6;
+              heap[outIdx++ >>> 0] = 128 | u & 63;
+            } else if (u <= 65535) {
+              if (outIdx + 2 >= endIdx)
+                break;
+              heap[outIdx++ >>> 0] = 224 | u >> 12;
+              heap[outIdx++ >>> 0] = 128 | u >> 6 & 63;
+              heap[outIdx++ >>> 0] = 128 | u & 63;
+            } else {
+              if (outIdx + 3 >= endIdx)
+                break;
+              heap[outIdx++ >>> 0] = 240 | u >> 18;
+              heap[outIdx++ >>> 0] = 128 | u >> 12 & 63;
+              heap[outIdx++ >>> 0] = 128 | u >> 6 & 63;
+              heap[outIdx++ >>> 0] = 128 | u & 63;
+            }
           }
-          path = path ? node.name + "/" + path : node.name;
-          node = node.parent;
+          heap[outIdx >>> 0] = 0;
+          return outIdx - startIdx;
         }
-      }, hashName: function(parentid, name2) {
-        var hash = 0;
-        for (var i = 0; i < name2.length; i++) {
-          hash = (hash << 5) - hash + name2.charCodeAt(i) | 0;
+        function stringToUTF8(str, outPtr, maxBytesToWrite) {
+          return stringToUTF8Array(str, HEAPU8, outPtr, maxBytesToWrite);
         }
-        return (parentid + hash >>> 0) % FS.nameTable.length;
-      }, hashAddNode: function(node) {
-        var hash = FS.hashName(node.parent.id, node.name);
-        node.name_next = FS.nameTable[hash];
-        FS.nameTable[hash] = node;
-      }, hashRemoveNode: function(node) {
-        var hash = FS.hashName(node.parent.id, node.name);
-        if (FS.nameTable[hash] === node) {
-          FS.nameTable[hash] = node.name_next;
+        function lengthBytesUTF8(str) {
+          var len = 0;
+          for (var i = 0; i < str.length; ++i) {
+            var u = str.charCodeAt(i);
+            if (u >= 55296 && u <= 57343)
+              u = 65536 + ((u & 1023) << 10) | str.charCodeAt(++i) & 1023;
+            if (u <= 127)
+              ++len;
+            else if (u <= 2047)
+              len += 2;
+            else if (u <= 65535)
+              len += 3;
+            else
+              len += 4;
+          }
+          return len;
+        }
+        var UTF16Decoder = typeof TextDecoder !== "undefined" ? new TextDecoder("utf-16le") : void 0;
+        function UTF16ToString(ptr, maxBytesToRead) {
+          var endPtr = ptr;
+          var idx = endPtr >> 1;
+          var maxIdx = idx + maxBytesToRead / 2;
+          while (!(idx >= maxIdx) && HEAPU16[idx >>> 0])
+            ++idx;
+          endPtr = idx << 1;
+          if (endPtr - ptr > 32 && UTF16Decoder) {
+            return UTF16Decoder.decode(HEAPU8.subarray(ptr >>> 0, endPtr >>> 0));
+          } else {
+            var str = "";
+            for (var i = 0; !(i >= maxBytesToRead / 2); ++i) {
+              var codeUnit = HEAP16[ptr + i * 2 >>> 1];
+              if (codeUnit == 0)
+                break;
+              str += String.fromCharCode(codeUnit);
+            }
+            return str;
+          }
+        }
+        function stringToUTF16(str, outPtr, maxBytesToWrite) {
+          if (maxBytesToWrite === void 0) {
+            maxBytesToWrite = 2147483647;
+          }
+          if (maxBytesToWrite < 2)
+            return 0;
+          maxBytesToWrite -= 2;
+          var startPtr = outPtr;
+          var numCharsToWrite = maxBytesToWrite < str.length * 2 ? maxBytesToWrite / 2 : str.length;
+          for (var i = 0; i < numCharsToWrite; ++i) {
+            var codeUnit = str.charCodeAt(i);
+            HEAP16[outPtr >>> 1] = codeUnit;
+            outPtr += 2;
+          }
+          HEAP16[outPtr >>> 1] = 0;
+          return outPtr - startPtr;
+        }
+        function lengthBytesUTF16(str) {
+          return str.length * 2;
+        }
+        function UTF32ToString(ptr, maxBytesToRead) {
+          var i = 0;
+          var str = "";
+          while (!(i >= maxBytesToRead / 4)) {
+            var utf32 = HEAP32[ptr + i * 4 >>> 2];
+            if (utf32 == 0)
+              break;
+            ++i;
+            if (utf32 >= 65536) {
+              var ch = utf32 - 65536;
+              str += String.fromCharCode(55296 | ch >> 10, 56320 | ch & 1023);
+            } else {
+              str += String.fromCharCode(utf32);
+            }
+          }
+          return str;
+        }
+        function stringToUTF32(str, outPtr, maxBytesToWrite) {
+          outPtr >>>= 0;
+          if (maxBytesToWrite === void 0) {
+            maxBytesToWrite = 2147483647;
+          }
+          if (maxBytesToWrite < 4)
+            return 0;
+          var startPtr = outPtr;
+          var endPtr = startPtr + maxBytesToWrite - 4;
+          for (var i = 0; i < str.length; ++i) {
+            var codeUnit = str.charCodeAt(i);
+            if (codeUnit >= 55296 && codeUnit <= 57343) {
+              var trailSurrogate = str.charCodeAt(++i);
+              codeUnit = 65536 + ((codeUnit & 1023) << 10) | trailSurrogate & 1023;
+            }
+            HEAP32[outPtr >>> 2] = codeUnit;
+            outPtr += 4;
+            if (outPtr + 4 > endPtr)
+              break;
+          }
+          HEAP32[outPtr >>> 2] = 0;
+          return outPtr - startPtr;
+        }
+        function lengthBytesUTF32(str) {
+          var len = 0;
+          for (var i = 0; i < str.length; ++i) {
+            var codeUnit = str.charCodeAt(i);
+            if (codeUnit >= 55296 && codeUnit <= 57343)
+              ++i;
+            len += 4;
+          }
+          return len;
+        }
+        function writeArrayToMemory(array, buffer2) {
+          HEAP8.set(array, buffer2 >>> 0);
+        }
+        function writeAsciiToMemory(str, buffer2, dontAddNull) {
+          for (var i = 0; i < str.length; ++i) {
+            HEAP8[buffer2++ >>> 0] = str.charCodeAt(i);
+          }
+          if (!dontAddNull)
+            HEAP8[buffer2 >>> 0] = 0;
+        }
+        function alignUp(x, multiple) {
+          if (x % multiple > 0) {
+            x += multiple - x % multiple;
+          }
+          return x;
+        }
+        var buffer, HEAP8, HEAPU8, HEAP16, HEAPU16, HEAP32, HEAPU32, HEAPF32, HEAPF64;
+        function updateGlobalBufferAndViews(buf) {
+          buffer = buf;
+          Module["HEAP8"] = HEAP8 = new Int8Array(buf);
+          Module["HEAP16"] = HEAP16 = new Int16Array(buf);
+          Module["HEAP32"] = HEAP32 = new Int32Array(buf);
+          Module["HEAPU8"] = HEAPU8 = new Uint8Array(buf);
+          Module["HEAPU16"] = HEAPU16 = new Uint16Array(buf);
+          Module["HEAPU32"] = HEAPU32 = new Uint32Array(buf);
+          Module["HEAPF32"] = HEAPF32 = new Float32Array(buf);
+          Module["HEAPF64"] = HEAPF64 = new Float64Array(buf);
+        }
+        var INITIAL_MEMORY = Module["INITIAL_MEMORY"] || 16777216;
+        if (Module["wasmMemory"]) {
+          wasmMemory = Module["wasmMemory"];
         } else {
-          var current = FS.nameTable[hash];
-          while (current) {
-            if (current.name_next === node) {
-              current.name_next = node.name_next;
+          wasmMemory = new WebAssembly.Memory({ "initial": INITIAL_MEMORY / 65536, "maximum": 4294967296 / 65536 });
+        }
+        if (wasmMemory) {
+          buffer = wasmMemory.buffer;
+        }
+        INITIAL_MEMORY = buffer.byteLength;
+        updateGlobalBufferAndViews(buffer);
+        var wasmTable;
+        var __ATPRERUN__ = [];
+        var __ATINIT__ = [];
+        var __ATMAIN__ = [];
+        var __ATPOSTRUN__ = [];
+        function preRun() {
+          if (Module["preRun"]) {
+            if (typeof Module["preRun"] == "function")
+              Module["preRun"] = [Module["preRun"]];
+            while (Module["preRun"].length) {
+              addOnPreRun(Module["preRun"].shift());
+            }
+          }
+          callRuntimeCallbacks(__ATPRERUN__);
+        }
+        function initRuntime() {
+          if (!Module["noFSInit"] && !FS.init.initialized)
+            FS.init();
+          callRuntimeCallbacks(__ATINIT__);
+        }
+        function preMain() {
+          FS.ignorePermissions = false;
+          callRuntimeCallbacks(__ATMAIN__);
+        }
+        function postRun() {
+          if (Module["postRun"]) {
+            if (typeof Module["postRun"] == "function")
+              Module["postRun"] = [Module["postRun"]];
+            while (Module["postRun"].length) {
+              addOnPostRun(Module["postRun"].shift());
+            }
+          }
+          callRuntimeCallbacks(__ATPOSTRUN__);
+        }
+        function addOnPreRun(cb) {
+          __ATPRERUN__.unshift(cb);
+        }
+        function addOnPostRun(cb) {
+          __ATPOSTRUN__.unshift(cb);
+        }
+        var runDependencies = 0;
+        var dependenciesFulfilled = null;
+        function addRunDependency(id) {
+          runDependencies++;
+          if (Module["monitorRunDependencies"]) {
+            Module["monitorRunDependencies"](runDependencies);
+          }
+        }
+        function removeRunDependency(id) {
+          runDependencies--;
+          if (Module["monitorRunDependencies"]) {
+            Module["monitorRunDependencies"](runDependencies);
+          }
+          if (runDependencies == 0) {
+            if (dependenciesFulfilled) {
+              var callback = dependenciesFulfilled;
+              dependenciesFulfilled = null;
+              callback();
+            }
+          }
+        }
+        Module["preloadedImages"] = {};
+        Module["preloadedAudios"] = {};
+        function abort(what) {
+          if (Module["onAbort"]) {
+            Module["onAbort"](what);
+          }
+          what += "";
+          err(what);
+          ABORT = true;
+          what = "abort(" + what + "). Build with -s ASSERTIONS=1 for more info.";
+          var e = new WebAssembly.RuntimeError(what);
+          readyPromiseReject(e);
+          throw e;
+        }
+        function hasPrefix(str, prefix) {
+          return String.prototype.startsWith ? str.startsWith(prefix) : str.indexOf(prefix) === 0;
+        }
+        var dataURIPrefix = "data:application/octet-stream;base64,";
+        function isDataURI(filename) {
+          return hasPrefix(filename, dataURIPrefix);
+        }
+        var fileURIPrefix = "file://";
+        function isFileURI(filename) {
+          return hasPrefix(filename, fileURIPrefix);
+        }
+        var wasmBinaryFile = "web-ifc.wasm";
+        if (!isDataURI(wasmBinaryFile)) {
+          wasmBinaryFile = locateFile(wasmBinaryFile);
+        }
+        function getBinary() {
+          try {
+            if (wasmBinary) {
+              return new Uint8Array(wasmBinary);
+            }
+            if (readBinary) {
+              return readBinary(wasmBinaryFile);
+            } else {
+              throw "both async and sync fetching of the wasm failed";
+            }
+          } catch (err2) {
+            abort(err2);
+          }
+        }
+        function getBinaryPromise() {
+          if (!wasmBinary && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && typeof fetch === "function" && !isFileURI(wasmBinaryFile)) {
+            return fetch(wasmBinaryFile, { credentials: "same-origin" }).then(function(response) {
+              if (!response["ok"]) {
+                throw "failed to load wasm binary file at '" + wasmBinaryFile + "'";
+              }
+              return response["arrayBuffer"]();
+            }).catch(function() {
+              return getBinary();
+            });
+          }
+          return Promise.resolve().then(getBinary);
+        }
+        function createWasm() {
+          var info = { "a": asmLibraryArg };
+          function receiveInstance(instance, module2) {
+            var exports3 = instance.exports;
+            Module["asm"] = exports3;
+            wasmTable = Module["asm"]["Z"];
+            removeRunDependency();
+          }
+          addRunDependency();
+          function receiveInstantiatedSource(output) {
+            receiveInstance(output["instance"]);
+          }
+          function instantiateArrayBuffer(receiver) {
+            return getBinaryPromise().then(function(binary) {
+              return WebAssembly.instantiate(binary, info);
+            }).then(receiver, function(reason) {
+              err("failed to asynchronously prepare wasm: " + reason);
+              abort(reason);
+            });
+          }
+          function instantiateAsync() {
+            if (!wasmBinary && typeof WebAssembly.instantiateStreaming === "function" && !isDataURI(wasmBinaryFile) && !isFileURI(wasmBinaryFile) && typeof fetch === "function") {
+              return fetch(wasmBinaryFile, { credentials: "same-origin" }).then(function(response) {
+                var result = WebAssembly.instantiateStreaming(response, info);
+                return result.then(receiveInstantiatedSource, function(reason) {
+                  err("wasm streaming compile failed: " + reason);
+                  err("falling back to ArrayBuffer instantiation");
+                  return instantiateArrayBuffer(receiveInstantiatedSource);
+                });
+              });
+            } else {
+              return instantiateArrayBuffer(receiveInstantiatedSource);
+            }
+          }
+          if (Module["instantiateWasm"]) {
+            try {
+              var exports2 = Module["instantiateWasm"](info, receiveInstance);
+              return exports2;
+            } catch (e) {
+              err("Module.instantiateWasm callback failed with error: " + e);
+              return false;
+            }
+          }
+          instantiateAsync().catch(readyPromiseReject);
+          return {};
+        }
+        var tempDouble;
+        var tempI64;
+        function callRuntimeCallbacks(callbacks) {
+          while (callbacks.length > 0) {
+            var callback = callbacks.shift();
+            if (typeof callback == "function") {
+              callback(Module);
+              continue;
+            }
+            var func = callback.func;
+            if (typeof func === "number") {
+              if (callback.arg === void 0) {
+                wasmTable.get(func)();
+              } else {
+                wasmTable.get(func)(callback.arg);
+              }
+            } else {
+              func(callback.arg === void 0 ? null : callback.arg);
+            }
+          }
+        }
+        function dynCallLegacy(sig, ptr, args) {
+          if (args && args.length) {
+            return Module["dynCall_" + sig].apply(null, [ptr].concat(args));
+          }
+          return Module["dynCall_" + sig].call(null, ptr);
+        }
+        function dynCall(sig, ptr, args) {
+          if (sig.indexOf("j") != -1) {
+            return dynCallLegacy(sig, ptr, args);
+          }
+          return wasmTable.get(ptr).apply(null, args);
+        }
+        function ___assert_fail(condition, filename, line, func) {
+          abort("Assertion failed: " + UTF8ToString(condition) + ", at: " + [filename ? UTF8ToString(filename) : "unknown filename", line, func ? UTF8ToString(func) : "unknown function"]);
+        }
+        function setErrNo(value) {
+          HEAP32[___errno_location() >>> 2] = value;
+          return value;
+        }
+        var PATH = { splitPath: function(filename) {
+          var splitPathRe = /^(\/?|)([\s\S]*?)((?:\.{1,2}|[^\/]+?|)(\.[^.\/]*|))(?:[\/]*)$/;
+          return splitPathRe.exec(filename).slice(1);
+        }, normalizeArray: function(parts, allowAboveRoot) {
+          var up = 0;
+          for (var i = parts.length - 1; i >= 0; i--) {
+            var last = parts[i];
+            if (last === ".") {
+              parts.splice(i, 1);
+            } else if (last === "..") {
+              parts.splice(i, 1);
+              up++;
+            } else if (up) {
+              parts.splice(i, 1);
+              up--;
+            }
+          }
+          if (allowAboveRoot) {
+            for (; up; up--) {
+              parts.unshift("..");
+            }
+          }
+          return parts;
+        }, normalize: function(path) {
+          var isAbsolute = path.charAt(0) === "/", trailingSlash = path.substr(-1) === "/";
+          path = PATH.normalizeArray(path.split("/").filter(function(p) {
+            return !!p;
+          }), !isAbsolute).join("/");
+          if (!path && !isAbsolute) {
+            path = ".";
+          }
+          if (path && trailingSlash) {
+            path += "/";
+          }
+          return (isAbsolute ? "/" : "") + path;
+        }, dirname: function(path) {
+          var result = PATH.splitPath(path), root = result[0], dir = result[1];
+          if (!root && !dir) {
+            return ".";
+          }
+          if (dir) {
+            dir = dir.substr(0, dir.length - 1);
+          }
+          return root + dir;
+        }, basename: function(path) {
+          if (path === "/")
+            return "/";
+          path = PATH.normalize(path);
+          path = path.replace(/\/$/, "");
+          var lastSlash = path.lastIndexOf("/");
+          if (lastSlash === -1)
+            return path;
+          return path.substr(lastSlash + 1);
+        }, extname: function(path) {
+          return PATH.splitPath(path)[3];
+        }, join: function() {
+          var paths = Array.prototype.slice.call(arguments, 0);
+          return PATH.normalize(paths.join("/"));
+        }, join2: function(l, r) {
+          return PATH.normalize(l + "/" + r);
+        } };
+        function getRandomDevice() {
+          if (typeof crypto === "object" && typeof crypto["getRandomValues"] === "function") {
+            var randomBuffer = new Uint8Array(1);
+            return function() {
+              crypto.getRandomValues(randomBuffer);
+              return randomBuffer[0];
+            };
+          } else if (ENVIRONMENT_IS_NODE) {
+            try {
+              var crypto_module = require_crypto();
+              return function() {
+                return crypto_module["randomBytes"](1)[0];
+              };
+            } catch (e) {
+            }
+          }
+          return function() {
+            abort("randomDevice");
+          };
+        }
+        var PATH_FS = { resolve: function() {
+          var resolvedPath = "", resolvedAbsolute = false;
+          for (var i = arguments.length - 1; i >= -1 && !resolvedAbsolute; i--) {
+            var path = i >= 0 ? arguments[i] : FS.cwd();
+            if (typeof path !== "string") {
+              throw new TypeError("Arguments to path.resolve must be strings");
+            } else if (!path) {
+              return "";
+            }
+            resolvedPath = path + "/" + resolvedPath;
+            resolvedAbsolute = path.charAt(0) === "/";
+          }
+          resolvedPath = PATH.normalizeArray(resolvedPath.split("/").filter(function(p) {
+            return !!p;
+          }), !resolvedAbsolute).join("/");
+          return (resolvedAbsolute ? "/" : "") + resolvedPath || ".";
+        }, relative: function(from, to) {
+          from = PATH_FS.resolve(from).substr(1);
+          to = PATH_FS.resolve(to).substr(1);
+          function trim(arr) {
+            var start = 0;
+            for (; start < arr.length; start++) {
+              if (arr[start] !== "")
+                break;
+            }
+            var end = arr.length - 1;
+            for (; end >= 0; end--) {
+              if (arr[end] !== "")
+                break;
+            }
+            if (start > end)
+              return [];
+            return arr.slice(start, end - start + 1);
+          }
+          var fromParts = trim(from.split("/"));
+          var toParts = trim(to.split("/"));
+          var length = Math.min(fromParts.length, toParts.length);
+          var samePartsLength = length;
+          for (var i = 0; i < length; i++) {
+            if (fromParts[i] !== toParts[i]) {
+              samePartsLength = i;
               break;
             }
-            current = current.name_next;
           }
-        }
-      }, lookupNode: function(parent, name2) {
-        var errCode = FS.mayLookup(parent);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode, parent);
-        }
-        var hash = FS.hashName(parent.id, name2);
-        for (var node = FS.nameTable[hash]; node; node = node.name_next) {
-          var nodeName = node.name;
-          if (node.parent.id === parent.id && nodeName === name2) {
-            return node;
+          var outputParts = [];
+          for (var i = samePartsLength; i < fromParts.length; i++) {
+            outputParts.push("..");
           }
-        }
-        return FS.lookup(parent, name2);
-      }, createNode: function(parent, name2, mode, rdev) {
-        var node = new FS.FSNode(parent, name2, mode, rdev);
-        FS.hashAddNode(node);
-        return node;
-      }, destroyNode: function(node) {
-        FS.hashRemoveNode(node);
-      }, isRoot: function(node) {
-        return node === node.parent;
-      }, isMountpoint: function(node) {
-        return !!node.mounted;
-      }, isFile: function(mode) {
-        return (mode & 61440) === 32768;
-      }, isDir: function(mode) {
-        return (mode & 61440) === 16384;
-      }, isLink: function(mode) {
-        return (mode & 61440) === 40960;
-      }, isChrdev: function(mode) {
-        return (mode & 61440) === 8192;
-      }, isBlkdev: function(mode) {
-        return (mode & 61440) === 24576;
-      }, isFIFO: function(mode) {
-        return (mode & 61440) === 4096;
-      }, isSocket: function(mode) {
-        return (mode & 49152) === 49152;
-      }, flagModes: {r: 0, "r+": 2, w: 577, "w+": 578, a: 1089, "a+": 1090}, modeStringToFlags: function(str) {
-        var flags = FS.flagModes[str];
-        if (typeof flags === "undefined") {
-          throw new Error("Unknown file open mode: " + str);
-        }
-        return flags;
-      }, flagsToPermissionString: function(flag) {
-        var perms = ["r", "w", "rw"][flag & 3];
-        if (flag & 512) {
-          perms += "w";
-        }
-        return perms;
-      }, nodePermissions: function(node, perms) {
-        if (FS.ignorePermissions) {
-          return 0;
-        }
-        if (perms.indexOf("r") !== -1 && !(node.mode & 292)) {
-          return 2;
-        } else if (perms.indexOf("w") !== -1 && !(node.mode & 146)) {
-          return 2;
-        } else if (perms.indexOf("x") !== -1 && !(node.mode & 73)) {
-          return 2;
-        }
-        return 0;
-      }, mayLookup: function(dir) {
-        var errCode = FS.nodePermissions(dir, "x");
-        if (errCode)
-          return errCode;
-        if (!dir.node_ops.lookup)
-          return 2;
-        return 0;
-      }, mayCreate: function(dir, name2) {
-        try {
-          var node = FS.lookupNode(dir, name2);
-          return 20;
-        } catch (e) {
-        }
-        return FS.nodePermissions(dir, "wx");
-      }, mayDelete: function(dir, name2, isdir) {
-        var node;
-        try {
-          node = FS.lookupNode(dir, name2);
-        } catch (e) {
-          return e.errno;
-        }
-        var errCode = FS.nodePermissions(dir, "wx");
-        if (errCode) {
-          return errCode;
-        }
-        if (isdir) {
-          if (!FS.isDir(node.mode)) {
-            return 54;
+          outputParts = outputParts.concat(toParts.slice(samePartsLength));
+          return outputParts.join("/");
+        } };
+        var TTY = { ttys: [], init: function() {
+        }, shutdown: function() {
+        }, register: function(dev, ops) {
+          TTY.ttys[dev] = { input: [], output: [], ops };
+          FS.registerDevice(dev, TTY.stream_ops);
+        }, stream_ops: { open: function(stream) {
+          var tty = TTY.ttys[stream.node.rdev];
+          if (!tty) {
+            throw new FS.ErrnoError(43);
           }
-          if (FS.isRoot(node) || FS.getPath(node) === FS.cwd()) {
-            return 10;
-          }
-        } else {
-          if (FS.isDir(node.mode)) {
-            return 31;
-          }
-        }
-        return 0;
-      }, mayOpen: function(node, flags) {
-        if (!node) {
-          return 44;
-        }
-        if (FS.isLink(node.mode)) {
-          return 32;
-        } else if (FS.isDir(node.mode)) {
-          if (FS.flagsToPermissionString(flags) !== "r" || flags & 512) {
-            return 31;
-          }
-        }
-        return FS.nodePermissions(node, FS.flagsToPermissionString(flags));
-      }, MAX_OPEN_FDS: 4096, nextfd: function(fd_start, fd_end) {
-        fd_start = fd_start || 0;
-        fd_end = fd_end || FS.MAX_OPEN_FDS;
-        for (var fd = fd_start; fd <= fd_end; fd++) {
-          if (!FS.streams[fd]) {
-            return fd;
-          }
-        }
-        throw new FS.ErrnoError(33);
-      }, getStream: function(fd) {
-        return FS.streams[fd];
-      }, createStream: function(stream, fd_start, fd_end) {
-        if (!FS.FSStream) {
-          FS.FSStream = function() {
-          };
-          FS.FSStream.prototype = {object: {get: function() {
-            return this.node;
-          }, set: function(val) {
-            this.node = val;
-          }}, isRead: {get: function() {
-            return (this.flags & 2097155) !== 1;
-          }}, isWrite: {get: function() {
-            return (this.flags & 2097155) !== 0;
-          }}, isAppend: {get: function() {
-            return this.flags & 1024;
-          }}};
-        }
-        var newStream = new FS.FSStream();
-        for (var p in stream) {
-          newStream[p] = stream[p];
-        }
-        stream = newStream;
-        var fd = FS.nextfd(fd_start, fd_end);
-        stream.fd = fd;
-        FS.streams[fd] = stream;
-        return stream;
-      }, closeStream: function(fd) {
-        FS.streams[fd] = null;
-      }, chrdev_stream_ops: {open: function(stream) {
-        var device = FS.getDevice(stream.node.rdev);
-        stream.stream_ops = device.stream_ops;
-        if (stream.stream_ops.open) {
-          stream.stream_ops.open(stream);
-        }
-      }, llseek: function() {
-        throw new FS.ErrnoError(70);
-      }}, major: function(dev) {
-        return dev >> 8;
-      }, minor: function(dev) {
-        return dev & 255;
-      }, makedev: function(ma, mi) {
-        return ma << 8 | mi;
-      }, registerDevice: function(dev, ops) {
-        FS.devices[dev] = {stream_ops: ops};
-      }, getDevice: function(dev) {
-        return FS.devices[dev];
-      }, getMounts: function(mount) {
-        var mounts = [];
-        var check = [mount];
-        while (check.length) {
-          var m = check.pop();
-          mounts.push(m);
-          check.push.apply(check, m.mounts);
-        }
-        return mounts;
-      }, syncfs: function(populate, callback) {
-        if (typeof populate === "function") {
-          callback = populate;
-          populate = false;
-        }
-        FS.syncFSRequests++;
-        if (FS.syncFSRequests > 1) {
-          err("warning: " + FS.syncFSRequests + " FS.syncfs operations in flight at once, probably just doing extra work");
-        }
-        var mounts = FS.getMounts(FS.root.mount);
-        var completed = 0;
-        function doCallback(errCode) {
-          FS.syncFSRequests--;
-          return callback(errCode);
-        }
-        function done(errCode) {
-          if (errCode) {
-            if (!done.errored) {
-              done.errored = true;
-              return doCallback(errCode);
-            }
-            return;
-          }
-          if (++completed >= mounts.length) {
-            doCallback(null);
-          }
-        }
-        mounts.forEach(function(mount) {
-          if (!mount.type.syncfs) {
-            return done(null);
-          }
-          mount.type.syncfs(mount, populate, done);
-        });
-      }, mount: function(type, opts, mountpoint) {
-        var root = mountpoint === "/";
-        var pseudo = !mountpoint;
-        var node;
-        if (root && FS.root) {
-          throw new FS.ErrnoError(10);
-        } else if (!root && !pseudo) {
-          var lookup = FS.lookupPath(mountpoint, {follow_mount: false});
-          mountpoint = lookup.path;
-          node = lookup.node;
-          if (FS.isMountpoint(node)) {
-            throw new FS.ErrnoError(10);
-          }
-          if (!FS.isDir(node.mode)) {
-            throw new FS.ErrnoError(54);
-          }
-        }
-        var mount = {type, opts, mountpoint, mounts: []};
-        var mountRoot = type.mount(mount);
-        mountRoot.mount = mount;
-        mount.root = mountRoot;
-        if (root) {
-          FS.root = mountRoot;
-        } else if (node) {
-          node.mounted = mount;
-          if (node.mount) {
-            node.mount.mounts.push(mount);
-          }
-        }
-        return mountRoot;
-      }, unmount: function(mountpoint) {
-        var lookup = FS.lookupPath(mountpoint, {follow_mount: false});
-        if (!FS.isMountpoint(lookup.node)) {
-          throw new FS.ErrnoError(28);
-        }
-        var node = lookup.node;
-        var mount = node.mounted;
-        var mounts = FS.getMounts(mount);
-        Object.keys(FS.nameTable).forEach(function(hash) {
-          var current = FS.nameTable[hash];
-          while (current) {
-            var next = current.name_next;
-            if (mounts.indexOf(current.mount) !== -1) {
-              FS.destroyNode(current);
-            }
-            current = next;
-          }
-        });
-        node.mounted = null;
-        var idx = node.mount.mounts.indexOf(mount);
-        node.mount.mounts.splice(idx, 1);
-      }, lookup: function(parent, name2) {
-        return parent.node_ops.lookup(parent, name2);
-      }, mknod: function(path, mode, dev) {
-        var lookup = FS.lookupPath(path, {parent: true});
-        var parent = lookup.node;
-        var name2 = PATH.basename(path);
-        if (!name2 || name2 === "." || name2 === "..") {
-          throw new FS.ErrnoError(28);
-        }
-        var errCode = FS.mayCreate(parent, name2);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        if (!parent.node_ops.mknod) {
-          throw new FS.ErrnoError(63);
-        }
-        return parent.node_ops.mknod(parent, name2, mode, dev);
-      }, create: function(path, mode) {
-        mode = mode !== void 0 ? mode : 438;
-        mode &= 4095;
-        mode |= 32768;
-        return FS.mknod(path, mode, 0);
-      }, mkdir: function(path, mode) {
-        mode = mode !== void 0 ? mode : 511;
-        mode &= 511 | 512;
-        mode |= 16384;
-        return FS.mknod(path, mode, 0);
-      }, mkdirTree: function(path, mode) {
-        var dirs = path.split("/");
-        var d = "";
-        for (var i = 0; i < dirs.length; ++i) {
-          if (!dirs[i])
-            continue;
-          d += "/" + dirs[i];
-          try {
-            FS.mkdir(d, mode);
-          } catch (e) {
-            if (e.errno != 20)
-              throw e;
-          }
-        }
-      }, mkdev: function(path, mode, dev) {
-        if (typeof dev === "undefined") {
-          dev = mode;
-          mode = 438;
-        }
-        mode |= 8192;
-        return FS.mknod(path, mode, dev);
-      }, symlink: function(oldpath, newpath) {
-        if (!PATH_FS.resolve(oldpath)) {
-          throw new FS.ErrnoError(44);
-        }
-        var lookup = FS.lookupPath(newpath, {parent: true});
-        var parent = lookup.node;
-        if (!parent) {
-          throw new FS.ErrnoError(44);
-        }
-        var newname = PATH.basename(newpath);
-        var errCode = FS.mayCreate(parent, newname);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        if (!parent.node_ops.symlink) {
-          throw new FS.ErrnoError(63);
-        }
-        return parent.node_ops.symlink(parent, newname, oldpath);
-      }, rename: function(old_path, new_path) {
-        var old_dirname = PATH.dirname(old_path);
-        var new_dirname = PATH.dirname(new_path);
-        var old_name = PATH.basename(old_path);
-        var new_name = PATH.basename(new_path);
-        var lookup, old_dir, new_dir;
-        lookup = FS.lookupPath(old_path, {parent: true});
-        old_dir = lookup.node;
-        lookup = FS.lookupPath(new_path, {parent: true});
-        new_dir = lookup.node;
-        if (!old_dir || !new_dir)
-          throw new FS.ErrnoError(44);
-        if (old_dir.mount !== new_dir.mount) {
-          throw new FS.ErrnoError(75);
-        }
-        var old_node = FS.lookupNode(old_dir, old_name);
-        var relative = PATH_FS.relative(old_path, new_dirname);
-        if (relative.charAt(0) !== ".") {
-          throw new FS.ErrnoError(28);
-        }
-        relative = PATH_FS.relative(new_path, old_dirname);
-        if (relative.charAt(0) !== ".") {
-          throw new FS.ErrnoError(55);
-        }
-        var new_node;
-        try {
-          new_node = FS.lookupNode(new_dir, new_name);
-        } catch (e) {
-        }
-        if (old_node === new_node) {
-          return;
-        }
-        var isdir = FS.isDir(old_node.mode);
-        var errCode = FS.mayDelete(old_dir, old_name, isdir);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        errCode = new_node ? FS.mayDelete(new_dir, new_name, isdir) : FS.mayCreate(new_dir, new_name);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        if (!old_dir.node_ops.rename) {
-          throw new FS.ErrnoError(63);
-        }
-        if (FS.isMountpoint(old_node) || new_node && FS.isMountpoint(new_node)) {
-          throw new FS.ErrnoError(10);
-        }
-        if (new_dir !== old_dir) {
-          errCode = FS.nodePermissions(old_dir, "w");
-          if (errCode) {
-            throw new FS.ErrnoError(errCode);
-          }
-        }
-        try {
-          if (FS.trackingDelegate["willMovePath"]) {
-            FS.trackingDelegate["willMovePath"](old_path, new_path);
-          }
-        } catch (e) {
-          err("FS.trackingDelegate['willMovePath']('" + old_path + "', '" + new_path + "') threw an exception: " + e.message);
-        }
-        FS.hashRemoveNode(old_node);
-        try {
-          old_dir.node_ops.rename(old_node, new_dir, new_name);
-        } catch (e) {
-          throw e;
-        } finally {
-          FS.hashAddNode(old_node);
-        }
-        try {
-          if (FS.trackingDelegate["onMovePath"])
-            FS.trackingDelegate["onMovePath"](old_path, new_path);
-        } catch (e) {
-          err("FS.trackingDelegate['onMovePath']('" + old_path + "', '" + new_path + "') threw an exception: " + e.message);
-        }
-      }, rmdir: function(path) {
-        var lookup = FS.lookupPath(path, {parent: true});
-        var parent = lookup.node;
-        var name2 = PATH.basename(path);
-        var node = FS.lookupNode(parent, name2);
-        var errCode = FS.mayDelete(parent, name2, true);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        if (!parent.node_ops.rmdir) {
-          throw new FS.ErrnoError(63);
-        }
-        if (FS.isMountpoint(node)) {
-          throw new FS.ErrnoError(10);
-        }
-        try {
-          if (FS.trackingDelegate["willDeletePath"]) {
-            FS.trackingDelegate["willDeletePath"](path);
-          }
-        } catch (e) {
-          err("FS.trackingDelegate['willDeletePath']('" + path + "') threw an exception: " + e.message);
-        }
-        parent.node_ops.rmdir(parent, name2);
-        FS.destroyNode(node);
-        try {
-          if (FS.trackingDelegate["onDeletePath"])
-            FS.trackingDelegate["onDeletePath"](path);
-        } catch (e) {
-          err("FS.trackingDelegate['onDeletePath']('" + path + "') threw an exception: " + e.message);
-        }
-      }, readdir: function(path) {
-        var lookup = FS.lookupPath(path, {follow: true});
-        var node = lookup.node;
-        if (!node.node_ops.readdir) {
-          throw new FS.ErrnoError(54);
-        }
-        return node.node_ops.readdir(node);
-      }, unlink: function(path) {
-        var lookup = FS.lookupPath(path, {parent: true});
-        var parent = lookup.node;
-        var name2 = PATH.basename(path);
-        var node = FS.lookupNode(parent, name2);
-        var errCode = FS.mayDelete(parent, name2, false);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        if (!parent.node_ops.unlink) {
-          throw new FS.ErrnoError(63);
-        }
-        if (FS.isMountpoint(node)) {
-          throw new FS.ErrnoError(10);
-        }
-        try {
-          if (FS.trackingDelegate["willDeletePath"]) {
-            FS.trackingDelegate["willDeletePath"](path);
-          }
-        } catch (e) {
-          err("FS.trackingDelegate['willDeletePath']('" + path + "') threw an exception: " + e.message);
-        }
-        parent.node_ops.unlink(parent, name2);
-        FS.destroyNode(node);
-        try {
-          if (FS.trackingDelegate["onDeletePath"])
-            FS.trackingDelegate["onDeletePath"](path);
-        } catch (e) {
-          err("FS.trackingDelegate['onDeletePath']('" + path + "') threw an exception: " + e.message);
-        }
-      }, readlink: function(path) {
-        var lookup = FS.lookupPath(path);
-        var link = lookup.node;
-        if (!link) {
-          throw new FS.ErrnoError(44);
-        }
-        if (!link.node_ops.readlink) {
-          throw new FS.ErrnoError(28);
-        }
-        return PATH_FS.resolve(FS.getPath(link.parent), link.node_ops.readlink(link));
-      }, stat: function(path, dontFollow) {
-        var lookup = FS.lookupPath(path, {follow: !dontFollow});
-        var node = lookup.node;
-        if (!node) {
-          throw new FS.ErrnoError(44);
-        }
-        if (!node.node_ops.getattr) {
-          throw new FS.ErrnoError(63);
-        }
-        return node.node_ops.getattr(node);
-      }, lstat: function(path) {
-        return FS.stat(path, true);
-      }, chmod: function(path, mode, dontFollow) {
-        var node;
-        if (typeof path === "string") {
-          var lookup = FS.lookupPath(path, {follow: !dontFollow});
-          node = lookup.node;
-        } else {
-          node = path;
-        }
-        if (!node.node_ops.setattr) {
-          throw new FS.ErrnoError(63);
-        }
-        node.node_ops.setattr(node, {mode: mode & 4095 | node.mode & ~4095, timestamp: Date.now()});
-      }, lchmod: function(path, mode) {
-        FS.chmod(path, mode, true);
-      }, fchmod: function(fd, mode) {
-        var stream = FS.getStream(fd);
-        if (!stream) {
-          throw new FS.ErrnoError(8);
-        }
-        FS.chmod(stream.node, mode);
-      }, chown: function(path, uid, gid, dontFollow) {
-        var node;
-        if (typeof path === "string") {
-          var lookup = FS.lookupPath(path, {follow: !dontFollow});
-          node = lookup.node;
-        } else {
-          node = path;
-        }
-        if (!node.node_ops.setattr) {
-          throw new FS.ErrnoError(63);
-        }
-        node.node_ops.setattr(node, {timestamp: Date.now()});
-      }, lchown: function(path, uid, gid) {
-        FS.chown(path, uid, gid, true);
-      }, fchown: function(fd, uid, gid) {
-        var stream = FS.getStream(fd);
-        if (!stream) {
-          throw new FS.ErrnoError(8);
-        }
-        FS.chown(stream.node, uid, gid);
-      }, truncate: function(path, len) {
-        if (len < 0) {
-          throw new FS.ErrnoError(28);
-        }
-        var node;
-        if (typeof path === "string") {
-          var lookup = FS.lookupPath(path, {follow: true});
-          node = lookup.node;
-        } else {
-          node = path;
-        }
-        if (!node.node_ops.setattr) {
-          throw new FS.ErrnoError(63);
-        }
-        if (FS.isDir(node.mode)) {
-          throw new FS.ErrnoError(31);
-        }
-        if (!FS.isFile(node.mode)) {
-          throw new FS.ErrnoError(28);
-        }
-        var errCode = FS.nodePermissions(node, "w");
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        node.node_ops.setattr(node, {size: len, timestamp: Date.now()});
-      }, ftruncate: function(fd, len) {
-        var stream = FS.getStream(fd);
-        if (!stream) {
-          throw new FS.ErrnoError(8);
-        }
-        if ((stream.flags & 2097155) === 0) {
-          throw new FS.ErrnoError(28);
-        }
-        FS.truncate(stream.node, len);
-      }, utime: function(path, atime, mtime) {
-        var lookup = FS.lookupPath(path, {follow: true});
-        var node = lookup.node;
-        node.node_ops.setattr(node, {timestamp: Math.max(atime, mtime)});
-      }, open: function(path, flags, mode, fd_start, fd_end) {
-        if (path === "") {
-          throw new FS.ErrnoError(44);
-        }
-        flags = typeof flags === "string" ? FS.modeStringToFlags(flags) : flags;
-        mode = typeof mode === "undefined" ? 438 : mode;
-        if (flags & 64) {
-          mode = mode & 4095 | 32768;
-        } else {
-          mode = 0;
-        }
-        var node;
-        if (typeof path === "object") {
-          node = path;
-        } else {
-          path = PATH.normalize(path);
-          try {
-            var lookup = FS.lookupPath(path, {follow: !(flags & 131072)});
-            node = lookup.node;
-          } catch (e) {
-          }
-        }
-        var created = false;
-        if (flags & 64) {
-          if (node) {
-            if (flags & 128) {
-              throw new FS.ErrnoError(20);
-            }
-          } else {
-            node = FS.mknod(path, mode, 0);
-            created = true;
-          }
-        }
-        if (!node) {
-          throw new FS.ErrnoError(44);
-        }
-        if (FS.isChrdev(node.mode)) {
-          flags &= ~512;
-        }
-        if (flags & 65536 && !FS.isDir(node.mode)) {
-          throw new FS.ErrnoError(54);
-        }
-        if (!created) {
-          var errCode = FS.mayOpen(node, flags);
-          if (errCode) {
-            throw new FS.ErrnoError(errCode);
-          }
-        }
-        if (flags & 512) {
-          FS.truncate(node, 0);
-        }
-        flags &= ~(128 | 512 | 131072);
-        var stream = FS.createStream({node, path: FS.getPath(node), flags, seekable: true, position: 0, stream_ops: node.stream_ops, ungotten: [], error: false}, fd_start, fd_end);
-        if (stream.stream_ops.open) {
-          stream.stream_ops.open(stream);
-        }
-        if (Module["logReadFiles"] && !(flags & 1)) {
-          if (!FS.readFiles)
-            FS.readFiles = {};
-          if (!(path in FS.readFiles)) {
-            FS.readFiles[path] = 1;
-            err("FS.trackingDelegate error on read file: " + path);
-          }
-        }
-        try {
-          if (FS.trackingDelegate["onOpenFile"]) {
-            var trackingFlags = 0;
-            if ((flags & 2097155) !== 1) {
-              trackingFlags |= FS.tracking.openFlags.READ;
-            }
-            if ((flags & 2097155) !== 0) {
-              trackingFlags |= FS.tracking.openFlags.WRITE;
-            }
-            FS.trackingDelegate["onOpenFile"](path, trackingFlags);
-          }
-        } catch (e) {
-          err("FS.trackingDelegate['onOpenFile']('" + path + "', flags) threw an exception: " + e.message);
-        }
-        return stream;
-      }, close: function(stream) {
-        if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(8);
-        }
-        if (stream.getdents)
-          stream.getdents = null;
-        try {
-          if (stream.stream_ops.close) {
-            stream.stream_ops.close(stream);
-          }
-        } catch (e) {
-          throw e;
-        } finally {
-          FS.closeStream(stream.fd);
-        }
-        stream.fd = null;
-      }, isClosed: function(stream) {
-        return stream.fd === null;
-      }, llseek: function(stream, offset, whence) {
-        if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(8);
-        }
-        if (!stream.seekable || !stream.stream_ops.llseek) {
-          throw new FS.ErrnoError(70);
-        }
-        if (whence != 0 && whence != 1 && whence != 2) {
-          throw new FS.ErrnoError(28);
-        }
-        stream.position = stream.stream_ops.llseek(stream, offset, whence);
-        stream.ungotten = [];
-        return stream.position;
-      }, read: function(stream, buffer2, offset, length, position) {
-        if (length < 0 || position < 0) {
-          throw new FS.ErrnoError(28);
-        }
-        if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(8);
-        }
-        if ((stream.flags & 2097155) === 1) {
-          throw new FS.ErrnoError(8);
-        }
-        if (FS.isDir(stream.node.mode)) {
-          throw new FS.ErrnoError(31);
-        }
-        if (!stream.stream_ops.read) {
-          throw new FS.ErrnoError(28);
-        }
-        var seeking = typeof position !== "undefined";
-        if (!seeking) {
-          position = stream.position;
-        } else if (!stream.seekable) {
-          throw new FS.ErrnoError(70);
-        }
-        var bytesRead = stream.stream_ops.read(stream, buffer2, offset, length, position);
-        if (!seeking)
-          stream.position += bytesRead;
-        return bytesRead;
-      }, write: function(stream, buffer2, offset, length, position, canOwn) {
-        if (length < 0 || position < 0) {
-          throw new FS.ErrnoError(28);
-        }
-        if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(8);
-        }
-        if ((stream.flags & 2097155) === 0) {
-          throw new FS.ErrnoError(8);
-        }
-        if (FS.isDir(stream.node.mode)) {
-          throw new FS.ErrnoError(31);
-        }
-        if (!stream.stream_ops.write) {
-          throw new FS.ErrnoError(28);
-        }
-        if (stream.seekable && stream.flags & 1024) {
-          FS.llseek(stream, 0, 2);
-        }
-        var seeking = typeof position !== "undefined";
-        if (!seeking) {
-          position = stream.position;
-        } else if (!stream.seekable) {
-          throw new FS.ErrnoError(70);
-        }
-        var bytesWritten = stream.stream_ops.write(stream, buffer2, offset, length, position, canOwn);
-        if (!seeking)
-          stream.position += bytesWritten;
-        try {
-          if (stream.path && FS.trackingDelegate["onWriteToFile"])
-            FS.trackingDelegate["onWriteToFile"](stream.path);
-        } catch (e) {
-          err("FS.trackingDelegate['onWriteToFile']('" + stream.path + "') threw an exception: " + e.message);
-        }
-        return bytesWritten;
-      }, allocate: function(stream, offset, length) {
-        if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(8);
-        }
-        if (offset < 0 || length <= 0) {
-          throw new FS.ErrnoError(28);
-        }
-        if ((stream.flags & 2097155) === 0) {
-          throw new FS.ErrnoError(8);
-        }
-        if (!FS.isFile(stream.node.mode) && !FS.isDir(stream.node.mode)) {
-          throw new FS.ErrnoError(43);
-        }
-        if (!stream.stream_ops.allocate) {
-          throw new FS.ErrnoError(138);
-        }
-        stream.stream_ops.allocate(stream, offset, length);
-      }, mmap: function(stream, address, length, position, prot, flags) {
-        if ((prot & 2) !== 0 && (flags & 2) === 0 && (stream.flags & 2097155) !== 2) {
-          throw new FS.ErrnoError(2);
-        }
-        if ((stream.flags & 2097155) === 1) {
-          throw new FS.ErrnoError(2);
-        }
-        if (!stream.stream_ops.mmap) {
-          throw new FS.ErrnoError(43);
-        }
-        return stream.stream_ops.mmap(stream, address, length, position, prot, flags);
-      }, msync: function(stream, buffer2, offset, length, mmapFlags) {
-        if (!stream || !stream.stream_ops.msync) {
-          return 0;
-        }
-        return stream.stream_ops.msync(stream, buffer2, offset, length, mmapFlags);
-      }, munmap: function(stream) {
-        return 0;
-      }, ioctl: function(stream, cmd, arg) {
-        if (!stream.stream_ops.ioctl) {
-          throw new FS.ErrnoError(59);
-        }
-        return stream.stream_ops.ioctl(stream, cmd, arg);
-      }, readFile: function(path, opts) {
-        opts = opts || {};
-        opts.flags = opts.flags || 0;
-        opts.encoding = opts.encoding || "binary";
-        if (opts.encoding !== "utf8" && opts.encoding !== "binary") {
-          throw new Error('Invalid encoding type "' + opts.encoding + '"');
-        }
-        var ret;
-        var stream = FS.open(path, opts.flags);
-        var stat = FS.stat(path);
-        var length = stat.size;
-        var buf = new Uint8Array(length);
-        FS.read(stream, buf, 0, length, 0);
-        if (opts.encoding === "utf8") {
-          ret = UTF8ArrayToString(buf, 0);
-        } else if (opts.encoding === "binary") {
-          ret = buf;
-        }
-        FS.close(stream);
-        return ret;
-      }, writeFile: function(path, data, opts) {
-        opts = opts || {};
-        opts.flags = opts.flags || 577;
-        var stream = FS.open(path, opts.flags, opts.mode);
-        if (typeof data === "string") {
-          var buf = new Uint8Array(lengthBytesUTF8(data) + 1);
-          var actualNumBytes = stringToUTF8Array(data, buf, 0, buf.length);
-          FS.write(stream, buf, 0, actualNumBytes, void 0, opts.canOwn);
-        } else if (ArrayBuffer.isView(data)) {
-          FS.write(stream, data, 0, data.byteLength, void 0, opts.canOwn);
-        } else {
-          throw new Error("Unsupported data type");
-        }
-        FS.close(stream);
-      }, cwd: function() {
-        return FS.currentPath;
-      }, chdir: function(path) {
-        var lookup = FS.lookupPath(path, {follow: true});
-        if (lookup.node === null) {
-          throw new FS.ErrnoError(44);
-        }
-        if (!FS.isDir(lookup.node.mode)) {
-          throw new FS.ErrnoError(54);
-        }
-        var errCode = FS.nodePermissions(lookup.node, "x");
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        FS.currentPath = lookup.path;
-      }, createDefaultDirectories: function() {
-        FS.mkdir("/tmp");
-        FS.mkdir("/home");
-        FS.mkdir("/home/web_user");
-      }, createDefaultDevices: function() {
-        FS.mkdir("/dev");
-        FS.registerDevice(FS.makedev(1, 3), {read: function() {
-          return 0;
-        }, write: function(stream, buffer2, offset, length, pos) {
-          return length;
-        }});
-        FS.mkdev("/dev/null", FS.makedev(1, 3));
-        TTY.register(FS.makedev(5, 0), TTY.default_tty_ops);
-        TTY.register(FS.makedev(6, 0), TTY.default_tty1_ops);
-        FS.mkdev("/dev/tty", FS.makedev(5, 0));
-        FS.mkdev("/dev/tty1", FS.makedev(6, 0));
-        var random_device = getRandomDevice();
-        FS.createDevice("/dev", "random", random_device);
-        FS.createDevice("/dev", "urandom", random_device);
-        FS.mkdir("/dev/shm");
-        FS.mkdir("/dev/shm/tmp");
-      }, createSpecialDirectories: function() {
-        FS.mkdir("/proc");
-        FS.mkdir("/proc/self");
-        FS.mkdir("/proc/self/fd");
-        FS.mount({mount: function() {
-          var node = FS.createNode("/proc/self", "fd", 16384 | 511, 73);
-          node.node_ops = {lookup: function(parent, name2) {
-            var fd = +name2;
-            var stream = FS.getStream(fd);
-            if (!stream)
-              throw new FS.ErrnoError(8);
-            var ret = {parent: null, mount: {mountpoint: "fake"}, node_ops: {readlink: function() {
-              return stream.path;
-            }}};
-            ret.parent = ret;
-            return ret;
-          }};
-          return node;
-        }}, {}, "/proc/self/fd");
-      }, createStandardStreams: function() {
-        if (Module["stdin"]) {
-          FS.createDevice("/dev", "stdin", Module["stdin"]);
-        } else {
-          FS.symlink("/dev/tty", "/dev/stdin");
-        }
-        if (Module["stdout"]) {
-          FS.createDevice("/dev", "stdout", null, Module["stdout"]);
-        } else {
-          FS.symlink("/dev/tty", "/dev/stdout");
-        }
-        if (Module["stderr"]) {
-          FS.createDevice("/dev", "stderr", null, Module["stderr"]);
-        } else {
-          FS.symlink("/dev/tty1", "/dev/stderr");
-        }
-        FS.open("/dev/stdin", 0);
-        FS.open("/dev/stdout", 1);
-        FS.open("/dev/stderr", 1);
-      }, ensureErrnoError: function() {
-        if (FS.ErrnoError)
-          return;
-        FS.ErrnoError = function ErrnoError(errno, node) {
-          this.node = node;
-          this.setErrno = function(errno2) {
-            this.errno = errno2;
-          };
-          this.setErrno(errno);
-          this.message = "FS error";
-        };
-        FS.ErrnoError.prototype = new Error();
-        FS.ErrnoError.prototype.constructor = FS.ErrnoError;
-        [44].forEach(function(code) {
-          FS.genericErrors[code] = new FS.ErrnoError(code);
-          FS.genericErrors[code].stack = "<generic error, no stack>";
-        });
-      }, staticInit: function() {
-        FS.ensureErrnoError();
-        FS.nameTable = new Array(4096);
-        FS.mount(MEMFS, {}, "/");
-        FS.createDefaultDirectories();
-        FS.createDefaultDevices();
-        FS.createSpecialDirectories();
-        FS.filesystems = {MEMFS};
-      }, init: function(input, output, error) {
-        FS.init.initialized = true;
-        FS.ensureErrnoError();
-        Module["stdin"] = input || Module["stdin"];
-        Module["stdout"] = output || Module["stdout"];
-        Module["stderr"] = error || Module["stderr"];
-        FS.createStandardStreams();
-      }, quit: function() {
-        FS.init.initialized = false;
-        var fflush = Module["_fflush"];
-        if (fflush)
-          fflush(0);
-        for (var i = 0; i < FS.streams.length; i++) {
-          var stream = FS.streams[i];
-          if (!stream) {
-            continue;
-          }
-          FS.close(stream);
-        }
-      }, getMode: function(canRead, canWrite) {
-        var mode = 0;
-        if (canRead)
-          mode |= 292 | 73;
-        if (canWrite)
-          mode |= 146;
-        return mode;
-      }, findObject: function(path, dontResolveLastLink) {
-        var ret = FS.analyzePath(path, dontResolveLastLink);
-        if (ret.exists) {
-          return ret.object;
-        } else {
-          return null;
-        }
-      }, analyzePath: function(path, dontResolveLastLink) {
-        try {
-          var lookup = FS.lookupPath(path, {follow: !dontResolveLastLink});
-          path = lookup.path;
-        } catch (e) {
-        }
-        var ret = {isRoot: false, exists: false, error: 0, name: null, path: null, object: null, parentExists: false, parentPath: null, parentObject: null};
-        try {
-          var lookup = FS.lookupPath(path, {parent: true});
-          ret.parentExists = true;
-          ret.parentPath = lookup.path;
-          ret.parentObject = lookup.node;
-          ret.name = PATH.basename(path);
-          lookup = FS.lookupPath(path, {follow: !dontResolveLastLink});
-          ret.exists = true;
-          ret.path = lookup.path;
-          ret.object = lookup.node;
-          ret.name = lookup.node.name;
-          ret.isRoot = lookup.path === "/";
-        } catch (e) {
-          ret.error = e.errno;
-        }
-        return ret;
-      }, createPath: function(parent, path, canRead, canWrite) {
-        parent = typeof parent === "string" ? parent : FS.getPath(parent);
-        var parts = path.split("/").reverse();
-        while (parts.length) {
-          var part = parts.pop();
-          if (!part)
-            continue;
-          var current = PATH.join2(parent, part);
-          try {
-            FS.mkdir(current);
-          } catch (e) {
-          }
-          parent = current;
-        }
-        return current;
-      }, createFile: function(parent, name2, properties, canRead, canWrite) {
-        var path = PATH.join2(typeof parent === "string" ? parent : FS.getPath(parent), name2);
-        var mode = FS.getMode(canRead, canWrite);
-        return FS.create(path, mode);
-      }, createDataFile: function(parent, name2, data, canRead, canWrite, canOwn) {
-        var path = name2 ? PATH.join2(typeof parent === "string" ? parent : FS.getPath(parent), name2) : parent;
-        var mode = FS.getMode(canRead, canWrite);
-        var node = FS.create(path, mode);
-        if (data) {
-          if (typeof data === "string") {
-            var arr = new Array(data.length);
-            for (var i = 0, len = data.length; i < len; ++i)
-              arr[i] = data.charCodeAt(i);
-            data = arr;
-          }
-          FS.chmod(node, mode | 146);
-          var stream = FS.open(node, 577);
-          FS.write(stream, data, 0, data.length, 0, canOwn);
-          FS.close(stream);
-          FS.chmod(node, mode);
-        }
-        return node;
-      }, createDevice: function(parent, name2, input, output) {
-        var path = PATH.join2(typeof parent === "string" ? parent : FS.getPath(parent), name2);
-        var mode = FS.getMode(!!input, !!output);
-        if (!FS.createDevice.major)
-          FS.createDevice.major = 64;
-        var dev = FS.makedev(FS.createDevice.major++, 0);
-        FS.registerDevice(dev, {open: function(stream) {
+          stream.tty = tty;
           stream.seekable = false;
         }, close: function(stream) {
-          if (output && output.buffer && output.buffer.length) {
-            output(10);
-          }
+          stream.tty.ops.flush(stream.tty);
+        }, flush: function(stream) {
+          stream.tty.ops.flush(stream.tty);
         }, read: function(stream, buffer2, offset, length, pos) {
+          if (!stream.tty || !stream.tty.ops.get_char) {
+            throw new FS.ErrnoError(60);
+          }
           var bytesRead = 0;
           for (var i = 0; i < length; i++) {
             var result;
             try {
-              result = input();
+              result = stream.tty.ops.get_char(stream.tty);
             } catch (e) {
               throw new FS.ErrnoError(29);
             }
@@ -32214,2558 +31960,4095 @@ var require_web_ifc = __commonJS((exports, module) => {
           }
           return bytesRead;
         }, write: function(stream, buffer2, offset, length, pos) {
-          for (var i = 0; i < length; i++) {
-            try {
-              output(buffer2[offset + i]);
-            } catch (e) {
-              throw new FS.ErrnoError(29);
+          if (!stream.tty || !stream.tty.ops.put_char) {
+            throw new FS.ErrnoError(60);
+          }
+          try {
+            for (var i = 0; i < length; i++) {
+              stream.tty.ops.put_char(stream.tty, buffer2[offset + i]);
             }
+          } catch (e) {
+            throw new FS.ErrnoError(29);
           }
           if (length) {
             stream.node.timestamp = Date.now();
           }
           return i;
-        }});
-        return FS.mkdev(path, mode, dev);
-      }, forceLoadFile: function(obj) {
-        if (obj.isDevice || obj.isFolder || obj.link || obj.contents)
-          return true;
-        if (typeof XMLHttpRequest !== "undefined") {
-          throw new Error("Lazy loading should have been performed (contents set) in createLazyFile, but it was not. Lazy loading only works in web workers. Use --embed-file or --preload-file in emcc on the main thread.");
-        } else if (read_) {
-          try {
-            obj.contents = intArrayFromString(read_(obj.url), true);
-            obj.usedBytes = obj.contents.length;
-          } catch (e) {
-            throw new FS.ErrnoError(29);
-          }
-        } else {
-          throw new Error("Cannot load without read() or XMLHttpRequest.");
-        }
-      }, createLazyFile: function(parent, name2, url, canRead, canWrite) {
-        function LazyUint8Array() {
-          this.lengthKnown = false;
-          this.chunks = [];
-        }
-        LazyUint8Array.prototype.get = function LazyUint8Array_get(idx) {
-          if (idx > this.length - 1 || idx < 0) {
-            return void 0;
-          }
-          var chunkOffset = idx % this.chunkSize;
-          var chunkNum = idx / this.chunkSize | 0;
-          return this.getter(chunkNum)[chunkOffset];
-        };
-        LazyUint8Array.prototype.setDataGetter = function LazyUint8Array_setDataGetter(getter) {
-          this.getter = getter;
-        };
-        LazyUint8Array.prototype.cacheLength = function LazyUint8Array_cacheLength() {
-          var xhr = new XMLHttpRequest();
-          xhr.open("HEAD", url, false);
-          xhr.send(null);
-          if (!(xhr.status >= 200 && xhr.status < 300 || xhr.status === 304))
-            throw new Error("Couldn't load " + url + ". Status: " + xhr.status);
-          var datalength = Number(xhr.getResponseHeader("Content-length"));
-          var header;
-          var hasByteServing = (header = xhr.getResponseHeader("Accept-Ranges")) && header === "bytes";
-          var usesGzip = (header = xhr.getResponseHeader("Content-Encoding")) && header === "gzip";
-          var chunkSize = 1024 * 1024;
-          if (!hasByteServing)
-            chunkSize = datalength;
-          var doXHR = function(from, to) {
-            if (from > to)
-              throw new Error("invalid range (" + from + ", " + to + ") or no bytes requested!");
-            if (to > datalength - 1)
-              throw new Error("only " + datalength + " bytes available! programmer error!");
-            var xhr2 = new XMLHttpRequest();
-            xhr2.open("GET", url, false);
-            if (datalength !== chunkSize)
-              xhr2.setRequestHeader("Range", "bytes=" + from + "-" + to);
-            if (typeof Uint8Array != "undefined")
-              xhr2.responseType = "arraybuffer";
-            if (xhr2.overrideMimeType) {
-              xhr2.overrideMimeType("text/plain; charset=x-user-defined");
-            }
-            xhr2.send(null);
-            if (!(xhr2.status >= 200 && xhr2.status < 300 || xhr2.status === 304))
-              throw new Error("Couldn't load " + url + ". Status: " + xhr2.status);
-            if (xhr2.response !== void 0) {
-              return new Uint8Array(xhr2.response || []);
-            } else {
-              return intArrayFromString(xhr2.responseText || "", true);
-            }
-          };
-          var lazyArray2 = this;
-          lazyArray2.setDataGetter(function(chunkNum) {
-            var start = chunkNum * chunkSize;
-            var end = (chunkNum + 1) * chunkSize - 1;
-            end = Math.min(end, datalength - 1);
-            if (typeof lazyArray2.chunks[chunkNum] === "undefined") {
-              lazyArray2.chunks[chunkNum] = doXHR(start, end);
-            }
-            if (typeof lazyArray2.chunks[chunkNum] === "undefined")
-              throw new Error("doXHR failed!");
-            return lazyArray2.chunks[chunkNum];
-          });
-          if (usesGzip || !datalength) {
-            chunkSize = datalength = 1;
-            datalength = this.getter(0).length;
-            chunkSize = datalength;
-            out("LazyFiles on gzip forces download of the whole file when length is accessed");
-          }
-          this._length = datalength;
-          this._chunkSize = chunkSize;
-          this.lengthKnown = true;
-        };
-        if (typeof XMLHttpRequest !== "undefined") {
-          if (!ENVIRONMENT_IS_WORKER)
-            throw "Cannot do synchronous binary XHRs outside webworkers in modern browsers. Use --embed-file or --preload-file in emcc";
-          var lazyArray = new LazyUint8Array();
-          Object.defineProperties(lazyArray, {length: {get: function() {
-            if (!this.lengthKnown) {
-              this.cacheLength();
-            }
-            return this._length;
-          }}, chunkSize: {get: function() {
-            if (!this.lengthKnown) {
-              this.cacheLength();
-            }
-            return this._chunkSize;
-          }}});
-          var properties = {isDevice: false, contents: lazyArray};
-        } else {
-          var properties = {isDevice: false, url};
-        }
-        var node = FS.createFile(parent, name2, properties, canRead, canWrite);
-        if (properties.contents) {
-          node.contents = properties.contents;
-        } else if (properties.url) {
-          node.contents = null;
-          node.url = properties.url;
-        }
-        Object.defineProperties(node, {usedBytes: {get: function() {
-          return this.contents.length;
-        }}});
-        var stream_ops = {};
-        var keys = Object.keys(node.stream_ops);
-        keys.forEach(function(key2) {
-          var fn = node.stream_ops[key2];
-          stream_ops[key2] = function forceLoadLazyFile() {
-            FS.forceLoadFile(node);
-            return fn.apply(null, arguments);
-          };
-        });
-        stream_ops.read = function stream_ops_read(stream, buffer2, offset, length, position) {
-          FS.forceLoadFile(node);
-          var contents = stream.node.contents;
-          if (position >= contents.length)
-            return 0;
-          var size = Math.min(contents.length - position, length);
-          if (contents.slice) {
-            for (var i = 0; i < size; i++) {
-              buffer2[offset + i] = contents[position + i];
-            }
-          } else {
-            for (var i = 0; i < size; i++) {
-              buffer2[offset + i] = contents.get(position + i);
-            }
-          }
-          return size;
-        };
-        node.stream_ops = stream_ops;
-        return node;
-      }, createPreloadedFile: function(parent, name2, url, canRead, canWrite, onload, onerror, dontCreateFile, canOwn, preFinish) {
-        Browser.init();
-        var fullname = name2 ? PATH_FS.resolve(PATH.join2(parent, name2)) : parent;
-        function processData(byteArray) {
-          function finish(byteArray2) {
-            if (preFinish)
-              preFinish();
-            if (!dontCreateFile) {
-              FS.createDataFile(parent, name2, byteArray2, canRead, canWrite, canOwn);
-            }
-            if (onload)
-              onload();
-            removeRunDependency();
-          }
-          var handled = false;
-          Module["preloadPlugins"].forEach(function(plugin) {
-            if (handled)
-              return;
-            if (plugin["canHandle"](fullname)) {
-              plugin["handle"](byteArray, fullname, finish, function() {
-                if (onerror)
-                  onerror();
-                removeRunDependency();
-              });
-              handled = true;
-            }
-          });
-          if (!handled)
-            finish(byteArray);
-        }
-        addRunDependency();
-        if (typeof url == "string") {
-          Browser.asyncLoad(url, function(byteArray) {
-            processData(byteArray);
-          }, onerror);
-        } else {
-          processData(url);
-        }
-      }, indexedDB: function() {
-        return window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
-      }, DB_NAME: function() {
-        return "EM_FS_" + window.location.pathname;
-      }, DB_VERSION: 20, DB_STORE_NAME: "FILE_DATA", saveFilesToDB: function(paths, onload, onerror) {
-        onload = onload || function() {
-        };
-        onerror = onerror || function() {
-        };
-        var indexedDB = FS.indexedDB();
-        try {
-          var openRequest = indexedDB.open(FS.DB_NAME(), FS.DB_VERSION);
-        } catch (e) {
-          return onerror(e);
-        }
-        openRequest.onupgradeneeded = function openRequest_onupgradeneeded() {
-          out("creating db");
-          var db = openRequest.result;
-          db.createObjectStore(FS.DB_STORE_NAME);
-        };
-        openRequest.onsuccess = function openRequest_onsuccess() {
-          var db = openRequest.result;
-          var transaction = db.transaction([FS.DB_STORE_NAME], "readwrite");
-          var files = transaction.objectStore(FS.DB_STORE_NAME);
-          var ok = 0, fail = 0, total = paths.length;
-          function finish() {
-            if (fail == 0)
-              onload();
-            else
-              onerror();
-          }
-          paths.forEach(function(path) {
-            var putRequest = files.put(FS.analyzePath(path).object.contents, path);
-            putRequest.onsuccess = function putRequest_onsuccess() {
-              ok++;
-              if (ok + fail == total)
-                finish();
-            };
-            putRequest.onerror = function putRequest_onerror() {
-              fail++;
-              if (ok + fail == total)
-                finish();
-            };
-          });
-          transaction.onerror = onerror;
-        };
-        openRequest.onerror = onerror;
-      }, loadFilesFromDB: function(paths, onload, onerror) {
-        onload = onload || function() {
-        };
-        onerror = onerror || function() {
-        };
-        var indexedDB = FS.indexedDB();
-        try {
-          var openRequest = indexedDB.open(FS.DB_NAME(), FS.DB_VERSION);
-        } catch (e) {
-          return onerror(e);
-        }
-        openRequest.onupgradeneeded = onerror;
-        openRequest.onsuccess = function openRequest_onsuccess() {
-          var db = openRequest.result;
-          try {
-            var transaction = db.transaction([FS.DB_STORE_NAME], "readonly");
-          } catch (e) {
-            onerror(e);
-            return;
-          }
-          var files = transaction.objectStore(FS.DB_STORE_NAME);
-          var ok = 0, fail = 0, total = paths.length;
-          function finish() {
-            if (fail == 0)
-              onload();
-            else
-              onerror();
-          }
-          paths.forEach(function(path) {
-            var getRequest = files.get(path);
-            getRequest.onsuccess = function getRequest_onsuccess() {
-              if (FS.analyzePath(path).exists) {
-                FS.unlink(path);
+        } }, default_tty_ops: { get_char: function(tty) {
+          if (!tty.input.length) {
+            var result = null;
+            if (ENVIRONMENT_IS_NODE) {
+              var BUFSIZE = 256;
+              var buf = Buffer.alloc ? Buffer.alloc(BUFSIZE) : new Buffer(BUFSIZE);
+              var bytesRead = 0;
+              try {
+                bytesRead = nodeFS.readSync(process.stdin.fd, buf, 0, BUFSIZE, null);
+              } catch (e) {
+                if (e.toString().indexOf("EOF") != -1)
+                  bytesRead = 0;
+                else
+                  throw e;
               }
-              FS.createDataFile(PATH.dirname(path), PATH.basename(path), getRequest.result, true, true, true);
-              ok++;
-              if (ok + fail == total)
-                finish();
-            };
-            getRequest.onerror = function getRequest_onerror() {
-              fail++;
-              if (ok + fail == total)
-                finish();
-            };
-          });
-          transaction.onerror = onerror;
-        };
-        openRequest.onerror = onerror;
-      }};
-      var SYSCALLS = {mappings: {}, DEFAULT_POLLMASK: 5, umask: 511, calculateAt: function(dirfd, path) {
-        if (path[0] !== "/") {
-          var dir;
-          if (dirfd === -100) {
-            dir = FS.cwd();
-          } else {
-            var dirstream = FS.getStream(dirfd);
-            if (!dirstream)
-              throw new FS.ErrnoError(8);
-            dir = dirstream.path;
-          }
-          path = PATH.join2(dir, path);
-        }
-        return path;
-      }, doStat: function(func, path, buf) {
-        try {
-          var stat = func(path);
-        } catch (e) {
-          if (e && e.node && PATH.normalize(path) !== PATH.normalize(FS.getPath(e.node))) {
-            return -54;
-          }
-          throw e;
-        }
-        HEAP32[buf >> 2] = stat.dev;
-        HEAP32[buf + 4 >> 2] = 0;
-        HEAP32[buf + 8 >> 2] = stat.ino;
-        HEAP32[buf + 12 >> 2] = stat.mode;
-        HEAP32[buf + 16 >> 2] = stat.nlink;
-        HEAP32[buf + 20 >> 2] = stat.uid;
-        HEAP32[buf + 24 >> 2] = stat.gid;
-        HEAP32[buf + 28 >> 2] = stat.rdev;
-        HEAP32[buf + 32 >> 2] = 0;
-        tempI64 = [stat.size >>> 0, (tempDouble = stat.size, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[buf + 40 >> 2] = tempI64[0], HEAP32[buf + 44 >> 2] = tempI64[1];
-        HEAP32[buf + 48 >> 2] = 4096;
-        HEAP32[buf + 52 >> 2] = stat.blocks;
-        HEAP32[buf + 56 >> 2] = stat.atime.getTime() / 1e3 | 0;
-        HEAP32[buf + 60 >> 2] = 0;
-        HEAP32[buf + 64 >> 2] = stat.mtime.getTime() / 1e3 | 0;
-        HEAP32[buf + 68 >> 2] = 0;
-        HEAP32[buf + 72 >> 2] = stat.ctime.getTime() / 1e3 | 0;
-        HEAP32[buf + 76 >> 2] = 0;
-        tempI64 = [stat.ino >>> 0, (tempDouble = stat.ino, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[buf + 80 >> 2] = tempI64[0], HEAP32[buf + 84 >> 2] = tempI64[1];
-        return 0;
-      }, doMsync: function(addr, stream, len, flags, offset) {
-        var buffer2 = HEAPU8.slice(addr, addr + len);
-        FS.msync(stream, buffer2, offset, len, flags);
-      }, doMkdir: function(path, mode) {
-        path = PATH.normalize(path);
-        if (path[path.length - 1] === "/")
-          path = path.substr(0, path.length - 1);
-        FS.mkdir(path, mode, 0);
-        return 0;
-      }, doMknod: function(path, mode, dev) {
-        switch (mode & 61440) {
-          case 32768:
-          case 8192:
-          case 24576:
-          case 4096:
-          case 49152:
-            break;
-          default:
-            return -28;
-        }
-        FS.mknod(path, mode, dev);
-        return 0;
-      }, doReadlink: function(path, buf, bufsize) {
-        if (bufsize <= 0)
-          return -28;
-        var ret = FS.readlink(path);
-        var len = Math.min(bufsize, lengthBytesUTF8(ret));
-        var endChar = HEAP8[buf + len];
-        stringToUTF8(ret, buf, bufsize + 1);
-        HEAP8[buf + len] = endChar;
-        return len;
-      }, doAccess: function(path, amode) {
-        if (amode & ~7) {
-          return -28;
-        }
-        var node;
-        var lookup = FS.lookupPath(path, {follow: true});
-        node = lookup.node;
-        if (!node) {
-          return -44;
-        }
-        var perms = "";
-        if (amode & 4)
-          perms += "r";
-        if (amode & 2)
-          perms += "w";
-        if (amode & 1)
-          perms += "x";
-        if (perms && FS.nodePermissions(node, perms)) {
-          return -2;
-        }
-        return 0;
-      }, doDup: function(path, flags, suggestFD) {
-        var suggest = FS.getStream(suggestFD);
-        if (suggest)
-          FS.close(suggest);
-        return FS.open(path, flags, 0, suggestFD, suggestFD).fd;
-      }, doReadv: function(stream, iov, iovcnt, offset) {
-        var ret = 0;
-        for (var i = 0; i < iovcnt; i++) {
-          var ptr = HEAP32[iov + i * 8 >> 2];
-          var len = HEAP32[iov + (i * 8 + 4) >> 2];
-          var curr = FS.read(stream, HEAP8, ptr, len, offset);
-          if (curr < 0)
-            return -1;
-          ret += curr;
-          if (curr < len)
-            break;
-        }
-        return ret;
-      }, doWritev: function(stream, iov, iovcnt, offset) {
-        var ret = 0;
-        for (var i = 0; i < iovcnt; i++) {
-          var ptr = HEAP32[iov + i * 8 >> 2];
-          var len = HEAP32[iov + (i * 8 + 4) >> 2];
-          var curr = FS.write(stream, HEAP8, ptr, len, offset);
-          if (curr < 0)
-            return -1;
-          ret += curr;
-        }
-        return ret;
-      }, varargs: void 0, get: function() {
-        SYSCALLS.varargs += 4;
-        var ret = HEAP32[SYSCALLS.varargs - 4 >> 2];
-        return ret;
-      }, getStr: function(ptr) {
-        var ret = UTF8ToString(ptr);
-        return ret;
-      }, getStreamFromFD: function(fd) {
-        var stream = FS.getStream(fd);
-        if (!stream)
-          throw new FS.ErrnoError(8);
-        return stream;
-      }, get64: function(low, high) {
-        return low;
-      }};
-      function ___sys_fcntl64(fd, cmd, varargs) {
-        SYSCALLS.varargs = varargs;
-        try {
-          var stream = SYSCALLS.getStreamFromFD(fd);
-          switch (cmd) {
-            case 0: {
-              var arg = SYSCALLS.get();
-              if (arg < 0) {
-                return -28;
-              }
-              var newStream;
-              newStream = FS.open(stream.path, stream.flags, 0, arg);
-              return newStream.fd;
-            }
-            case 1:
-            case 2:
-              return 0;
-            case 3:
-              return stream.flags;
-            case 4: {
-              var arg = SYSCALLS.get();
-              stream.flags |= arg;
-              return 0;
-            }
-            case 12: {
-              var arg = SYSCALLS.get();
-              var offset = 0;
-              HEAP16[arg + offset >> 1] = 2;
-              return 0;
-            }
-            case 13:
-            case 14:
-              return 0;
-            case 16:
-            case 8:
-              return -28;
-            case 9:
-              setErrNo(28);
-              return -1;
-            default: {
-              return -28;
-            }
-          }
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return -e.errno;
-        }
-      }
-      function ___sys_ioctl(fd, op, varargs) {
-        SYSCALLS.varargs = varargs;
-        try {
-          var stream = SYSCALLS.getStreamFromFD(fd);
-          switch (op) {
-            case 21509:
-            case 21505: {
-              if (!stream.tty)
-                return -59;
-              return 0;
-            }
-            case 21510:
-            case 21511:
-            case 21512:
-            case 21506:
-            case 21507:
-            case 21508: {
-              if (!stream.tty)
-                return -59;
-              return 0;
-            }
-            case 21519: {
-              if (!stream.tty)
-                return -59;
-              var argp = SYSCALLS.get();
-              HEAP32[argp >> 2] = 0;
-              return 0;
-            }
-            case 21520: {
-              if (!stream.tty)
-                return -59;
-              return -28;
-            }
-            case 21531: {
-              var argp = SYSCALLS.get();
-              return FS.ioctl(stream, op, argp);
-            }
-            case 21523: {
-              if (!stream.tty)
-                return -59;
-              return 0;
-            }
-            case 21524: {
-              if (!stream.tty)
-                return -59;
-              return 0;
-            }
-            default:
-              abort("bad ioctl syscall " + op);
-          }
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return -e.errno;
-        }
-      }
-      function ___sys_open(path, flags, varargs) {
-        SYSCALLS.varargs = varargs;
-        try {
-          var pathname = SYSCALLS.getStr(path);
-          var mode = SYSCALLS.get();
-          var stream = FS.open(pathname, flags, mode);
-          return stream.fd;
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return -e.errno;
-        }
-      }
-      var tupleRegistrations = {};
-      function runDestructors(destructors) {
-        while (destructors.length) {
-          var ptr = destructors.pop();
-          var del = destructors.pop();
-          del(ptr);
-        }
-      }
-      function simpleReadValueFromPointer(pointer) {
-        return this["fromWireType"](HEAPU32[pointer >> 2]);
-      }
-      var awaitingDependencies = {};
-      var registeredTypes = {};
-      var typeDependencies = {};
-      var char_0 = 48;
-      var char_9 = 57;
-      function makeLegalFunctionName(name2) {
-        if (name2 === void 0) {
-          return "_unknown";
-        }
-        name2 = name2.replace(/[^a-zA-Z0-9_]/g, "$");
-        var f = name2.charCodeAt(0);
-        if (f >= char_0 && f <= char_9) {
-          return "_" + name2;
-        } else {
-          return name2;
-        }
-      }
-      function createNamedFunction(name2, body) {
-        name2 = makeLegalFunctionName(name2);
-        return new Function("body", "return function " + name2 + '() {\n    "use strict";    return body.apply(this, arguments);\n};\n')(body);
-      }
-      function extendError(baseErrorType, errorName) {
-        var errorClass = createNamedFunction(errorName, function(message) {
-          this.name = errorName;
-          this.message = message;
-          var stack = new Error(message).stack;
-          if (stack !== void 0) {
-            this.stack = this.toString() + "\n" + stack.replace(/^Error(:[^\n]*)?\n/, "");
-          }
-        });
-        errorClass.prototype = Object.create(baseErrorType.prototype);
-        errorClass.prototype.constructor = errorClass;
-        errorClass.prototype.toString = function() {
-          if (this.message === void 0) {
-            return this.name;
-          } else {
-            return this.name + ": " + this.message;
-          }
-        };
-        return errorClass;
-      }
-      var InternalError = void 0;
-      function throwInternalError(message) {
-        throw new InternalError(message);
-      }
-      function whenDependentTypesAreResolved(myTypes, dependentTypes, getTypeConverters) {
-        myTypes.forEach(function(type) {
-          typeDependencies[type] = dependentTypes;
-        });
-        function onComplete(typeConverters2) {
-          var myTypeConverters = getTypeConverters(typeConverters2);
-          if (myTypeConverters.length !== myTypes.length) {
-            throwInternalError("Mismatched type converter count");
-          }
-          for (var i = 0; i < myTypes.length; ++i) {
-            registerType(myTypes[i], myTypeConverters[i]);
-          }
-        }
-        var typeConverters = new Array(dependentTypes.length);
-        var unregisteredTypes = [];
-        var registered = 0;
-        dependentTypes.forEach(function(dt, i) {
-          if (registeredTypes.hasOwnProperty(dt)) {
-            typeConverters[i] = registeredTypes[dt];
-          } else {
-            unregisteredTypes.push(dt);
-            if (!awaitingDependencies.hasOwnProperty(dt)) {
-              awaitingDependencies[dt] = [];
-            }
-            awaitingDependencies[dt].push(function() {
-              typeConverters[i] = registeredTypes[dt];
-              ++registered;
-              if (registered === unregisteredTypes.length) {
-                onComplete(typeConverters);
-              }
-            });
-          }
-        });
-        if (unregisteredTypes.length === 0) {
-          onComplete(typeConverters);
-        }
-      }
-      function __embind_finalize_value_array(rawTupleType) {
-        var reg = tupleRegistrations[rawTupleType];
-        delete tupleRegistrations[rawTupleType];
-        var elements = reg.elements;
-        var elementsLength = elements.length;
-        var elementTypes = elements.map(function(elt) {
-          return elt.getterReturnType;
-        }).concat(elements.map(function(elt) {
-          return elt.setterArgumentType;
-        }));
-        var rawConstructor = reg.rawConstructor;
-        var rawDestructor = reg.rawDestructor;
-        whenDependentTypesAreResolved([rawTupleType], elementTypes, function(elementTypes2) {
-          elements.forEach(function(elt, i) {
-            var getterReturnType = elementTypes2[i];
-            var getter = elt.getter;
-            var getterContext = elt.getterContext;
-            var setterArgumentType = elementTypes2[i + elementsLength];
-            var setter = elt.setter;
-            var setterContext = elt.setterContext;
-            elt.read = function(ptr) {
-              return getterReturnType["fromWireType"](getter(getterContext, ptr));
-            };
-            elt.write = function(ptr, o) {
-              var destructors = [];
-              setter(setterContext, ptr, setterArgumentType["toWireType"](destructors, o));
-              runDestructors(destructors);
-            };
-          });
-          return [{name: reg.name, fromWireType: function(ptr) {
-            var rv = new Array(elementsLength);
-            for (var i = 0; i < elementsLength; ++i) {
-              rv[i] = elements[i].read(ptr);
-            }
-            rawDestructor(ptr);
-            return rv;
-          }, toWireType: function(destructors, o) {
-            if (elementsLength !== o.length) {
-              throw new TypeError("Incorrect number of tuple elements for " + reg.name + ": expected=" + elementsLength + ", actual=" + o.length);
-            }
-            var ptr = rawConstructor();
-            for (var i = 0; i < elementsLength; ++i) {
-              elements[i].write(ptr, o[i]);
-            }
-            if (destructors !== null) {
-              destructors.push(rawDestructor, ptr);
-            }
-            return ptr;
-          }, argPackAdvance: 8, readValueFromPointer: simpleReadValueFromPointer, destructorFunction: rawDestructor}];
-        });
-      }
-      var structRegistrations = {};
-      function __embind_finalize_value_object(structType) {
-        var reg = structRegistrations[structType];
-        delete structRegistrations[structType];
-        var rawConstructor = reg.rawConstructor;
-        var rawDestructor = reg.rawDestructor;
-        var fieldRecords = reg.fields;
-        var fieldTypes = fieldRecords.map(function(field) {
-          return field.getterReturnType;
-        }).concat(fieldRecords.map(function(field) {
-          return field.setterArgumentType;
-        }));
-        whenDependentTypesAreResolved([structType], fieldTypes, function(fieldTypes2) {
-          var fields = {};
-          fieldRecords.forEach(function(field, i) {
-            var fieldName = field.fieldName;
-            var getterReturnType = fieldTypes2[i];
-            var getter = field.getter;
-            var getterContext = field.getterContext;
-            var setterArgumentType = fieldTypes2[i + fieldRecords.length];
-            var setter = field.setter;
-            var setterContext = field.setterContext;
-            fields[fieldName] = {read: function(ptr) {
-              return getterReturnType["fromWireType"](getter(getterContext, ptr));
-            }, write: function(ptr, o) {
-              var destructors = [];
-              setter(setterContext, ptr, setterArgumentType["toWireType"](destructors, o));
-              runDestructors(destructors);
-            }};
-          });
-          return [{name: reg.name, fromWireType: function(ptr) {
-            var rv = {};
-            for (var i in fields) {
-              rv[i] = fields[i].read(ptr);
-            }
-            rawDestructor(ptr);
-            return rv;
-          }, toWireType: function(destructors, o) {
-            for (var fieldName in fields) {
-              if (!(fieldName in o)) {
-                throw new TypeError('Missing field:  "' + fieldName + '"');
-              }
-            }
-            var ptr = rawConstructor();
-            for (fieldName in fields) {
-              fields[fieldName].write(ptr, o[fieldName]);
-            }
-            if (destructors !== null) {
-              destructors.push(rawDestructor, ptr);
-            }
-            return ptr;
-          }, argPackAdvance: 8, readValueFromPointer: simpleReadValueFromPointer, destructorFunction: rawDestructor}];
-        });
-      }
-      function getShiftFromSize(size) {
-        switch (size) {
-          case 1:
-            return 0;
-          case 2:
-            return 1;
-          case 4:
-            return 2;
-          case 8:
-            return 3;
-          default:
-            throw new TypeError("Unknown type size: " + size);
-        }
-      }
-      function embind_init_charCodes() {
-        var codes = new Array(256);
-        for (var i = 0; i < 256; ++i) {
-          codes[i] = String.fromCharCode(i);
-        }
-        embind_charCodes = codes;
-      }
-      var embind_charCodes = void 0;
-      function readLatin1String(ptr) {
-        var ret = "";
-        var c = ptr;
-        while (HEAPU8[c]) {
-          ret += embind_charCodes[HEAPU8[c++]];
-        }
-        return ret;
-      }
-      var BindingError = void 0;
-      function throwBindingError(message) {
-        throw new BindingError(message);
-      }
-      function registerType(rawType, registeredInstance, options) {
-        options = options || {};
-        if (!("argPackAdvance" in registeredInstance)) {
-          throw new TypeError("registerType registeredInstance requires argPackAdvance");
-        }
-        var name2 = registeredInstance.name;
-        if (!rawType) {
-          throwBindingError('type "' + name2 + '" must have a positive integer typeid pointer');
-        }
-        if (registeredTypes.hasOwnProperty(rawType)) {
-          if (options.ignoreDuplicateRegistrations) {
-            return;
-          } else {
-            throwBindingError("Cannot register type '" + name2 + "' twice");
-          }
-        }
-        registeredTypes[rawType] = registeredInstance;
-        delete typeDependencies[rawType];
-        if (awaitingDependencies.hasOwnProperty(rawType)) {
-          var callbacks = awaitingDependencies[rawType];
-          delete awaitingDependencies[rawType];
-          callbacks.forEach(function(cb) {
-            cb();
-          });
-        }
-      }
-      function __embind_register_bool(rawType, name2, size, trueValue, falseValue) {
-        var shift = getShiftFromSize(size);
-        name2 = readLatin1String(name2);
-        registerType(rawType, {name: name2, fromWireType: function(wt) {
-          return !!wt;
-        }, toWireType: function(destructors, o) {
-          return o ? trueValue : falseValue;
-        }, argPackAdvance: 8, readValueFromPointer: function(pointer) {
-          var heap;
-          if (size === 1) {
-            heap = HEAP8;
-          } else if (size === 2) {
-            heap = HEAP16;
-          } else if (size === 4) {
-            heap = HEAP32;
-          } else {
-            throw new TypeError("Unknown boolean type size: " + name2);
-          }
-          return this["fromWireType"](heap[pointer >> shift]);
-        }, destructorFunction: null});
-      }
-      function ClassHandle_isAliasOf(other) {
-        if (!(this instanceof ClassHandle)) {
-          return false;
-        }
-        if (!(other instanceof ClassHandle)) {
-          return false;
-        }
-        var leftClass = this.$$.ptrType.registeredClass;
-        var left = this.$$.ptr;
-        var rightClass = other.$$.ptrType.registeredClass;
-        var right = other.$$.ptr;
-        while (leftClass.baseClass) {
-          left = leftClass.upcast(left);
-          leftClass = leftClass.baseClass;
-        }
-        while (rightClass.baseClass) {
-          right = rightClass.upcast(right);
-          rightClass = rightClass.baseClass;
-        }
-        return leftClass === rightClass && left === right;
-      }
-      function shallowCopyInternalPointer(o) {
-        return {count: o.count, deleteScheduled: o.deleteScheduled, preservePointerOnDelete: o.preservePointerOnDelete, ptr: o.ptr, ptrType: o.ptrType, smartPtr: o.smartPtr, smartPtrType: o.smartPtrType};
-      }
-      function throwInstanceAlreadyDeleted(obj) {
-        function getInstanceTypeName(handle) {
-          return handle.$$.ptrType.registeredClass.name;
-        }
-        throwBindingError(getInstanceTypeName(obj) + " instance already deleted");
-      }
-      var finalizationGroup = false;
-      function detachFinalizer(handle) {
-      }
-      function runDestructor($$) {
-        if ($$.smartPtr) {
-          $$.smartPtrType.rawDestructor($$.smartPtr);
-        } else {
-          $$.ptrType.registeredClass.rawDestructor($$.ptr);
-        }
-      }
-      function releaseClassHandle($$) {
-        $$.count.value -= 1;
-        var toDelete = $$.count.value === 0;
-        if (toDelete) {
-          runDestructor($$);
-        }
-      }
-      function attachFinalizer(handle) {
-        if (typeof FinalizationGroup === "undefined") {
-          attachFinalizer = function(handle2) {
-            return handle2;
-          };
-          return handle;
-        }
-        finalizationGroup = new FinalizationGroup(function(iter) {
-          for (var result = iter.next(); !result.done; result = iter.next()) {
-            var $$ = result.value;
-            if (!$$.ptr) {
-              console.warn("object already deleted: " + $$.ptr);
-            } else {
-              releaseClassHandle($$);
-            }
-          }
-        });
-        attachFinalizer = function(handle2) {
-          finalizationGroup.register(handle2, handle2.$$, handle2.$$);
-          return handle2;
-        };
-        detachFinalizer = function(handle2) {
-          finalizationGroup.unregister(handle2.$$);
-        };
-        return attachFinalizer(handle);
-      }
-      function ClassHandle_clone() {
-        if (!this.$$.ptr) {
-          throwInstanceAlreadyDeleted(this);
-        }
-        if (this.$$.preservePointerOnDelete) {
-          this.$$.count.value += 1;
-          return this;
-        } else {
-          var clone = attachFinalizer(Object.create(Object.getPrototypeOf(this), {$$: {value: shallowCopyInternalPointer(this.$$)}}));
-          clone.$$.count.value += 1;
-          clone.$$.deleteScheduled = false;
-          return clone;
-        }
-      }
-      function ClassHandle_delete() {
-        if (!this.$$.ptr) {
-          throwInstanceAlreadyDeleted(this);
-        }
-        if (this.$$.deleteScheduled && !this.$$.preservePointerOnDelete) {
-          throwBindingError("Object already scheduled for deletion");
-        }
-        detachFinalizer(this);
-        releaseClassHandle(this.$$);
-        if (!this.$$.preservePointerOnDelete) {
-          this.$$.smartPtr = void 0;
-          this.$$.ptr = void 0;
-        }
-      }
-      function ClassHandle_isDeleted() {
-        return !this.$$.ptr;
-      }
-      var delayFunction = void 0;
-      var deletionQueue = [];
-      function flushPendingDeletes() {
-        while (deletionQueue.length) {
-          var obj = deletionQueue.pop();
-          obj.$$.deleteScheduled = false;
-          obj["delete"]();
-        }
-      }
-      function ClassHandle_deleteLater() {
-        if (!this.$$.ptr) {
-          throwInstanceAlreadyDeleted(this);
-        }
-        if (this.$$.deleteScheduled && !this.$$.preservePointerOnDelete) {
-          throwBindingError("Object already scheduled for deletion");
-        }
-        deletionQueue.push(this);
-        if (deletionQueue.length === 1 && delayFunction) {
-          delayFunction(flushPendingDeletes);
-        }
-        this.$$.deleteScheduled = true;
-        return this;
-      }
-      function init_ClassHandle() {
-        ClassHandle.prototype["isAliasOf"] = ClassHandle_isAliasOf;
-        ClassHandle.prototype["clone"] = ClassHandle_clone;
-        ClassHandle.prototype["delete"] = ClassHandle_delete;
-        ClassHandle.prototype["isDeleted"] = ClassHandle_isDeleted;
-        ClassHandle.prototype["deleteLater"] = ClassHandle_deleteLater;
-      }
-      function ClassHandle() {
-      }
-      var registeredPointers = {};
-      function ensureOverloadTable(proto, methodName, humanName) {
-        if (proto[methodName].overloadTable === void 0) {
-          var prevFunc = proto[methodName];
-          proto[methodName] = function() {
-            if (!proto[methodName].overloadTable.hasOwnProperty(arguments.length)) {
-              throwBindingError("Function '" + humanName + "' called with an invalid number of arguments (" + arguments.length + ") - expects one of (" + proto[methodName].overloadTable + ")!");
-            }
-            return proto[methodName].overloadTable[arguments.length].apply(this, arguments);
-          };
-          proto[methodName].overloadTable = [];
-          proto[methodName].overloadTable[prevFunc.argCount] = prevFunc;
-        }
-      }
-      function exposePublicSymbol(name2, value, numArguments) {
-        if (Module.hasOwnProperty(name2)) {
-          if (numArguments === void 0 || Module[name2].overloadTable !== void 0 && Module[name2].overloadTable[numArguments] !== void 0) {
-            throwBindingError("Cannot register public name '" + name2 + "' twice");
-          }
-          ensureOverloadTable(Module, name2, name2);
-          if (Module.hasOwnProperty(numArguments)) {
-            throwBindingError("Cannot register multiple overloads of a function with the same number of arguments (" + numArguments + ")!");
-          }
-          Module[name2].overloadTable[numArguments] = value;
-        } else {
-          Module[name2] = value;
-          if (numArguments !== void 0) {
-            Module[name2].numArguments = numArguments;
-          }
-        }
-      }
-      function RegisteredClass(name2, constructor, instancePrototype, rawDestructor, baseClass, getActualType, upcast, downcast) {
-        this.name = name2;
-        this.constructor = constructor;
-        this.instancePrototype = instancePrototype;
-        this.rawDestructor = rawDestructor;
-        this.baseClass = baseClass;
-        this.getActualType = getActualType;
-        this.upcast = upcast;
-        this.downcast = downcast;
-        this.pureVirtualFunctions = [];
-      }
-      function upcastPointer(ptr, ptrClass, desiredClass) {
-        while (ptrClass !== desiredClass) {
-          if (!ptrClass.upcast) {
-            throwBindingError("Expected null or instance of " + desiredClass.name + ", got an instance of " + ptrClass.name);
-          }
-          ptr = ptrClass.upcast(ptr);
-          ptrClass = ptrClass.baseClass;
-        }
-        return ptr;
-      }
-      function constNoSmartPtrRawPointerToWireType(destructors, handle) {
-        if (handle === null) {
-          if (this.isReference) {
-            throwBindingError("null is not a valid " + this.name);
-          }
-          return 0;
-        }
-        if (!handle.$$) {
-          throwBindingError('Cannot pass "' + _embind_repr(handle) + '" as a ' + this.name);
-        }
-        if (!handle.$$.ptr) {
-          throwBindingError("Cannot pass deleted object as a pointer of type " + this.name);
-        }
-        var handleClass = handle.$$.ptrType.registeredClass;
-        var ptr = upcastPointer(handle.$$.ptr, handleClass, this.registeredClass);
-        return ptr;
-      }
-      function genericPointerToWireType(destructors, handle) {
-        var ptr;
-        if (handle === null) {
-          if (this.isReference) {
-            throwBindingError("null is not a valid " + this.name);
-          }
-          if (this.isSmartPointer) {
-            ptr = this.rawConstructor();
-            if (destructors !== null) {
-              destructors.push(this.rawDestructor, ptr);
-            }
-            return ptr;
-          } else {
-            return 0;
-          }
-        }
-        if (!handle.$$) {
-          throwBindingError('Cannot pass "' + _embind_repr(handle) + '" as a ' + this.name);
-        }
-        if (!handle.$$.ptr) {
-          throwBindingError("Cannot pass deleted object as a pointer of type " + this.name);
-        }
-        if (!this.isConst && handle.$$.ptrType.isConst) {
-          throwBindingError("Cannot convert argument of type " + (handle.$$.smartPtrType ? handle.$$.smartPtrType.name : handle.$$.ptrType.name) + " to parameter type " + this.name);
-        }
-        var handleClass = handle.$$.ptrType.registeredClass;
-        ptr = upcastPointer(handle.$$.ptr, handleClass, this.registeredClass);
-        if (this.isSmartPointer) {
-          if (handle.$$.smartPtr === void 0) {
-            throwBindingError("Passing raw pointer to smart pointer is illegal");
-          }
-          switch (this.sharingPolicy) {
-            case 0:
-              if (handle.$$.smartPtrType === this) {
-                ptr = handle.$$.smartPtr;
+              if (bytesRead > 0) {
+                result = buf.slice(0, bytesRead).toString("utf-8");
               } else {
-                throwBindingError("Cannot convert argument of type " + (handle.$$.smartPtrType ? handle.$$.smartPtrType.name : handle.$$.ptrType.name) + " to parameter type " + this.name);
+                result = null;
               }
-              break;
-            case 1:
-              ptr = handle.$$.smartPtr;
-              break;
-            case 2:
-              if (handle.$$.smartPtrType === this) {
-                ptr = handle.$$.smartPtr;
-              } else {
-                var clonedHandle = handle["clone"]();
-                ptr = this.rawShare(ptr, __emval_register(function() {
-                  clonedHandle["delete"]();
-                }));
-                if (destructors !== null) {
-                  destructors.push(this.rawDestructor, ptr);
-                }
+            } else if (typeof window != "undefined" && typeof window.prompt == "function") {
+              result = window.prompt("Input: ");
+              if (result !== null) {
+                result += "\n";
               }
-              break;
-            default:
-              throwBindingError("Unsupporting sharing policy");
+            } else if (typeof readline == "function") {
+              result = readline();
+              if (result !== null) {
+                result += "\n";
+              }
+            }
+            if (!result) {
+              return null;
+            }
+            tty.input = intArrayFromString(result, true);
           }
-        }
-        return ptr;
-      }
-      function nonConstNoSmartPtrRawPointerToWireType(destructors, handle) {
-        if (handle === null) {
-          if (this.isReference) {
-            throwBindingError("null is not a valid " + this.name);
+          return tty.input.shift();
+        }, put_char: function(tty, val) {
+          if (val === null || val === 10) {
+            out(UTF8ArrayToString(tty.output, 0));
+            tty.output = [];
+          } else {
+            if (val != 0)
+              tty.output.push(val);
           }
-          return 0;
-        }
-        if (!handle.$$) {
-          throwBindingError('Cannot pass "' + _embind_repr(handle) + '" as a ' + this.name);
-        }
-        if (!handle.$$.ptr) {
-          throwBindingError("Cannot pass deleted object as a pointer of type " + this.name);
-        }
-        if (handle.$$.ptrType.isConst) {
-          throwBindingError("Cannot convert argument of type " + handle.$$.ptrType.name + " to parameter type " + this.name);
-        }
-        var handleClass = handle.$$.ptrType.registeredClass;
-        var ptr = upcastPointer(handle.$$.ptr, handleClass, this.registeredClass);
-        return ptr;
-      }
-      function RegisteredPointer_getPointee(ptr) {
-        if (this.rawGetPointee) {
-          ptr = this.rawGetPointee(ptr);
-        }
-        return ptr;
-      }
-      function RegisteredPointer_destructor(ptr) {
-        if (this.rawDestructor) {
-          this.rawDestructor(ptr);
-        }
-      }
-      function RegisteredPointer_deleteObject(handle) {
-        if (handle !== null) {
-          handle["delete"]();
-        }
-      }
-      function downcastPointer(ptr, ptrClass, desiredClass) {
-        if (ptrClass === desiredClass) {
+        }, flush: function(tty) {
+          if (tty.output && tty.output.length > 0) {
+            out(UTF8ArrayToString(tty.output, 0));
+            tty.output = [];
+          }
+        } }, default_tty1_ops: { put_char: function(tty, val) {
+          if (val === null || val === 10) {
+            err(UTF8ArrayToString(tty.output, 0));
+            tty.output = [];
+          } else {
+            if (val != 0)
+              tty.output.push(val);
+          }
+        }, flush: function(tty) {
+          if (tty.output && tty.output.length > 0) {
+            err(UTF8ArrayToString(tty.output, 0));
+            tty.output = [];
+          }
+        } } };
+        function mmapAlloc(size) {
+          var alignedSize = alignMemory(size, 16384);
+          var ptr = _malloc(alignedSize);
+          while (size < alignedSize)
+            HEAP8[ptr + size++ >>> 0] = 0;
           return ptr;
         }
-        if (desiredClass.baseClass === void 0) {
-          return null;
-        }
-        var rv = downcastPointer(ptr, ptrClass, desiredClass.baseClass);
-        if (rv === null) {
-          return null;
-        }
-        return desiredClass.downcast(rv);
-      }
-      function getInheritedInstanceCount() {
-        return Object.keys(registeredInstances).length;
-      }
-      function getLiveInheritedInstances() {
-        var rv = [];
-        for (var k in registeredInstances) {
-          if (registeredInstances.hasOwnProperty(k)) {
-            rv.push(registeredInstances[k]);
+        var MEMFS = { ops_table: null, mount: function(mount) {
+          return MEMFS.createNode(null, "/", 16384 | 511, 0);
+        }, createNode: function(parent, name2, mode, dev) {
+          if (FS.isBlkdev(mode) || FS.isFIFO(mode)) {
+            throw new FS.ErrnoError(63);
           }
-        }
-        return rv;
-      }
-      function setDelayFunction(fn) {
-        delayFunction = fn;
-        if (deletionQueue.length && delayFunction) {
-          delayFunction(flushPendingDeletes);
-        }
-      }
-      function init_embind() {
-        Module["getInheritedInstanceCount"] = getInheritedInstanceCount;
-        Module["getLiveInheritedInstances"] = getLiveInheritedInstances;
-        Module["flushPendingDeletes"] = flushPendingDeletes;
-        Module["setDelayFunction"] = setDelayFunction;
-      }
-      var registeredInstances = {};
-      function getBasestPointer(class_, ptr) {
-        if (ptr === void 0) {
-          throwBindingError("ptr should not be undefined");
-        }
-        while (class_.baseClass) {
-          ptr = class_.upcast(ptr);
-          class_ = class_.baseClass;
-        }
-        return ptr;
-      }
-      function getInheritedInstance(class_, ptr) {
-        ptr = getBasestPointer(class_, ptr);
-        return registeredInstances[ptr];
-      }
-      function makeClassHandle(prototype, record) {
-        if (!record.ptrType || !record.ptr) {
-          throwInternalError("makeClassHandle requires ptr and ptrType");
-        }
-        var hasSmartPtrType = !!record.smartPtrType;
-        var hasSmartPtr = !!record.smartPtr;
-        if (hasSmartPtrType !== hasSmartPtr) {
-          throwInternalError("Both smartPtrType and smartPtr must be specified");
-        }
-        record.count = {value: 1};
-        return attachFinalizer(Object.create(prototype, {$$: {value: record}}));
-      }
-      function RegisteredPointer_fromWireType(ptr) {
-        var rawPointer = this.getPointee(ptr);
-        if (!rawPointer) {
-          this.destructor(ptr);
-          return null;
-        }
-        var registeredInstance = getInheritedInstance(this.registeredClass, rawPointer);
-        if (registeredInstance !== void 0) {
-          if (registeredInstance.$$.count.value === 0) {
-            registeredInstance.$$.ptr = rawPointer;
-            registeredInstance.$$.smartPtr = ptr;
-            return registeredInstance["clone"]();
-          } else {
-            var rv = registeredInstance["clone"]();
-            this.destructor(ptr);
-            return rv;
+          if (!MEMFS.ops_table) {
+            MEMFS.ops_table = { dir: { node: { getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr, lookup: MEMFS.node_ops.lookup, mknod: MEMFS.node_ops.mknod, rename: MEMFS.node_ops.rename, unlink: MEMFS.node_ops.unlink, rmdir: MEMFS.node_ops.rmdir, readdir: MEMFS.node_ops.readdir, symlink: MEMFS.node_ops.symlink }, stream: { llseek: MEMFS.stream_ops.llseek } }, file: { node: { getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr }, stream: { llseek: MEMFS.stream_ops.llseek, read: MEMFS.stream_ops.read, write: MEMFS.stream_ops.write, allocate: MEMFS.stream_ops.allocate, mmap: MEMFS.stream_ops.mmap, msync: MEMFS.stream_ops.msync } }, link: { node: { getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr, readlink: MEMFS.node_ops.readlink }, stream: {} }, chrdev: { node: { getattr: MEMFS.node_ops.getattr, setattr: MEMFS.node_ops.setattr }, stream: FS.chrdev_stream_ops } };
           }
-        }
-        function makeDefaultHandle() {
-          if (this.isSmartPointer) {
-            return makeClassHandle(this.registeredClass.instancePrototype, {ptrType: this.pointeeType, ptr: rawPointer, smartPtrType: this, smartPtr: ptr});
-          } else {
-            return makeClassHandle(this.registeredClass.instancePrototype, {ptrType: this, ptr});
+          var node = FS.createNode(parent, name2, mode, dev);
+          if (FS.isDir(node.mode)) {
+            node.node_ops = MEMFS.ops_table.dir.node;
+            node.stream_ops = MEMFS.ops_table.dir.stream;
+            node.contents = {};
+          } else if (FS.isFile(node.mode)) {
+            node.node_ops = MEMFS.ops_table.file.node;
+            node.stream_ops = MEMFS.ops_table.file.stream;
+            node.usedBytes = 0;
+            node.contents = null;
+          } else if (FS.isLink(node.mode)) {
+            node.node_ops = MEMFS.ops_table.link.node;
+            node.stream_ops = MEMFS.ops_table.link.stream;
+          } else if (FS.isChrdev(node.mode)) {
+            node.node_ops = MEMFS.ops_table.chrdev.node;
+            node.stream_ops = MEMFS.ops_table.chrdev.stream;
           }
-        }
-        var actualType = this.registeredClass.getActualType(rawPointer);
-        var registeredPointerRecord = registeredPointers[actualType];
-        if (!registeredPointerRecord) {
-          return makeDefaultHandle.call(this);
-        }
-        var toType;
-        if (this.isConst) {
-          toType = registeredPointerRecord.constPointerType;
-        } else {
-          toType = registeredPointerRecord.pointerType;
-        }
-        var dp = downcastPointer(rawPointer, this.registeredClass, toType.registeredClass);
-        if (dp === null) {
-          return makeDefaultHandle.call(this);
-        }
-        if (this.isSmartPointer) {
-          return makeClassHandle(toType.registeredClass.instancePrototype, {ptrType: toType, ptr: dp, smartPtrType: this, smartPtr: ptr});
-        } else {
-          return makeClassHandle(toType.registeredClass.instancePrototype, {ptrType: toType, ptr: dp});
-        }
-      }
-      function init_RegisteredPointer() {
-        RegisteredPointer.prototype.getPointee = RegisteredPointer_getPointee;
-        RegisteredPointer.prototype.destructor = RegisteredPointer_destructor;
-        RegisteredPointer.prototype["argPackAdvance"] = 8;
-        RegisteredPointer.prototype["readValueFromPointer"] = simpleReadValueFromPointer;
-        RegisteredPointer.prototype["deleteObject"] = RegisteredPointer_deleteObject;
-        RegisteredPointer.prototype["fromWireType"] = RegisteredPointer_fromWireType;
-      }
-      function RegisteredPointer(name2, registeredClass, isReference, isConst, isSmartPointer, pointeeType, sharingPolicy, rawGetPointee, rawConstructor, rawShare, rawDestructor) {
-        this.name = name2;
-        this.registeredClass = registeredClass;
-        this.isReference = isReference;
-        this.isConst = isConst;
-        this.isSmartPointer = isSmartPointer;
-        this.pointeeType = pointeeType;
-        this.sharingPolicy = sharingPolicy;
-        this.rawGetPointee = rawGetPointee;
-        this.rawConstructor = rawConstructor;
-        this.rawShare = rawShare;
-        this.rawDestructor = rawDestructor;
-        if (!isSmartPointer && registeredClass.baseClass === void 0) {
-          if (isConst) {
-            this["toWireType"] = constNoSmartPtrRawPointerToWireType;
-            this.destructorFunction = null;
-          } else {
-            this["toWireType"] = nonConstNoSmartPtrRawPointerToWireType;
-            this.destructorFunction = null;
+          node.timestamp = Date.now();
+          if (parent) {
+            parent.contents[name2] = node;
           }
-        } else {
-          this["toWireType"] = genericPointerToWireType;
-        }
-      }
-      function replacePublicSymbol(name2, value, numArguments) {
-        if (!Module.hasOwnProperty(name2)) {
-          throwInternalError("Replacing nonexistant public symbol");
-        }
-        if (Module[name2].overloadTable !== void 0 && numArguments !== void 0) {
-          Module[name2].overloadTable[numArguments] = value;
-        } else {
-          Module[name2] = value;
-          Module[name2].argCount = numArguments;
-        }
-      }
-      function getDynCaller(sig, ptr) {
-        assert(sig.indexOf("j") >= 0, "getDynCaller should only be called with i64 sigs");
-        var argCache = [];
-        return function() {
-          argCache.length = arguments.length;
-          for (var i = 0; i < arguments.length; i++) {
-            argCache[i] = arguments[i];
+          return node;
+        }, getFileDataAsRegularArray: function(node) {
+          if (node.contents && node.contents.subarray) {
+            var arr = [];
+            for (var i = 0; i < node.usedBytes; ++i)
+              arr.push(node.contents[i]);
+            return arr;
           }
-          return dynCall(sig, ptr, argCache);
-        };
-      }
-      function embind__requireFunction(signature, rawFunction) {
-        signature = readLatin1String(signature);
-        function makeDynCaller() {
-          if (signature.indexOf("j") != -1) {
-            return getDynCaller(signature, rawFunction);
-          }
-          return wasmTable.get(rawFunction);
-        }
-        var fp = makeDynCaller();
-        if (typeof fp !== "function") {
-          throwBindingError("unknown function pointer with signature " + signature + ": " + rawFunction);
-        }
-        return fp;
-      }
-      var UnboundTypeError = void 0;
-      function getTypeName(type) {
-        var ptr = ___getTypeName(type);
-        var rv = readLatin1String(ptr);
-        _free(ptr);
-        return rv;
-      }
-      function throwUnboundTypeError(message, types) {
-        var unboundTypes = [];
-        var seen = {};
-        function visit(type) {
-          if (seen[type]) {
+          return node.contents;
+        }, getFileDataAsTypedArray: function(node) {
+          if (!node.contents)
+            return new Uint8Array(0);
+          if (node.contents.subarray)
+            return node.contents.subarray(0, node.usedBytes);
+          return new Uint8Array(node.contents);
+        }, expandFileStorage: function(node, newCapacity) {
+          newCapacity >>>= 0;
+          var prevCapacity = node.contents ? node.contents.length : 0;
+          if (prevCapacity >= newCapacity)
+            return;
+          var CAPACITY_DOUBLING_MAX = 1024 * 1024;
+          newCapacity = Math.max(newCapacity, prevCapacity * (prevCapacity < CAPACITY_DOUBLING_MAX ? 2 : 1.125) >>> 0);
+          if (prevCapacity != 0)
+            newCapacity = Math.max(newCapacity, 256);
+          var oldContents = node.contents;
+          node.contents = new Uint8Array(newCapacity);
+          if (node.usedBytes > 0)
+            node.contents.set(oldContents.subarray(0, node.usedBytes), 0);
+          return;
+        }, resizeFileStorage: function(node, newSize) {
+          newSize >>>= 0;
+          if (node.usedBytes == newSize)
+            return;
+          if (newSize == 0) {
+            node.contents = null;
+            node.usedBytes = 0;
             return;
           }
-          if (registeredTypes[type]) {
+          if (!node.contents || node.contents.subarray) {
+            var oldContents = node.contents;
+            node.contents = new Uint8Array(newSize);
+            if (oldContents) {
+              node.contents.set(oldContents.subarray(0, Math.min(newSize, node.usedBytes)));
+            }
+            node.usedBytes = newSize;
             return;
           }
-          if (typeDependencies[type]) {
-            typeDependencies[type].forEach(visit);
-            return;
-          }
-          unboundTypes.push(type);
-          seen[type] = true;
-        }
-        types.forEach(visit);
-        throw new UnboundTypeError(message + ": " + unboundTypes.map(getTypeName).join([", "]));
-      }
-      function __embind_register_class(rawType, rawPointerType, rawConstPointerType, baseClassRawType, getActualTypeSignature, getActualType, upcastSignature, upcast, downcastSignature, downcast, name2, destructorSignature, rawDestructor) {
-        name2 = readLatin1String(name2);
-        getActualType = embind__requireFunction(getActualTypeSignature, getActualType);
-        if (upcast) {
-          upcast = embind__requireFunction(upcastSignature, upcast);
-        }
-        if (downcast) {
-          downcast = embind__requireFunction(downcastSignature, downcast);
-        }
-        rawDestructor = embind__requireFunction(destructorSignature, rawDestructor);
-        var legalFunctionName = makeLegalFunctionName(name2);
-        exposePublicSymbol(legalFunctionName, function() {
-          throwUnboundTypeError("Cannot construct " + name2 + " due to unbound types", [baseClassRawType]);
-        });
-        whenDependentTypesAreResolved([rawType, rawPointerType, rawConstPointerType], baseClassRawType ? [baseClassRawType] : [], function(base) {
-          base = base[0];
-          var baseClass;
-          var basePrototype;
-          if (baseClassRawType) {
-            baseClass = base.registeredClass;
-            basePrototype = baseClass.instancePrototype;
+          if (!node.contents)
+            node.contents = [];
+          if (node.contents.length > newSize)
+            node.contents.length = newSize;
+          else
+            while (node.contents.length < newSize)
+              node.contents.push(0);
+          node.usedBytes = newSize;
+        }, node_ops: { getattr: function(node) {
+          var attr = {};
+          attr.dev = FS.isChrdev(node.mode) ? node.id : 1;
+          attr.ino = node.id;
+          attr.mode = node.mode;
+          attr.nlink = 1;
+          attr.uid = 0;
+          attr.gid = 0;
+          attr.rdev = node.rdev;
+          if (FS.isDir(node.mode)) {
+            attr.size = 4096;
+          } else if (FS.isFile(node.mode)) {
+            attr.size = node.usedBytes;
+          } else if (FS.isLink(node.mode)) {
+            attr.size = node.link.length;
           } else {
-            basePrototype = ClassHandle.prototype;
+            attr.size = 0;
           }
-          var constructor = createNamedFunction(legalFunctionName, function() {
-            if (Object.getPrototypeOf(this) !== instancePrototype) {
-              throw new BindingError("Use 'new' to construct " + name2);
-            }
-            if (registeredClass.constructor_body === void 0) {
-              throw new BindingError(name2 + " has no accessible constructor");
-            }
-            var body = registeredClass.constructor_body[arguments.length];
-            if (body === void 0) {
-              throw new BindingError("Tried to invoke ctor of " + name2 + " with invalid number of parameters (" + arguments.length + ") - expected (" + Object.keys(registeredClass.constructor_body).toString() + ") parameters instead!");
-            }
-            return body.apply(this, arguments);
-          });
-          var instancePrototype = Object.create(basePrototype, {constructor: {value: constructor}});
-          constructor.prototype = instancePrototype;
-          var registeredClass = new RegisteredClass(name2, constructor, instancePrototype, rawDestructor, baseClass, getActualType, upcast, downcast);
-          var referenceConverter = new RegisteredPointer(name2, registeredClass, true, false, false);
-          var pointerConverter = new RegisteredPointer(name2 + "*", registeredClass, false, false, false);
-          var constPointerConverter = new RegisteredPointer(name2 + " const*", registeredClass, false, true, false);
-          registeredPointers[rawType] = {pointerType: pointerConverter, constPointerType: constPointerConverter};
-          replacePublicSymbol(legalFunctionName, constructor);
-          return [referenceConverter, pointerConverter, constPointerConverter];
-        });
-      }
-      function heap32VectorToArray(count, firstElement) {
-        var array = [];
-        for (var i = 0; i < count; i++) {
-          array.push(HEAP32[(firstElement >> 2) + i]);
-        }
-        return array;
-      }
-      function __embind_register_class_constructor(rawClassType, argCount, rawArgTypesAddr, invokerSignature, invoker, rawConstructor) {
-        assert(argCount > 0);
-        var rawArgTypes = heap32VectorToArray(argCount, rawArgTypesAddr);
-        invoker = embind__requireFunction(invokerSignature, invoker);
-        var args = [rawConstructor];
-        var destructors = [];
-        whenDependentTypesAreResolved([], [rawClassType], function(classType) {
-          classType = classType[0];
-          var humanName = "constructor " + classType.name;
-          if (classType.registeredClass.constructor_body === void 0) {
-            classType.registeredClass.constructor_body = [];
+          attr.atime = new Date(node.timestamp);
+          attr.mtime = new Date(node.timestamp);
+          attr.ctime = new Date(node.timestamp);
+          attr.blksize = 4096;
+          attr.blocks = Math.ceil(attr.size / attr.blksize);
+          return attr;
+        }, setattr: function(node, attr) {
+          if (attr.mode !== void 0) {
+            node.mode = attr.mode;
           }
-          if (classType.registeredClass.constructor_body[argCount - 1] !== void 0) {
-            throw new BindingError("Cannot register multiple constructors with identical number of parameters (" + (argCount - 1) + ") for class '" + classType.name + "'! Overload resolution is currently only performed using the parameter count, not actual type info!");
+          if (attr.timestamp !== void 0) {
+            node.timestamp = attr.timestamp;
           }
-          classType.registeredClass.constructor_body[argCount - 1] = function unboundTypeHandler() {
-            throwUnboundTypeError("Cannot construct " + classType.name + " due to unbound types", rawArgTypes);
-          };
-          whenDependentTypesAreResolved([], rawArgTypes, function(argTypes) {
-            classType.registeredClass.constructor_body[argCount - 1] = function constructor_body() {
-              if (arguments.length !== argCount - 1) {
-                throwBindingError(humanName + " called with " + arguments.length + " arguments, expected " + (argCount - 1));
+          if (attr.size !== void 0) {
+            MEMFS.resizeFileStorage(node, attr.size);
+          }
+        }, lookup: function(parent, name2) {
+          throw FS.genericErrors[44];
+        }, mknod: function(parent, name2, mode, dev) {
+          return MEMFS.createNode(parent, name2, mode, dev);
+        }, rename: function(old_node, new_dir, new_name) {
+          if (FS.isDir(old_node.mode)) {
+            var new_node;
+            try {
+              new_node = FS.lookupNode(new_dir, new_name);
+            } catch (e) {
+            }
+            if (new_node) {
+              for (var i in new_node.contents) {
+                throw new FS.ErrnoError(55);
               }
-              destructors.length = 0;
-              args.length = argCount;
-              for (var i = 1; i < argCount; ++i) {
-                args[i] = argTypes[i]["toWireType"](destructors, arguments[i - 1]);
-              }
-              var ptr = invoker.apply(null, args);
-              runDestructors(destructors);
-              return argTypes[0]["fromWireType"](ptr);
-            };
-            return [];
-          });
-          return [];
-        });
-      }
-      function new_(constructor, argumentList) {
-        if (!(constructor instanceof Function)) {
-          throw new TypeError("new_ called with constructor type " + typeof constructor + " which is not a function");
-        }
-        var dummy = createNamedFunction(constructor.name || "unknownFunctionName", function() {
-        });
-        dummy.prototype = constructor.prototype;
-        var obj = new dummy();
-        var r = constructor.apply(obj, argumentList);
-        return r instanceof Object ? r : obj;
-      }
-      function craftInvokerFunction(humanName, argTypes, classType, cppInvokerFunc, cppTargetFunc) {
-        var argCount = argTypes.length;
-        if (argCount < 2) {
-          throwBindingError("argTypes array size mismatch! Must at least get return value and 'this' types!");
-        }
-        var isClassMethodFunc = argTypes[1] !== null && classType !== null;
-        var needsDestructorStack = false;
-        for (var i = 1; i < argTypes.length; ++i) {
-          if (argTypes[i] !== null && argTypes[i].destructorFunction === void 0) {
-            needsDestructorStack = true;
-            break;
-          }
-        }
-        var returns = argTypes[0].name !== "void";
-        var argsList = "";
-        var argsListWired = "";
-        for (var i = 0; i < argCount - 2; ++i) {
-          argsList += (i !== 0 ? ", " : "") + "arg" + i;
-          argsListWired += (i !== 0 ? ", " : "") + "arg" + i + "Wired";
-        }
-        var invokerFnBody = "return function " + makeLegalFunctionName(humanName) + "(" + argsList + ") {\nif (arguments.length !== " + (argCount - 2) + ") {\nthrowBindingError('function " + humanName + " called with ' + arguments.length + ' arguments, expected " + (argCount - 2) + " args!');\n}\n";
-        if (needsDestructorStack) {
-          invokerFnBody += "var destructors = [];\n";
-        }
-        var dtorStack = needsDestructorStack ? "destructors" : "null";
-        var args1 = ["throwBindingError", "invoker", "fn", "runDestructors", "retType", "classParam"];
-        var args2 = [throwBindingError, cppInvokerFunc, cppTargetFunc, runDestructors, argTypes[0], argTypes[1]];
-        if (isClassMethodFunc) {
-          invokerFnBody += "var thisWired = classParam.toWireType(" + dtorStack + ", this);\n";
-        }
-        for (var i = 0; i < argCount - 2; ++i) {
-          invokerFnBody += "var arg" + i + "Wired = argType" + i + ".toWireType(" + dtorStack + ", arg" + i + "); // " + argTypes[i + 2].name + "\n";
-          args1.push("argType" + i);
-          args2.push(argTypes[i + 2]);
-        }
-        if (isClassMethodFunc) {
-          argsListWired = "thisWired" + (argsListWired.length > 0 ? ", " : "") + argsListWired;
-        }
-        invokerFnBody += (returns ? "var rv = " : "") + "invoker(fn" + (argsListWired.length > 0 ? ", " : "") + argsListWired + ");\n";
-        if (needsDestructorStack) {
-          invokerFnBody += "runDestructors(destructors);\n";
-        } else {
-          for (var i = isClassMethodFunc ? 1 : 2; i < argTypes.length; ++i) {
-            var paramName = i === 1 ? "thisWired" : "arg" + (i - 2) + "Wired";
-            if (argTypes[i].destructorFunction !== null) {
-              invokerFnBody += paramName + "_dtor(" + paramName + "); // " + argTypes[i].name + "\n";
-              args1.push(paramName + "_dtor");
-              args2.push(argTypes[i].destructorFunction);
             }
           }
-        }
-        if (returns) {
-          invokerFnBody += "var ret = retType.fromWireType(rv);\nreturn ret;\n";
-        }
-        invokerFnBody += "}\n";
-        args1.push(invokerFnBody);
-        var invokerFunction = new_(Function, args1).apply(null, args2);
-        return invokerFunction;
-      }
-      function __embind_register_class_function(rawClassType, methodName, argCount, rawArgTypesAddr, invokerSignature, rawInvoker, context, isPureVirtual) {
-        var rawArgTypes = heap32VectorToArray(argCount, rawArgTypesAddr);
-        methodName = readLatin1String(methodName);
-        rawInvoker = embind__requireFunction(invokerSignature, rawInvoker);
-        whenDependentTypesAreResolved([], [rawClassType], function(classType) {
-          classType = classType[0];
-          var humanName = classType.name + "." + methodName;
-          if (isPureVirtual) {
-            classType.registeredClass.pureVirtualFunctions.push(methodName);
+          delete old_node.parent.contents[old_node.name];
+          old_node.name = new_name;
+          new_dir.contents[new_name] = old_node;
+          old_node.parent = new_dir;
+        }, unlink: function(parent, name2) {
+          delete parent.contents[name2];
+        }, rmdir: function(parent, name2) {
+          var node = FS.lookupNode(parent, name2);
+          for (var i in node.contents) {
+            throw new FS.ErrnoError(55);
           }
-          function unboundTypesHandler() {
-            throwUnboundTypeError("Cannot call " + humanName + " due to unbound types", rawArgTypes);
+          delete parent.contents[name2];
+        }, readdir: function(node) {
+          var entries = [".", ".."];
+          for (var key2 in node.contents) {
+            if (!node.contents.hasOwnProperty(key2)) {
+              continue;
+            }
+            entries.push(key2);
           }
-          var proto = classType.registeredClass.instancePrototype;
-          var method = proto[methodName];
-          if (method === void 0 || method.overloadTable === void 0 && method.className !== classType.name && method.argCount === argCount - 2) {
-            unboundTypesHandler.argCount = argCount - 2;
-            unboundTypesHandler.className = classType.name;
-            proto[methodName] = unboundTypesHandler;
+          return entries;
+        }, symlink: function(parent, newname, oldpath) {
+          var node = MEMFS.createNode(parent, newname, 511 | 40960, 0);
+          node.link = oldpath;
+          return node;
+        }, readlink: function(node) {
+          if (!FS.isLink(node.mode)) {
+            throw new FS.ErrnoError(28);
+          }
+          return node.link;
+        } }, stream_ops: { read: function(stream, buffer2, offset, length, position) {
+          var contents = stream.node.contents;
+          if (position >= stream.node.usedBytes)
+            return 0;
+          var size = Math.min(stream.node.usedBytes - position, length);
+          if (size > 8 && contents.subarray) {
+            buffer2.set(contents.subarray(position, position + size), offset);
           } else {
-            ensureOverloadTable(proto, methodName, humanName);
-            proto[methodName].overloadTable[argCount - 2] = unboundTypesHandler;
+            for (var i = 0; i < size; i++)
+              buffer2[offset + i] = contents[position + i];
           }
-          whenDependentTypesAreResolved([], rawArgTypes, function(argTypes) {
-            var memberFunction = craftInvokerFunction(humanName, argTypes, classType, rawInvoker, context);
-            if (proto[methodName].overloadTable === void 0) {
-              memberFunction.argCount = argCount - 2;
-              proto[methodName] = memberFunction;
-            } else {
-              proto[methodName].overloadTable[argCount - 2] = memberFunction;
+          return size;
+        }, write: function(stream, buffer2, offset, length, position, canOwn) {
+          if (buffer2.buffer === HEAP8.buffer) {
+            canOwn = false;
+          }
+          if (!length)
+            return 0;
+          var node = stream.node;
+          node.timestamp = Date.now();
+          if (buffer2.subarray && (!node.contents || node.contents.subarray)) {
+            if (canOwn) {
+              node.contents = buffer2.subarray(offset, offset + length);
+              node.usedBytes = length;
+              return length;
+            } else if (node.usedBytes === 0 && position === 0) {
+              node.contents = buffer2.slice(offset, offset + length);
+              node.usedBytes = length;
+              return length;
+            } else if (position + length <= node.usedBytes) {
+              node.contents.set(buffer2.subarray(offset, offset + length), position);
+              return length;
             }
-            return [];
-          });
-          return [];
-        });
-      }
-      var emval_free_list = [];
-      var emval_handle_array = [{}, {value: void 0}, {value: null}, {value: true}, {value: false}];
-      function __emval_decref(handle) {
-        if (handle > 4 && --emval_handle_array[handle].refcount === 0) {
-          emval_handle_array[handle] = void 0;
-          emval_free_list.push(handle);
-        }
-      }
-      function count_emval_handles() {
-        var count = 0;
-        for (var i = 5; i < emval_handle_array.length; ++i) {
-          if (emval_handle_array[i] !== void 0) {
-            ++count;
           }
-        }
-        return count;
-      }
-      function get_first_emval() {
-        for (var i = 5; i < emval_handle_array.length; ++i) {
-          if (emval_handle_array[i] !== void 0) {
-            return emval_handle_array[i];
+          MEMFS.expandFileStorage(node, position + length);
+          if (node.contents.subarray && buffer2.subarray) {
+            node.contents.set(buffer2.subarray(offset, offset + length), position);
+          } else {
+            for (var i = 0; i < length; i++) {
+              node.contents[position + i] = buffer2[offset + i];
+            }
           }
-        }
-        return null;
-      }
-      function init_emval() {
-        Module["count_emval_handles"] = count_emval_handles;
-        Module["get_first_emval"] = get_first_emval;
-      }
-      function __emval_register(value) {
-        switch (value) {
-          case void 0: {
-            return 1;
+          node.usedBytes = Math.max(node.usedBytes, position + length);
+          return length;
+        }, llseek: function(stream, offset, whence) {
+          var position = offset;
+          if (whence === 1) {
+            position += stream.position;
+          } else if (whence === 2) {
+            if (FS.isFile(stream.node.mode)) {
+              position += stream.node.usedBytes;
+            }
           }
-          case null: {
+          if (position < 0) {
+            throw new FS.ErrnoError(28);
+          }
+          return position;
+        }, allocate: function(stream, offset, length) {
+          MEMFS.expandFileStorage(stream.node, offset + length);
+          stream.node.usedBytes = Math.max(stream.node.usedBytes, offset + length);
+        }, mmap: function(stream, address, length, position, prot, flags) {
+          assert(address === 0);
+          if (!FS.isFile(stream.node.mode)) {
+            throw new FS.ErrnoError(43);
+          }
+          var ptr;
+          var allocated;
+          var contents = stream.node.contents;
+          if (!(flags & 2) && contents.buffer === buffer) {
+            allocated = false;
+            ptr = contents.byteOffset;
+          } else {
+            if (position > 0 || position + length < contents.length) {
+              if (contents.subarray) {
+                contents = contents.subarray(position, position + length);
+              } else {
+                contents = Array.prototype.slice.call(contents, position, position + length);
+              }
+            }
+            allocated = true;
+            ptr = mmapAlloc(length);
+            if (!ptr) {
+              throw new FS.ErrnoError(48);
+            }
+            ptr >>>= 0;
+            HEAP8.set(contents, ptr >>> 0);
+          }
+          return { ptr, allocated };
+        }, msync: function(stream, buffer2, offset, length, mmapFlags) {
+          if (!FS.isFile(stream.node.mode)) {
+            throw new FS.ErrnoError(43);
+          }
+          if (mmapFlags & 2) {
+            return 0;
+          }
+          MEMFS.stream_ops.write(stream, buffer2, 0, length, offset, false);
+          return 0;
+        } } };
+        var FS = { root: null, mounts: [], devices: {}, streams: [], nextInode: 1, nameTable: null, currentPath: "/", initialized: false, ignorePermissions: true, trackingDelegate: {}, tracking: { openFlags: { READ: 1, WRITE: 2 } }, ErrnoError: null, genericErrors: {}, filesystems: null, syncFSRequests: 0, lookupPath: function(path, opts) {
+          path = PATH_FS.resolve(FS.cwd(), path);
+          opts = opts || {};
+          if (!path)
+            return { path: "", node: null };
+          var defaults = { follow_mount: true, recurse_count: 0 };
+          for (var key2 in defaults) {
+            if (opts[key2] === void 0) {
+              opts[key2] = defaults[key2];
+            }
+          }
+          if (opts.recurse_count > 8) {
+            throw new FS.ErrnoError(32);
+          }
+          var parts = PATH.normalizeArray(path.split("/").filter(function(p) {
+            return !!p;
+          }), false);
+          var current = FS.root;
+          var current_path = "/";
+          for (var i = 0; i < parts.length; i++) {
+            var islast = i === parts.length - 1;
+            if (islast && opts.parent) {
+              break;
+            }
+            current = FS.lookupNode(current, parts[i]);
+            current_path = PATH.join2(current_path, parts[i]);
+            if (FS.isMountpoint(current)) {
+              if (!islast || islast && opts.follow_mount) {
+                current = current.mounted.root;
+              }
+            }
+            if (!islast || opts.follow) {
+              var count = 0;
+              while (FS.isLink(current.mode)) {
+                var link = FS.readlink(current_path);
+                current_path = PATH_FS.resolve(PATH.dirname(current_path), link);
+                var lookup = FS.lookupPath(current_path, { recurse_count: opts.recurse_count });
+                current = lookup.node;
+                if (count++ > 40) {
+                  throw new FS.ErrnoError(32);
+                }
+              }
+            }
+          }
+          return { path: current_path, node: current };
+        }, getPath: function(node) {
+          var path;
+          while (true) {
+            if (FS.isRoot(node)) {
+              var mount = node.mount.mountpoint;
+              if (!path)
+                return mount;
+              return mount[mount.length - 1] !== "/" ? mount + "/" + path : mount + path;
+            }
+            path = path ? node.name + "/" + path : node.name;
+            node = node.parent;
+          }
+        }, hashName: function(parentid, name2) {
+          var hash = 0;
+          for (var i = 0; i < name2.length; i++) {
+            hash = (hash << 5) - hash + name2.charCodeAt(i) | 0;
+          }
+          return (parentid + hash >>> 0) % FS.nameTable.length;
+        }, hashAddNode: function(node) {
+          var hash = FS.hashName(node.parent.id, node.name);
+          node.name_next = FS.nameTable[hash];
+          FS.nameTable[hash] = node;
+        }, hashRemoveNode: function(node) {
+          var hash = FS.hashName(node.parent.id, node.name);
+          if (FS.nameTable[hash] === node) {
+            FS.nameTable[hash] = node.name_next;
+          } else {
+            var current = FS.nameTable[hash];
+            while (current) {
+              if (current.name_next === node) {
+                current.name_next = node.name_next;
+                break;
+              }
+              current = current.name_next;
+            }
+          }
+        }, lookupNode: function(parent, name2) {
+          var errCode = FS.mayLookup(parent);
+          if (errCode) {
+            throw new FS.ErrnoError(errCode, parent);
+          }
+          var hash = FS.hashName(parent.id, name2);
+          for (var node = FS.nameTable[hash]; node; node = node.name_next) {
+            var nodeName = node.name;
+            if (node.parent.id === parent.id && nodeName === name2) {
+              return node;
+            }
+          }
+          return FS.lookup(parent, name2);
+        }, createNode: function(parent, name2, mode, rdev) {
+          var node = new FS.FSNode(parent, name2, mode, rdev);
+          FS.hashAddNode(node);
+          return node;
+        }, destroyNode: function(node) {
+          FS.hashRemoveNode(node);
+        }, isRoot: function(node) {
+          return node === node.parent;
+        }, isMountpoint: function(node) {
+          return !!node.mounted;
+        }, isFile: function(mode) {
+          return (mode & 61440) === 32768;
+        }, isDir: function(mode) {
+          return (mode & 61440) === 16384;
+        }, isLink: function(mode) {
+          return (mode & 61440) === 40960;
+        }, isChrdev: function(mode) {
+          return (mode & 61440) === 8192;
+        }, isBlkdev: function(mode) {
+          return (mode & 61440) === 24576;
+        }, isFIFO: function(mode) {
+          return (mode & 61440) === 4096;
+        }, isSocket: function(mode) {
+          return (mode & 49152) === 49152;
+        }, flagModes: { "r": 0, "r+": 2, "w": 577, "w+": 578, "a": 1089, "a+": 1090 }, modeStringToFlags: function(str) {
+          var flags = FS.flagModes[str];
+          if (typeof flags === "undefined") {
+            throw new Error("Unknown file open mode: " + str);
+          }
+          return flags;
+        }, flagsToPermissionString: function(flag) {
+          var perms = ["r", "w", "rw"][flag & 3];
+          if (flag & 512) {
+            perms += "w";
+          }
+          return perms;
+        }, nodePermissions: function(node, perms) {
+          if (FS.ignorePermissions) {
+            return 0;
+          }
+          if (perms.indexOf("r") !== -1 && !(node.mode & 292)) {
+            return 2;
+          } else if (perms.indexOf("w") !== -1 && !(node.mode & 146)) {
+            return 2;
+          } else if (perms.indexOf("x") !== -1 && !(node.mode & 73)) {
             return 2;
           }
-          case true: {
-            return 3;
+          return 0;
+        }, mayLookup: function(dir) {
+          var errCode = FS.nodePermissions(dir, "x");
+          if (errCode)
+            return errCode;
+          if (!dir.node_ops.lookup)
+            return 2;
+          return 0;
+        }, mayCreate: function(dir, name2) {
+          try {
+            var node = FS.lookupNode(dir, name2);
+            return 20;
+          } catch (e) {
           }
-          case false: {
-            return 4;
+          return FS.nodePermissions(dir, "wx");
+        }, mayDelete: function(dir, name2, isdir) {
+          var node;
+          try {
+            node = FS.lookupNode(dir, name2);
+          } catch (e) {
+            return e.errno;
           }
-          default: {
-            var handle = emval_free_list.length ? emval_free_list.pop() : emval_handle_array.length;
-            emval_handle_array[handle] = {refcount: 1, value};
+          var errCode = FS.nodePermissions(dir, "wx");
+          if (errCode) {
+            return errCode;
+          }
+          if (isdir) {
+            if (!FS.isDir(node.mode)) {
+              return 54;
+            }
+            if (FS.isRoot(node) || FS.getPath(node) === FS.cwd()) {
+              return 10;
+            }
+          } else {
+            if (FS.isDir(node.mode)) {
+              return 31;
+            }
+          }
+          return 0;
+        }, mayOpen: function(node, flags) {
+          if (!node) {
+            return 44;
+          }
+          if (FS.isLink(node.mode)) {
+            return 32;
+          } else if (FS.isDir(node.mode)) {
+            if (FS.flagsToPermissionString(flags) !== "r" || flags & 512) {
+              return 31;
+            }
+          }
+          return FS.nodePermissions(node, FS.flagsToPermissionString(flags));
+        }, MAX_OPEN_FDS: 4096, nextfd: function(fd_start, fd_end) {
+          fd_start = fd_start || 0;
+          fd_end = fd_end || FS.MAX_OPEN_FDS;
+          for (var fd = fd_start; fd <= fd_end; fd++) {
+            if (!FS.streams[fd]) {
+              return fd;
+            }
+          }
+          throw new FS.ErrnoError(33);
+        }, getStream: function(fd) {
+          return FS.streams[fd];
+        }, createStream: function(stream, fd_start, fd_end) {
+          if (!FS.FSStream) {
+            FS.FSStream = function() {
+            };
+            FS.FSStream.prototype = { object: { get: function() {
+              return this.node;
+            }, set: function(val) {
+              this.node = val;
+            } }, isRead: { get: function() {
+              return (this.flags & 2097155) !== 1;
+            } }, isWrite: { get: function() {
+              return (this.flags & 2097155) !== 0;
+            } }, isAppend: { get: function() {
+              return this.flags & 1024;
+            } } };
+          }
+          var newStream = new FS.FSStream();
+          for (var p in stream) {
+            newStream[p] = stream[p];
+          }
+          stream = newStream;
+          var fd = FS.nextfd(fd_start, fd_end);
+          stream.fd = fd;
+          FS.streams[fd] = stream;
+          return stream;
+        }, closeStream: function(fd) {
+          FS.streams[fd] = null;
+        }, chrdev_stream_ops: { open: function(stream) {
+          var device = FS.getDevice(stream.node.rdev);
+          stream.stream_ops = device.stream_ops;
+          if (stream.stream_ops.open) {
+            stream.stream_ops.open(stream);
+          }
+        }, llseek: function() {
+          throw new FS.ErrnoError(70);
+        } }, major: function(dev) {
+          return dev >> 8;
+        }, minor: function(dev) {
+          return dev & 255;
+        }, makedev: function(ma, mi) {
+          return ma << 8 | mi;
+        }, registerDevice: function(dev, ops) {
+          FS.devices[dev] = { stream_ops: ops };
+        }, getDevice: function(dev) {
+          return FS.devices[dev];
+        }, getMounts: function(mount) {
+          var mounts = [];
+          var check = [mount];
+          while (check.length) {
+            var m = check.pop();
+            mounts.push(m);
+            check.push.apply(check, m.mounts);
+          }
+          return mounts;
+        }, syncfs: function(populate, callback) {
+          if (typeof populate === "function") {
+            callback = populate;
+            populate = false;
+          }
+          FS.syncFSRequests++;
+          if (FS.syncFSRequests > 1) {
+            err("warning: " + FS.syncFSRequests + " FS.syncfs operations in flight at once, probably just doing extra work");
+          }
+          var mounts = FS.getMounts(FS.root.mount);
+          var completed = 0;
+          function doCallback(errCode) {
+            FS.syncFSRequests--;
+            return callback(errCode);
+          }
+          function done(errCode) {
+            if (errCode) {
+              if (!done.errored) {
+                done.errored = true;
+                return doCallback(errCode);
+              }
+              return;
+            }
+            if (++completed >= mounts.length) {
+              doCallback(null);
+            }
+          }
+          mounts.forEach(function(mount) {
+            if (!mount.type.syncfs) {
+              return done(null);
+            }
+            mount.type.syncfs(mount, populate, done);
+          });
+        }, mount: function(type, opts, mountpoint) {
+          var root = mountpoint === "/";
+          var pseudo = !mountpoint;
+          var node;
+          if (root && FS.root) {
+            throw new FS.ErrnoError(10);
+          } else if (!root && !pseudo) {
+            var lookup = FS.lookupPath(mountpoint, { follow_mount: false });
+            mountpoint = lookup.path;
+            node = lookup.node;
+            if (FS.isMountpoint(node)) {
+              throw new FS.ErrnoError(10);
+            }
+            if (!FS.isDir(node.mode)) {
+              throw new FS.ErrnoError(54);
+            }
+          }
+          var mount = { type, opts, mountpoint, mounts: [] };
+          var mountRoot = type.mount(mount);
+          mountRoot.mount = mount;
+          mount.root = mountRoot;
+          if (root) {
+            FS.root = mountRoot;
+          } else if (node) {
+            node.mounted = mount;
+            if (node.mount) {
+              node.mount.mounts.push(mount);
+            }
+          }
+          return mountRoot;
+        }, unmount: function(mountpoint) {
+          var lookup = FS.lookupPath(mountpoint, { follow_mount: false });
+          if (!FS.isMountpoint(lookup.node)) {
+            throw new FS.ErrnoError(28);
+          }
+          var node = lookup.node;
+          var mount = node.mounted;
+          var mounts = FS.getMounts(mount);
+          Object.keys(FS.nameTable).forEach(function(hash) {
+            var current = FS.nameTable[hash];
+            while (current) {
+              var next = current.name_next;
+              if (mounts.indexOf(current.mount) !== -1) {
+                FS.destroyNode(current);
+              }
+              current = next;
+            }
+          });
+          node.mounted = null;
+          var idx = node.mount.mounts.indexOf(mount);
+          node.mount.mounts.splice(idx, 1);
+        }, lookup: function(parent, name2) {
+          return parent.node_ops.lookup(parent, name2);
+        }, mknod: function(path, mode, dev) {
+          var lookup = FS.lookupPath(path, { parent: true });
+          var parent = lookup.node;
+          var name2 = PATH.basename(path);
+          if (!name2 || name2 === "." || name2 === "..") {
+            throw new FS.ErrnoError(28);
+          }
+          var errCode = FS.mayCreate(parent, name2);
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          if (!parent.node_ops.mknod) {
+            throw new FS.ErrnoError(63);
+          }
+          return parent.node_ops.mknod(parent, name2, mode, dev);
+        }, create: function(path, mode) {
+          mode = mode !== void 0 ? mode : 438;
+          mode &= 4095;
+          mode |= 32768;
+          return FS.mknod(path, mode, 0);
+        }, mkdir: function(path, mode) {
+          mode = mode !== void 0 ? mode : 511;
+          mode &= 511 | 512;
+          mode |= 16384;
+          return FS.mknod(path, mode, 0);
+        }, mkdirTree: function(path, mode) {
+          var dirs = path.split("/");
+          var d = "";
+          for (var i = 0; i < dirs.length; ++i) {
+            if (!dirs[i])
+              continue;
+            d += "/" + dirs[i];
+            try {
+              FS.mkdir(d, mode);
+            } catch (e) {
+              if (e.errno != 20)
+                throw e;
+            }
+          }
+        }, mkdev: function(path, mode, dev) {
+          if (typeof dev === "undefined") {
+            dev = mode;
+            mode = 438;
+          }
+          mode |= 8192;
+          return FS.mknod(path, mode, dev);
+        }, symlink: function(oldpath, newpath) {
+          if (!PATH_FS.resolve(oldpath)) {
+            throw new FS.ErrnoError(44);
+          }
+          var lookup = FS.lookupPath(newpath, { parent: true });
+          var parent = lookup.node;
+          if (!parent) {
+            throw new FS.ErrnoError(44);
+          }
+          var newname = PATH.basename(newpath);
+          var errCode = FS.mayCreate(parent, newname);
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          if (!parent.node_ops.symlink) {
+            throw new FS.ErrnoError(63);
+          }
+          return parent.node_ops.symlink(parent, newname, oldpath);
+        }, rename: function(old_path, new_path) {
+          var old_dirname = PATH.dirname(old_path);
+          var new_dirname = PATH.dirname(new_path);
+          var old_name = PATH.basename(old_path);
+          var new_name = PATH.basename(new_path);
+          var lookup, old_dir, new_dir;
+          lookup = FS.lookupPath(old_path, { parent: true });
+          old_dir = lookup.node;
+          lookup = FS.lookupPath(new_path, { parent: true });
+          new_dir = lookup.node;
+          if (!old_dir || !new_dir)
+            throw new FS.ErrnoError(44);
+          if (old_dir.mount !== new_dir.mount) {
+            throw new FS.ErrnoError(75);
+          }
+          var old_node = FS.lookupNode(old_dir, old_name);
+          var relative = PATH_FS.relative(old_path, new_dirname);
+          if (relative.charAt(0) !== ".") {
+            throw new FS.ErrnoError(28);
+          }
+          relative = PATH_FS.relative(new_path, old_dirname);
+          if (relative.charAt(0) !== ".") {
+            throw new FS.ErrnoError(55);
+          }
+          var new_node;
+          try {
+            new_node = FS.lookupNode(new_dir, new_name);
+          } catch (e) {
+          }
+          if (old_node === new_node) {
+            return;
+          }
+          var isdir = FS.isDir(old_node.mode);
+          var errCode = FS.mayDelete(old_dir, old_name, isdir);
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          errCode = new_node ? FS.mayDelete(new_dir, new_name, isdir) : FS.mayCreate(new_dir, new_name);
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          if (!old_dir.node_ops.rename) {
+            throw new FS.ErrnoError(63);
+          }
+          if (FS.isMountpoint(old_node) || new_node && FS.isMountpoint(new_node)) {
+            throw new FS.ErrnoError(10);
+          }
+          if (new_dir !== old_dir) {
+            errCode = FS.nodePermissions(old_dir, "w");
+            if (errCode) {
+              throw new FS.ErrnoError(errCode);
+            }
+          }
+          try {
+            if (FS.trackingDelegate["willMovePath"]) {
+              FS.trackingDelegate["willMovePath"](old_path, new_path);
+            }
+          } catch (e) {
+            err("FS.trackingDelegate['willMovePath']('" + old_path + "', '" + new_path + "') threw an exception: " + e.message);
+          }
+          FS.hashRemoveNode(old_node);
+          try {
+            old_dir.node_ops.rename(old_node, new_dir, new_name);
+          } catch (e) {
+            throw e;
+          } finally {
+            FS.hashAddNode(old_node);
+          }
+          try {
+            if (FS.trackingDelegate["onMovePath"])
+              FS.trackingDelegate["onMovePath"](old_path, new_path);
+          } catch (e) {
+            err("FS.trackingDelegate['onMovePath']('" + old_path + "', '" + new_path + "') threw an exception: " + e.message);
+          }
+        }, rmdir: function(path) {
+          var lookup = FS.lookupPath(path, { parent: true });
+          var parent = lookup.node;
+          var name2 = PATH.basename(path);
+          var node = FS.lookupNode(parent, name2);
+          var errCode = FS.mayDelete(parent, name2, true);
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          if (!parent.node_ops.rmdir) {
+            throw new FS.ErrnoError(63);
+          }
+          if (FS.isMountpoint(node)) {
+            throw new FS.ErrnoError(10);
+          }
+          try {
+            if (FS.trackingDelegate["willDeletePath"]) {
+              FS.trackingDelegate["willDeletePath"](path);
+            }
+          } catch (e) {
+            err("FS.trackingDelegate['willDeletePath']('" + path + "') threw an exception: " + e.message);
+          }
+          parent.node_ops.rmdir(parent, name2);
+          FS.destroyNode(node);
+          try {
+            if (FS.trackingDelegate["onDeletePath"])
+              FS.trackingDelegate["onDeletePath"](path);
+          } catch (e) {
+            err("FS.trackingDelegate['onDeletePath']('" + path + "') threw an exception: " + e.message);
+          }
+        }, readdir: function(path) {
+          var lookup = FS.lookupPath(path, { follow: true });
+          var node = lookup.node;
+          if (!node.node_ops.readdir) {
+            throw new FS.ErrnoError(54);
+          }
+          return node.node_ops.readdir(node);
+        }, unlink: function(path) {
+          var lookup = FS.lookupPath(path, { parent: true });
+          var parent = lookup.node;
+          var name2 = PATH.basename(path);
+          var node = FS.lookupNode(parent, name2);
+          var errCode = FS.mayDelete(parent, name2, false);
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          if (!parent.node_ops.unlink) {
+            throw new FS.ErrnoError(63);
+          }
+          if (FS.isMountpoint(node)) {
+            throw new FS.ErrnoError(10);
+          }
+          try {
+            if (FS.trackingDelegate["willDeletePath"]) {
+              FS.trackingDelegate["willDeletePath"](path);
+            }
+          } catch (e) {
+            err("FS.trackingDelegate['willDeletePath']('" + path + "') threw an exception: " + e.message);
+          }
+          parent.node_ops.unlink(parent, name2);
+          FS.destroyNode(node);
+          try {
+            if (FS.trackingDelegate["onDeletePath"])
+              FS.trackingDelegate["onDeletePath"](path);
+          } catch (e) {
+            err("FS.trackingDelegate['onDeletePath']('" + path + "') threw an exception: " + e.message);
+          }
+        }, readlink: function(path) {
+          var lookup = FS.lookupPath(path);
+          var link = lookup.node;
+          if (!link) {
+            throw new FS.ErrnoError(44);
+          }
+          if (!link.node_ops.readlink) {
+            throw new FS.ErrnoError(28);
+          }
+          return PATH_FS.resolve(FS.getPath(link.parent), link.node_ops.readlink(link));
+        }, stat: function(path, dontFollow) {
+          var lookup = FS.lookupPath(path, { follow: !dontFollow });
+          var node = lookup.node;
+          if (!node) {
+            throw new FS.ErrnoError(44);
+          }
+          if (!node.node_ops.getattr) {
+            throw new FS.ErrnoError(63);
+          }
+          return node.node_ops.getattr(node);
+        }, lstat: function(path) {
+          return FS.stat(path, true);
+        }, chmod: function(path, mode, dontFollow) {
+          var node;
+          if (typeof path === "string") {
+            var lookup = FS.lookupPath(path, { follow: !dontFollow });
+            node = lookup.node;
+          } else {
+            node = path;
+          }
+          if (!node.node_ops.setattr) {
+            throw new FS.ErrnoError(63);
+          }
+          node.node_ops.setattr(node, { mode: mode & 4095 | node.mode & ~4095, timestamp: Date.now() });
+        }, lchmod: function(path, mode) {
+          FS.chmod(path, mode, true);
+        }, fchmod: function(fd, mode) {
+          var stream = FS.getStream(fd);
+          if (!stream) {
+            throw new FS.ErrnoError(8);
+          }
+          FS.chmod(stream.node, mode);
+        }, chown: function(path, uid, gid, dontFollow) {
+          var node;
+          if (typeof path === "string") {
+            var lookup = FS.lookupPath(path, { follow: !dontFollow });
+            node = lookup.node;
+          } else {
+            node = path;
+          }
+          if (!node.node_ops.setattr) {
+            throw new FS.ErrnoError(63);
+          }
+          node.node_ops.setattr(node, { timestamp: Date.now() });
+        }, lchown: function(path, uid, gid) {
+          FS.chown(path, uid, gid, true);
+        }, fchown: function(fd, uid, gid) {
+          var stream = FS.getStream(fd);
+          if (!stream) {
+            throw new FS.ErrnoError(8);
+          }
+          FS.chown(stream.node, uid, gid);
+        }, truncate: function(path, len) {
+          if (len < 0) {
+            throw new FS.ErrnoError(28);
+          }
+          var node;
+          if (typeof path === "string") {
+            var lookup = FS.lookupPath(path, { follow: true });
+            node = lookup.node;
+          } else {
+            node = path;
+          }
+          if (!node.node_ops.setattr) {
+            throw new FS.ErrnoError(63);
+          }
+          if (FS.isDir(node.mode)) {
+            throw new FS.ErrnoError(31);
+          }
+          if (!FS.isFile(node.mode)) {
+            throw new FS.ErrnoError(28);
+          }
+          var errCode = FS.nodePermissions(node, "w");
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          node.node_ops.setattr(node, { size: len, timestamp: Date.now() });
+        }, ftruncate: function(fd, len) {
+          var stream = FS.getStream(fd);
+          if (!stream) {
+            throw new FS.ErrnoError(8);
+          }
+          if ((stream.flags & 2097155) === 0) {
+            throw new FS.ErrnoError(28);
+          }
+          FS.truncate(stream.node, len);
+        }, utime: function(path, atime, mtime) {
+          var lookup = FS.lookupPath(path, { follow: true });
+          var node = lookup.node;
+          node.node_ops.setattr(node, { timestamp: Math.max(atime, mtime) });
+        }, open: function(path, flags, mode, fd_start, fd_end) {
+          if (path === "") {
+            throw new FS.ErrnoError(44);
+          }
+          flags = typeof flags === "string" ? FS.modeStringToFlags(flags) : flags;
+          mode = typeof mode === "undefined" ? 438 : mode;
+          if (flags & 64) {
+            mode = mode & 4095 | 32768;
+          } else {
+            mode = 0;
+          }
+          var node;
+          if (typeof path === "object") {
+            node = path;
+          } else {
+            path = PATH.normalize(path);
+            try {
+              var lookup = FS.lookupPath(path, { follow: !(flags & 131072) });
+              node = lookup.node;
+            } catch (e) {
+            }
+          }
+          var created = false;
+          if (flags & 64) {
+            if (node) {
+              if (flags & 128) {
+                throw new FS.ErrnoError(20);
+              }
+            } else {
+              node = FS.mknod(path, mode, 0);
+              created = true;
+            }
+          }
+          if (!node) {
+            throw new FS.ErrnoError(44);
+          }
+          if (FS.isChrdev(node.mode)) {
+            flags &= ~512;
+          }
+          if (flags & 65536 && !FS.isDir(node.mode)) {
+            throw new FS.ErrnoError(54);
+          }
+          if (!created) {
+            var errCode = FS.mayOpen(node, flags);
+            if (errCode) {
+              throw new FS.ErrnoError(errCode);
+            }
+          }
+          if (flags & 512) {
+            FS.truncate(node, 0);
+          }
+          flags &= ~(128 | 512 | 131072);
+          var stream = FS.createStream({ node, path: FS.getPath(node), flags, seekable: true, position: 0, stream_ops: node.stream_ops, ungotten: [], error: false }, fd_start, fd_end);
+          if (stream.stream_ops.open) {
+            stream.stream_ops.open(stream);
+          }
+          if (Module["logReadFiles"] && !(flags & 1)) {
+            if (!FS.readFiles)
+              FS.readFiles = {};
+            if (!(path in FS.readFiles)) {
+              FS.readFiles[path] = 1;
+              err("FS.trackingDelegate error on read file: " + path);
+            }
+          }
+          try {
+            if (FS.trackingDelegate["onOpenFile"]) {
+              var trackingFlags = 0;
+              if ((flags & 2097155) !== 1) {
+                trackingFlags |= FS.tracking.openFlags.READ;
+              }
+              if ((flags & 2097155) !== 0) {
+                trackingFlags |= FS.tracking.openFlags.WRITE;
+              }
+              FS.trackingDelegate["onOpenFile"](path, trackingFlags);
+            }
+          } catch (e) {
+            err("FS.trackingDelegate['onOpenFile']('" + path + "', flags) threw an exception: " + e.message);
+          }
+          return stream;
+        }, close: function(stream) {
+          if (FS.isClosed(stream)) {
+            throw new FS.ErrnoError(8);
+          }
+          if (stream.getdents)
+            stream.getdents = null;
+          try {
+            if (stream.stream_ops.close) {
+              stream.stream_ops.close(stream);
+            }
+          } catch (e) {
+            throw e;
+          } finally {
+            FS.closeStream(stream.fd);
+          }
+          stream.fd = null;
+        }, isClosed: function(stream) {
+          return stream.fd === null;
+        }, llseek: function(stream, offset, whence) {
+          if (FS.isClosed(stream)) {
+            throw new FS.ErrnoError(8);
+          }
+          if (!stream.seekable || !stream.stream_ops.llseek) {
+            throw new FS.ErrnoError(70);
+          }
+          if (whence != 0 && whence != 1 && whence != 2) {
+            throw new FS.ErrnoError(28);
+          }
+          stream.position = stream.stream_ops.llseek(stream, offset, whence);
+          stream.ungotten = [];
+          return stream.position;
+        }, read: function(stream, buffer2, offset, length, position) {
+          offset >>>= 0;
+          if (length < 0 || position < 0) {
+            throw new FS.ErrnoError(28);
+          }
+          if (FS.isClosed(stream)) {
+            throw new FS.ErrnoError(8);
+          }
+          if ((stream.flags & 2097155) === 1) {
+            throw new FS.ErrnoError(8);
+          }
+          if (FS.isDir(stream.node.mode)) {
+            throw new FS.ErrnoError(31);
+          }
+          if (!stream.stream_ops.read) {
+            throw new FS.ErrnoError(28);
+          }
+          var seeking = typeof position !== "undefined";
+          if (!seeking) {
+            position = stream.position;
+          } else if (!stream.seekable) {
+            throw new FS.ErrnoError(70);
+          }
+          var bytesRead = stream.stream_ops.read(stream, buffer2, offset, length, position);
+          if (!seeking)
+            stream.position += bytesRead;
+          return bytesRead;
+        }, write: function(stream, buffer2, offset, length, position, canOwn) {
+          offset >>>= 0;
+          if (length < 0 || position < 0) {
+            throw new FS.ErrnoError(28);
+          }
+          if (FS.isClosed(stream)) {
+            throw new FS.ErrnoError(8);
+          }
+          if ((stream.flags & 2097155) === 0) {
+            throw new FS.ErrnoError(8);
+          }
+          if (FS.isDir(stream.node.mode)) {
+            throw new FS.ErrnoError(31);
+          }
+          if (!stream.stream_ops.write) {
+            throw new FS.ErrnoError(28);
+          }
+          if (stream.seekable && stream.flags & 1024) {
+            FS.llseek(stream, 0, 2);
+          }
+          var seeking = typeof position !== "undefined";
+          if (!seeking) {
+            position = stream.position;
+          } else if (!stream.seekable) {
+            throw new FS.ErrnoError(70);
+          }
+          var bytesWritten = stream.stream_ops.write(stream, buffer2, offset, length, position, canOwn);
+          if (!seeking)
+            stream.position += bytesWritten;
+          try {
+            if (stream.path && FS.trackingDelegate["onWriteToFile"])
+              FS.trackingDelegate["onWriteToFile"](stream.path);
+          } catch (e) {
+            err("FS.trackingDelegate['onWriteToFile']('" + stream.path + "') threw an exception: " + e.message);
+          }
+          return bytesWritten;
+        }, allocate: function(stream, offset, length) {
+          if (FS.isClosed(stream)) {
+            throw new FS.ErrnoError(8);
+          }
+          if (offset < 0 || length <= 0) {
+            throw new FS.ErrnoError(28);
+          }
+          if ((stream.flags & 2097155) === 0) {
+            throw new FS.ErrnoError(8);
+          }
+          if (!FS.isFile(stream.node.mode) && !FS.isDir(stream.node.mode)) {
+            throw new FS.ErrnoError(43);
+          }
+          if (!stream.stream_ops.allocate) {
+            throw new FS.ErrnoError(138);
+          }
+          stream.stream_ops.allocate(stream, offset, length);
+        }, mmap: function(stream, address, length, position, prot, flags) {
+          address >>>= 0;
+          if ((prot & 2) !== 0 && (flags & 2) === 0 && (stream.flags & 2097155) !== 2) {
+            throw new FS.ErrnoError(2);
+          }
+          if ((stream.flags & 2097155) === 1) {
+            throw new FS.ErrnoError(2);
+          }
+          if (!stream.stream_ops.mmap) {
+            throw new FS.ErrnoError(43);
+          }
+          return stream.stream_ops.mmap(stream, address, length, position, prot, flags);
+        }, msync: function(stream, buffer2, offset, length, mmapFlags) {
+          offset >>>= 0;
+          if (!stream || !stream.stream_ops.msync) {
+            return 0;
+          }
+          return stream.stream_ops.msync(stream, buffer2, offset, length, mmapFlags);
+        }, munmap: function(stream) {
+          return 0;
+        }, ioctl: function(stream, cmd, arg) {
+          if (!stream.stream_ops.ioctl) {
+            throw new FS.ErrnoError(59);
+          }
+          return stream.stream_ops.ioctl(stream, cmd, arg);
+        }, readFile: function(path, opts) {
+          opts = opts || {};
+          opts.flags = opts.flags || 0;
+          opts.encoding = opts.encoding || "binary";
+          if (opts.encoding !== "utf8" && opts.encoding !== "binary") {
+            throw new Error('Invalid encoding type "' + opts.encoding + '"');
+          }
+          var ret;
+          var stream = FS.open(path, opts.flags);
+          var stat = FS.stat(path);
+          var length = stat.size;
+          var buf = new Uint8Array(length);
+          FS.read(stream, buf, 0, length, 0);
+          if (opts.encoding === "utf8") {
+            ret = UTF8ArrayToString(buf, 0);
+          } else if (opts.encoding === "binary") {
+            ret = buf;
+          }
+          FS.close(stream);
+          return ret;
+        }, writeFile: function(path, data, opts) {
+          opts = opts || {};
+          opts.flags = opts.flags || 577;
+          var stream = FS.open(path, opts.flags, opts.mode);
+          if (typeof data === "string") {
+            var buf = new Uint8Array(lengthBytesUTF8(data) + 1);
+            var actualNumBytes = stringToUTF8Array(data, buf, 0, buf.length);
+            FS.write(stream, buf, 0, actualNumBytes, void 0, opts.canOwn);
+          } else if (ArrayBuffer.isView(data)) {
+            FS.write(stream, data, 0, data.byteLength, void 0, opts.canOwn);
+          } else {
+            throw new Error("Unsupported data type");
+          }
+          FS.close(stream);
+        }, cwd: function() {
+          return FS.currentPath;
+        }, chdir: function(path) {
+          var lookup = FS.lookupPath(path, { follow: true });
+          if (lookup.node === null) {
+            throw new FS.ErrnoError(44);
+          }
+          if (!FS.isDir(lookup.node.mode)) {
+            throw new FS.ErrnoError(54);
+          }
+          var errCode = FS.nodePermissions(lookup.node, "x");
+          if (errCode) {
+            throw new FS.ErrnoError(errCode);
+          }
+          FS.currentPath = lookup.path;
+        }, createDefaultDirectories: function() {
+          FS.mkdir("/tmp");
+          FS.mkdir("/home");
+          FS.mkdir("/home/web_user");
+        }, createDefaultDevices: function() {
+          FS.mkdir("/dev");
+          FS.registerDevice(FS.makedev(1, 3), { read: function() {
+            return 0;
+          }, write: function(stream, buffer2, offset, length, pos) {
+            return length;
+          } });
+          FS.mkdev("/dev/null", FS.makedev(1, 3));
+          TTY.register(FS.makedev(5, 0), TTY.default_tty_ops);
+          TTY.register(FS.makedev(6, 0), TTY.default_tty1_ops);
+          FS.mkdev("/dev/tty", FS.makedev(5, 0));
+          FS.mkdev("/dev/tty1", FS.makedev(6, 0));
+          var random_device = getRandomDevice();
+          FS.createDevice("/dev", "random", random_device);
+          FS.createDevice("/dev", "urandom", random_device);
+          FS.mkdir("/dev/shm");
+          FS.mkdir("/dev/shm/tmp");
+        }, createSpecialDirectories: function() {
+          FS.mkdir("/proc");
+          FS.mkdir("/proc/self");
+          FS.mkdir("/proc/self/fd");
+          FS.mount({ mount: function() {
+            var node = FS.createNode("/proc/self", "fd", 16384 | 511, 73);
+            node.node_ops = { lookup: function(parent, name2) {
+              var fd = +name2;
+              var stream = FS.getStream(fd);
+              if (!stream)
+                throw new FS.ErrnoError(8);
+              var ret = { parent: null, mount: { mountpoint: "fake" }, node_ops: { readlink: function() {
+                return stream.path;
+              } } };
+              ret.parent = ret;
+              return ret;
+            } };
+            return node;
+          } }, {}, "/proc/self/fd");
+        }, createStandardStreams: function() {
+          if (Module["stdin"]) {
+            FS.createDevice("/dev", "stdin", Module["stdin"]);
+          } else {
+            FS.symlink("/dev/tty", "/dev/stdin");
+          }
+          if (Module["stdout"]) {
+            FS.createDevice("/dev", "stdout", null, Module["stdout"]);
+          } else {
+            FS.symlink("/dev/tty", "/dev/stdout");
+          }
+          if (Module["stderr"]) {
+            FS.createDevice("/dev", "stderr", null, Module["stderr"]);
+          } else {
+            FS.symlink("/dev/tty1", "/dev/stderr");
+          }
+          FS.open("/dev/stdin", 0);
+          FS.open("/dev/stdout", 1);
+          FS.open("/dev/stderr", 1);
+        }, ensureErrnoError: function() {
+          if (FS.ErrnoError)
+            return;
+          FS.ErrnoError = function ErrnoError(errno, node) {
+            this.node = node;
+            this.setErrno = function(errno2) {
+              this.errno = errno2;
+            };
+            this.setErrno(errno);
+            this.message = "FS error";
+          };
+          FS.ErrnoError.prototype = new Error();
+          FS.ErrnoError.prototype.constructor = FS.ErrnoError;
+          [44].forEach(function(code) {
+            FS.genericErrors[code] = new FS.ErrnoError(code);
+            FS.genericErrors[code].stack = "<generic error, no stack>";
+          });
+        }, staticInit: function() {
+          FS.ensureErrnoError();
+          FS.nameTable = new Array(4096);
+          FS.mount(MEMFS, {}, "/");
+          FS.createDefaultDirectories();
+          FS.createDefaultDevices();
+          FS.createSpecialDirectories();
+          FS.filesystems = { "MEMFS": MEMFS };
+        }, init: function(input, output, error) {
+          FS.init.initialized = true;
+          FS.ensureErrnoError();
+          Module["stdin"] = input || Module["stdin"];
+          Module["stdout"] = output || Module["stdout"];
+          Module["stderr"] = error || Module["stderr"];
+          FS.createStandardStreams();
+        }, quit: function() {
+          FS.init.initialized = false;
+          var fflush = Module["_fflush"];
+          if (fflush)
+            fflush(0);
+          for (var i = 0; i < FS.streams.length; i++) {
+            var stream = FS.streams[i];
+            if (!stream) {
+              continue;
+            }
+            FS.close(stream);
+          }
+        }, getMode: function(canRead, canWrite) {
+          var mode = 0;
+          if (canRead)
+            mode |= 292 | 73;
+          if (canWrite)
+            mode |= 146;
+          return mode;
+        }, findObject: function(path, dontResolveLastLink) {
+          var ret = FS.analyzePath(path, dontResolveLastLink);
+          if (ret.exists) {
+            return ret.object;
+          } else {
+            return null;
+          }
+        }, analyzePath: function(path, dontResolveLastLink) {
+          try {
+            var lookup = FS.lookupPath(path, { follow: !dontResolveLastLink });
+            path = lookup.path;
+          } catch (e) {
+          }
+          var ret = { isRoot: false, exists: false, error: 0, name: null, path: null, object: null, parentExists: false, parentPath: null, parentObject: null };
+          try {
+            var lookup = FS.lookupPath(path, { parent: true });
+            ret.parentExists = true;
+            ret.parentPath = lookup.path;
+            ret.parentObject = lookup.node;
+            ret.name = PATH.basename(path);
+            lookup = FS.lookupPath(path, { follow: !dontResolveLastLink });
+            ret.exists = true;
+            ret.path = lookup.path;
+            ret.object = lookup.node;
+            ret.name = lookup.node.name;
+            ret.isRoot = lookup.path === "/";
+          } catch (e) {
+            ret.error = e.errno;
+          }
+          return ret;
+        }, createPath: function(parent, path, canRead, canWrite) {
+          parent = typeof parent === "string" ? parent : FS.getPath(parent);
+          var parts = path.split("/").reverse();
+          while (parts.length) {
+            var part = parts.pop();
+            if (!part)
+              continue;
+            var current = PATH.join2(parent, part);
+            try {
+              FS.mkdir(current);
+            } catch (e) {
+            }
+            parent = current;
+          }
+          return current;
+        }, createFile: function(parent, name2, properties, canRead, canWrite) {
+          var path = PATH.join2(typeof parent === "string" ? parent : FS.getPath(parent), name2);
+          var mode = FS.getMode(canRead, canWrite);
+          return FS.create(path, mode);
+        }, createDataFile: function(parent, name2, data, canRead, canWrite, canOwn) {
+          var path = name2 ? PATH.join2(typeof parent === "string" ? parent : FS.getPath(parent), name2) : parent;
+          var mode = FS.getMode(canRead, canWrite);
+          var node = FS.create(path, mode);
+          if (data) {
+            if (typeof data === "string") {
+              var arr = new Array(data.length);
+              for (var i = 0, len = data.length; i < len; ++i)
+                arr[i] = data.charCodeAt(i);
+              data = arr;
+            }
+            FS.chmod(node, mode | 146);
+            var stream = FS.open(node, 577);
+            FS.write(stream, data, 0, data.length, 0, canOwn);
+            FS.close(stream);
+            FS.chmod(node, mode);
+          }
+          return node;
+        }, createDevice: function(parent, name2, input, output) {
+          var path = PATH.join2(typeof parent === "string" ? parent : FS.getPath(parent), name2);
+          var mode = FS.getMode(!!input, !!output);
+          if (!FS.createDevice.major)
+            FS.createDevice.major = 64;
+          var dev = FS.makedev(FS.createDevice.major++, 0);
+          FS.registerDevice(dev, { open: function(stream) {
+            stream.seekable = false;
+          }, close: function(stream) {
+            if (output && output.buffer && output.buffer.length) {
+              output(10);
+            }
+          }, read: function(stream, buffer2, offset, length, pos) {
+            var bytesRead = 0;
+            for (var i = 0; i < length; i++) {
+              var result;
+              try {
+                result = input();
+              } catch (e) {
+                throw new FS.ErrnoError(29);
+              }
+              if (result === void 0 && bytesRead === 0) {
+                throw new FS.ErrnoError(6);
+              }
+              if (result === null || result === void 0)
+                break;
+              bytesRead++;
+              buffer2[offset + i] = result;
+            }
+            if (bytesRead) {
+              stream.node.timestamp = Date.now();
+            }
+            return bytesRead;
+          }, write: function(stream, buffer2, offset, length, pos) {
+            for (var i = 0; i < length; i++) {
+              try {
+                output(buffer2[offset + i]);
+              } catch (e) {
+                throw new FS.ErrnoError(29);
+              }
+            }
+            if (length) {
+              stream.node.timestamp = Date.now();
+            }
+            return i;
+          } });
+          return FS.mkdev(path, mode, dev);
+        }, forceLoadFile: function(obj) {
+          if (obj.isDevice || obj.isFolder || obj.link || obj.contents)
+            return true;
+          if (typeof XMLHttpRequest !== "undefined") {
+            throw new Error("Lazy loading should have been performed (contents set) in createLazyFile, but it was not. Lazy loading only works in web workers. Use --embed-file or --preload-file in emcc on the main thread.");
+          } else if (read_) {
+            try {
+              obj.contents = intArrayFromString(read_(obj.url), true);
+              obj.usedBytes = obj.contents.length;
+            } catch (e) {
+              throw new FS.ErrnoError(29);
+            }
+          } else {
+            throw new Error("Cannot load without read() or XMLHttpRequest.");
+          }
+        }, createLazyFile: function(parent, name2, url, canRead, canWrite) {
+          function LazyUint8Array() {
+            this.lengthKnown = false;
+            this.chunks = [];
+          }
+          LazyUint8Array.prototype.get = function LazyUint8Array_get(idx) {
+            if (idx > this.length - 1 || idx < 0) {
+              return void 0;
+            }
+            var chunkOffset = idx % this.chunkSize;
+            var chunkNum = idx / this.chunkSize | 0;
+            return this.getter(chunkNum)[chunkOffset];
+          };
+          LazyUint8Array.prototype.setDataGetter = function LazyUint8Array_setDataGetter(getter) {
+            this.getter = getter;
+          };
+          LazyUint8Array.prototype.cacheLength = function LazyUint8Array_cacheLength() {
+            var xhr = new XMLHttpRequest();
+            xhr.open("HEAD", url, false);
+            xhr.send(null);
+            if (!(xhr.status >= 200 && xhr.status < 300 || xhr.status === 304))
+              throw new Error("Couldn't load " + url + ". Status: " + xhr.status);
+            var datalength = Number(xhr.getResponseHeader("Content-length"));
+            var header;
+            var hasByteServing = (header = xhr.getResponseHeader("Accept-Ranges")) && header === "bytes";
+            var usesGzip = (header = xhr.getResponseHeader("Content-Encoding")) && header === "gzip";
+            var chunkSize = 1024 * 1024;
+            if (!hasByteServing)
+              chunkSize = datalength;
+            var doXHR = function(from, to) {
+              if (from > to)
+                throw new Error("invalid range (" + from + ", " + to + ") or no bytes requested!");
+              if (to > datalength - 1)
+                throw new Error("only " + datalength + " bytes available! programmer error!");
+              var xhr2 = new XMLHttpRequest();
+              xhr2.open("GET", url, false);
+              if (datalength !== chunkSize)
+                xhr2.setRequestHeader("Range", "bytes=" + from + "-" + to);
+              if (typeof Uint8Array != "undefined")
+                xhr2.responseType = "arraybuffer";
+              if (xhr2.overrideMimeType) {
+                xhr2.overrideMimeType("text/plain; charset=x-user-defined");
+              }
+              xhr2.send(null);
+              if (!(xhr2.status >= 200 && xhr2.status < 300 || xhr2.status === 304))
+                throw new Error("Couldn't load " + url + ". Status: " + xhr2.status);
+              if (xhr2.response !== void 0) {
+                return new Uint8Array(xhr2.response || []);
+              } else {
+                return intArrayFromString(xhr2.responseText || "", true);
+              }
+            };
+            var lazyArray2 = this;
+            lazyArray2.setDataGetter(function(chunkNum) {
+              var start = chunkNum * chunkSize;
+              var end = (chunkNum + 1) * chunkSize - 1;
+              end = Math.min(end, datalength - 1);
+              if (typeof lazyArray2.chunks[chunkNum] === "undefined") {
+                lazyArray2.chunks[chunkNum] = doXHR(start, end);
+              }
+              if (typeof lazyArray2.chunks[chunkNum] === "undefined")
+                throw new Error("doXHR failed!");
+              return lazyArray2.chunks[chunkNum];
+            });
+            if (usesGzip || !datalength) {
+              chunkSize = datalength = 1;
+              datalength = this.getter(0).length;
+              chunkSize = datalength;
+              out("LazyFiles on gzip forces download of the whole file when length is accessed");
+            }
+            this._length = datalength;
+            this._chunkSize = chunkSize;
+            this.lengthKnown = true;
+          };
+          if (typeof XMLHttpRequest !== "undefined") {
+            if (!ENVIRONMENT_IS_WORKER)
+              throw "Cannot do synchronous binary XHRs outside webworkers in modern browsers. Use --embed-file or --preload-file in emcc";
+            var lazyArray = new LazyUint8Array();
+            Object.defineProperties(lazyArray, { length: { get: function() {
+              if (!this.lengthKnown) {
+                this.cacheLength();
+              }
+              return this._length;
+            } }, chunkSize: { get: function() {
+              if (!this.lengthKnown) {
+                this.cacheLength();
+              }
+              return this._chunkSize;
+            } } });
+            var properties = { isDevice: false, contents: lazyArray };
+          } else {
+            var properties = { isDevice: false, url };
+          }
+          var node = FS.createFile(parent, name2, properties, canRead, canWrite);
+          if (properties.contents) {
+            node.contents = properties.contents;
+          } else if (properties.url) {
+            node.contents = null;
+            node.url = properties.url;
+          }
+          Object.defineProperties(node, { usedBytes: { get: function() {
+            return this.contents.length;
+          } } });
+          var stream_ops = {};
+          var keys = Object.keys(node.stream_ops);
+          keys.forEach(function(key2) {
+            var fn = node.stream_ops[key2];
+            stream_ops[key2] = function forceLoadLazyFile() {
+              FS.forceLoadFile(node);
+              return fn.apply(null, arguments);
+            };
+          });
+          stream_ops.read = function stream_ops_read(stream, buffer2, offset, length, position) {
+            FS.forceLoadFile(node);
+            var contents = stream.node.contents;
+            if (position >= contents.length)
+              return 0;
+            var size = Math.min(contents.length - position, length);
+            if (contents.slice) {
+              for (var i = 0; i < size; i++) {
+                buffer2[offset + i] = contents[position + i];
+              }
+            } else {
+              for (var i = 0; i < size; i++) {
+                buffer2[offset + i] = contents.get(position + i);
+              }
+            }
+            return size;
+          };
+          node.stream_ops = stream_ops;
+          return node;
+        }, createPreloadedFile: function(parent, name2, url, canRead, canWrite, onload, onerror, dontCreateFile, canOwn, preFinish) {
+          Browser.init();
+          var fullname = name2 ? PATH_FS.resolve(PATH.join2(parent, name2)) : parent;
+          function processData(byteArray) {
+            function finish(byteArray2) {
+              if (preFinish)
+                preFinish();
+              if (!dontCreateFile) {
+                FS.createDataFile(parent, name2, byteArray2, canRead, canWrite, canOwn);
+              }
+              if (onload)
+                onload();
+              removeRunDependency();
+            }
+            var handled = false;
+            Module["preloadPlugins"].forEach(function(plugin) {
+              if (handled)
+                return;
+              if (plugin["canHandle"](fullname)) {
+                plugin["handle"](byteArray, fullname, finish, function() {
+                  if (onerror)
+                    onerror();
+                  removeRunDependency();
+                });
+                handled = true;
+              }
+            });
+            if (!handled)
+              finish(byteArray);
+          }
+          addRunDependency();
+          if (typeof url == "string") {
+            Browser.asyncLoad(url, function(byteArray) {
+              processData(byteArray);
+            }, onerror);
+          } else {
+            processData(url);
+          }
+        }, indexedDB: function() {
+          return window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+        }, DB_NAME: function() {
+          return "EM_FS_" + window.location.pathname;
+        }, DB_VERSION: 20, DB_STORE_NAME: "FILE_DATA", saveFilesToDB: function(paths, onload, onerror) {
+          onload = onload || function() {
+          };
+          onerror = onerror || function() {
+          };
+          var indexedDB = FS.indexedDB();
+          try {
+            var openRequest = indexedDB.open(FS.DB_NAME(), FS.DB_VERSION);
+          } catch (e) {
+            return onerror(e);
+          }
+          openRequest.onupgradeneeded = function openRequest_onupgradeneeded() {
+            out("creating db");
+            var db = openRequest.result;
+            db.createObjectStore(FS.DB_STORE_NAME);
+          };
+          openRequest.onsuccess = function openRequest_onsuccess() {
+            var db = openRequest.result;
+            var transaction = db.transaction([FS.DB_STORE_NAME], "readwrite");
+            var files = transaction.objectStore(FS.DB_STORE_NAME);
+            var ok = 0, fail = 0, total = paths.length;
+            function finish() {
+              if (fail == 0)
+                onload();
+              else
+                onerror();
+            }
+            paths.forEach(function(path) {
+              var putRequest = files.put(FS.analyzePath(path).object.contents, path);
+              putRequest.onsuccess = function putRequest_onsuccess() {
+                ok++;
+                if (ok + fail == total)
+                  finish();
+              };
+              putRequest.onerror = function putRequest_onerror() {
+                fail++;
+                if (ok + fail == total)
+                  finish();
+              };
+            });
+            transaction.onerror = onerror;
+          };
+          openRequest.onerror = onerror;
+        }, loadFilesFromDB: function(paths, onload, onerror) {
+          onload = onload || function() {
+          };
+          onerror = onerror || function() {
+          };
+          var indexedDB = FS.indexedDB();
+          try {
+            var openRequest = indexedDB.open(FS.DB_NAME(), FS.DB_VERSION);
+          } catch (e) {
+            return onerror(e);
+          }
+          openRequest.onupgradeneeded = onerror;
+          openRequest.onsuccess = function openRequest_onsuccess() {
+            var db = openRequest.result;
+            try {
+              var transaction = db.transaction([FS.DB_STORE_NAME], "readonly");
+            } catch (e) {
+              onerror(e);
+              return;
+            }
+            var files = transaction.objectStore(FS.DB_STORE_NAME);
+            var ok = 0, fail = 0, total = paths.length;
+            function finish() {
+              if (fail == 0)
+                onload();
+              else
+                onerror();
+            }
+            paths.forEach(function(path) {
+              var getRequest = files.get(path);
+              getRequest.onsuccess = function getRequest_onsuccess() {
+                if (FS.analyzePath(path).exists) {
+                  FS.unlink(path);
+                }
+                FS.createDataFile(PATH.dirname(path), PATH.basename(path), getRequest.result, true, true, true);
+                ok++;
+                if (ok + fail == total)
+                  finish();
+              };
+              getRequest.onerror = function getRequest_onerror() {
+                fail++;
+                if (ok + fail == total)
+                  finish();
+              };
+            });
+            transaction.onerror = onerror;
+          };
+          openRequest.onerror = onerror;
+        } };
+        var SYSCALLS = { mappings: {}, DEFAULT_POLLMASK: 5, umask: 511, calculateAt: function(dirfd, path) {
+          if (path[0] !== "/") {
+            var dir;
+            if (dirfd === -100) {
+              dir = FS.cwd();
+            } else {
+              var dirstream = FS.getStream(dirfd);
+              if (!dirstream)
+                throw new FS.ErrnoError(8);
+              dir = dirstream.path;
+            }
+            path = PATH.join2(dir, path);
+          }
+          return path;
+        }, doStat: function(func, path, buf) {
+          try {
+            var stat = func(path);
+          } catch (e) {
+            if (e && e.node && PATH.normalize(path) !== PATH.normalize(FS.getPath(e.node))) {
+              return -54;
+            }
+            throw e;
+          }
+          HEAP32[buf >>> 2] = stat.dev;
+          HEAP32[buf + 4 >>> 2] = 0;
+          HEAP32[buf + 8 >>> 2] = stat.ino;
+          HEAP32[buf + 12 >>> 2] = stat.mode;
+          HEAP32[buf + 16 >>> 2] = stat.nlink;
+          HEAP32[buf + 20 >>> 2] = stat.uid;
+          HEAP32[buf + 24 >>> 2] = stat.gid;
+          HEAP32[buf + 28 >>> 2] = stat.rdev;
+          HEAP32[buf + 32 >>> 2] = 0;
+          tempI64 = [stat.size >>> 0, (tempDouble = stat.size, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[buf + 40 >>> 2] = tempI64[0], HEAP32[buf + 44 >>> 2] = tempI64[1];
+          HEAP32[buf + 48 >>> 2] = 4096;
+          HEAP32[buf + 52 >>> 2] = stat.blocks;
+          HEAP32[buf + 56 >>> 2] = stat.atime.getTime() / 1e3 | 0;
+          HEAP32[buf + 60 >>> 2] = 0;
+          HEAP32[buf + 64 >>> 2] = stat.mtime.getTime() / 1e3 | 0;
+          HEAP32[buf + 68 >>> 2] = 0;
+          HEAP32[buf + 72 >>> 2] = stat.ctime.getTime() / 1e3 | 0;
+          HEAP32[buf + 76 >>> 2] = 0;
+          tempI64 = [stat.ino >>> 0, (tempDouble = stat.ino, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[buf + 80 >>> 2] = tempI64[0], HEAP32[buf + 84 >>> 2] = tempI64[1];
+          return 0;
+        }, doMsync: function(addr, stream, len, flags, offset) {
+          var buffer2 = HEAPU8.slice(addr, addr + len);
+          FS.msync(stream, buffer2, offset, len, flags);
+        }, doMkdir: function(path, mode) {
+          path = PATH.normalize(path);
+          if (path[path.length - 1] === "/")
+            path = path.substr(0, path.length - 1);
+          FS.mkdir(path, mode, 0);
+          return 0;
+        }, doMknod: function(path, mode, dev) {
+          switch (mode & 61440) {
+            case 32768:
+            case 8192:
+            case 24576:
+            case 4096:
+            case 49152:
+              break;
+            default:
+              return -28;
+          }
+          FS.mknod(path, mode, dev);
+          return 0;
+        }, doReadlink: function(path, buf, bufsize) {
+          if (bufsize <= 0)
+            return -28;
+          var ret = FS.readlink(path);
+          var len = Math.min(bufsize, lengthBytesUTF8(ret));
+          var endChar = HEAP8[buf + len >>> 0];
+          stringToUTF8(ret, buf, bufsize + 1);
+          HEAP8[buf + len >>> 0] = endChar;
+          return len;
+        }, doAccess: function(path, amode) {
+          if (amode & ~7) {
+            return -28;
+          }
+          var node;
+          var lookup = FS.lookupPath(path, { follow: true });
+          node = lookup.node;
+          if (!node) {
+            return -44;
+          }
+          var perms = "";
+          if (amode & 4)
+            perms += "r";
+          if (amode & 2)
+            perms += "w";
+          if (amode & 1)
+            perms += "x";
+          if (perms && FS.nodePermissions(node, perms)) {
+            return -2;
+          }
+          return 0;
+        }, doDup: function(path, flags, suggestFD) {
+          var suggest = FS.getStream(suggestFD);
+          if (suggest)
+            FS.close(suggest);
+          return FS.open(path, flags, 0, suggestFD, suggestFD).fd;
+        }, doReadv: function(stream, iov, iovcnt, offset) {
+          var ret = 0;
+          for (var i = 0; i < iovcnt; i++) {
+            var ptr = HEAP32[iov + i * 8 >>> 2];
+            var len = HEAP32[iov + (i * 8 + 4) >>> 2];
+            var curr = FS.read(stream, HEAP8, ptr, len, offset);
+            if (curr < 0)
+              return -1;
+            ret += curr;
+            if (curr < len)
+              break;
+          }
+          return ret;
+        }, doWritev: function(stream, iov, iovcnt, offset) {
+          var ret = 0;
+          for (var i = 0; i < iovcnt; i++) {
+            var ptr = HEAP32[iov + i * 8 >>> 2];
+            var len = HEAP32[iov + (i * 8 + 4) >>> 2];
+            var curr = FS.write(stream, HEAP8, ptr, len, offset);
+            if (curr < 0)
+              return -1;
+            ret += curr;
+          }
+          return ret;
+        }, varargs: void 0, get: function() {
+          SYSCALLS.varargs += 4;
+          var ret = HEAP32[SYSCALLS.varargs - 4 >>> 2];
+          return ret;
+        }, getStr: function(ptr) {
+          var ret = UTF8ToString(ptr);
+          return ret;
+        }, getStreamFromFD: function(fd) {
+          var stream = FS.getStream(fd);
+          if (!stream)
+            throw new FS.ErrnoError(8);
+          return stream;
+        }, get64: function(low, high) {
+          return low;
+        } };
+        function ___sys_fcntl64(fd, cmd, varargs) {
+          SYSCALLS.varargs = varargs;
+          try {
+            var stream = SYSCALLS.getStreamFromFD(fd);
+            switch (cmd) {
+              case 0: {
+                var arg = SYSCALLS.get();
+                if (arg < 0) {
+                  return -28;
+                }
+                var newStream;
+                newStream = FS.open(stream.path, stream.flags, 0, arg);
+                return newStream.fd;
+              }
+              case 1:
+              case 2:
+                return 0;
+              case 3:
+                return stream.flags;
+              case 4: {
+                var arg = SYSCALLS.get();
+                stream.flags |= arg;
+                return 0;
+              }
+              case 12: {
+                var arg = SYSCALLS.get();
+                var offset = 0;
+                HEAP16[arg + offset >>> 1] = 2;
+                return 0;
+              }
+              case 13:
+              case 14:
+                return 0;
+              case 16:
+              case 8:
+                return -28;
+              case 9:
+                setErrNo(28);
+                return -1;
+              default: {
+                return -28;
+              }
+            }
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return -e.errno;
+          }
+        }
+        function ___sys_ioctl(fd, op, varargs) {
+          SYSCALLS.varargs = varargs;
+          try {
+            var stream = SYSCALLS.getStreamFromFD(fd);
+            switch (op) {
+              case 21509:
+              case 21505: {
+                if (!stream.tty)
+                  return -59;
+                return 0;
+              }
+              case 21510:
+              case 21511:
+              case 21512:
+              case 21506:
+              case 21507:
+              case 21508: {
+                if (!stream.tty)
+                  return -59;
+                return 0;
+              }
+              case 21519: {
+                if (!stream.tty)
+                  return -59;
+                var argp = SYSCALLS.get();
+                HEAP32[argp >>> 2] = 0;
+                return 0;
+              }
+              case 21520: {
+                if (!stream.tty)
+                  return -59;
+                return -28;
+              }
+              case 21531: {
+                var argp = SYSCALLS.get();
+                return FS.ioctl(stream, op, argp);
+              }
+              case 21523: {
+                if (!stream.tty)
+                  return -59;
+                return 0;
+              }
+              case 21524: {
+                if (!stream.tty)
+                  return -59;
+                return 0;
+              }
+              default:
+                abort("bad ioctl syscall " + op);
+            }
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return -e.errno;
+          }
+        }
+        function ___sys_open(path, flags, varargs) {
+          SYSCALLS.varargs = varargs;
+          try {
+            var pathname = SYSCALLS.getStr(path);
+            var mode = SYSCALLS.get();
+            var stream = FS.open(pathname, flags, mode);
+            return stream.fd;
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return -e.errno;
+          }
+        }
+        var tupleRegistrations = {};
+        function runDestructors(destructors) {
+          while (destructors.length) {
+            var ptr = destructors.pop();
+            var del = destructors.pop();
+            del(ptr);
+          }
+        }
+        function simpleReadValueFromPointer(pointer) {
+          return this["fromWireType"](HEAPU32[pointer >>> 2]);
+        }
+        var awaitingDependencies = {};
+        var registeredTypes = {};
+        var typeDependencies = {};
+        var char_0 = 48;
+        var char_9 = 57;
+        function makeLegalFunctionName(name2) {
+          if (name2 === void 0) {
+            return "_unknown";
+          }
+          name2 = name2.replace(/[^a-zA-Z0-9_]/g, "$");
+          var f = name2.charCodeAt(0);
+          if (f >= char_0 && f <= char_9) {
+            return "_" + name2;
+          } else {
+            return name2;
+          }
+        }
+        function createNamedFunction(name2, body) {
+          name2 = makeLegalFunctionName(name2);
+          return new Function("body", "return function " + name2 + '() {\n    "use strict";    return body.apply(this, arguments);\n};\n')(body);
+        }
+        function extendError(baseErrorType, errorName) {
+          var errorClass = createNamedFunction(errorName, function(message) {
+            this.name = errorName;
+            this.message = message;
+            var stack = new Error(message).stack;
+            if (stack !== void 0) {
+              this.stack = this.toString() + "\n" + stack.replace(/^Error(:[^\n]*)?\n/, "");
+            }
+          });
+          errorClass.prototype = Object.create(baseErrorType.prototype);
+          errorClass.prototype.constructor = errorClass;
+          errorClass.prototype.toString = function() {
+            if (this.message === void 0) {
+              return this.name;
+            } else {
+              return this.name + ": " + this.message;
+            }
+          };
+          return errorClass;
+        }
+        var InternalError = void 0;
+        function throwInternalError(message) {
+          throw new InternalError(message);
+        }
+        function whenDependentTypesAreResolved(myTypes, dependentTypes, getTypeConverters) {
+          myTypes.forEach(function(type) {
+            typeDependencies[type] = dependentTypes;
+          });
+          function onComplete(typeConverters2) {
+            var myTypeConverters = getTypeConverters(typeConverters2);
+            if (myTypeConverters.length !== myTypes.length) {
+              throwInternalError("Mismatched type converter count");
+            }
+            for (var i = 0; i < myTypes.length; ++i) {
+              registerType(myTypes[i], myTypeConverters[i]);
+            }
+          }
+          var typeConverters = new Array(dependentTypes.length);
+          var unregisteredTypes = [];
+          var registered = 0;
+          dependentTypes.forEach(function(dt, i) {
+            if (registeredTypes.hasOwnProperty(dt)) {
+              typeConverters[i] = registeredTypes[dt];
+            } else {
+              unregisteredTypes.push(dt);
+              if (!awaitingDependencies.hasOwnProperty(dt)) {
+                awaitingDependencies[dt] = [];
+              }
+              awaitingDependencies[dt].push(function() {
+                typeConverters[i] = registeredTypes[dt];
+                ++registered;
+                if (registered === unregisteredTypes.length) {
+                  onComplete(typeConverters);
+                }
+              });
+            }
+          });
+          if (unregisteredTypes.length === 0) {
+            onComplete(typeConverters);
+          }
+        }
+        function __embind_finalize_value_array(rawTupleType) {
+          var reg = tupleRegistrations[rawTupleType];
+          delete tupleRegistrations[rawTupleType];
+          var elements = reg.elements;
+          var elementsLength = elements.length;
+          var elementTypes = elements.map(function(elt) {
+            return elt.getterReturnType;
+          }).concat(elements.map(function(elt) {
+            return elt.setterArgumentType;
+          }));
+          var rawConstructor = reg.rawConstructor;
+          var rawDestructor = reg.rawDestructor;
+          whenDependentTypesAreResolved([rawTupleType], elementTypes, function(elementTypes2) {
+            elements.forEach(function(elt, i) {
+              var getterReturnType = elementTypes2[i];
+              var getter = elt.getter;
+              var getterContext = elt.getterContext;
+              var setterArgumentType = elementTypes2[i + elementsLength];
+              var setter = elt.setter;
+              var setterContext = elt.setterContext;
+              elt.read = function(ptr) {
+                return getterReturnType["fromWireType"](getter(getterContext, ptr));
+              };
+              elt.write = function(ptr, o) {
+                var destructors = [];
+                setter(setterContext, ptr, setterArgumentType["toWireType"](destructors, o));
+                runDestructors(destructors);
+              };
+            });
+            return [{ name: reg.name, "fromWireType": function(ptr) {
+              var rv = new Array(elementsLength);
+              for (var i = 0; i < elementsLength; ++i) {
+                rv[i] = elements[i].read(ptr);
+              }
+              rawDestructor(ptr);
+              return rv;
+            }, "toWireType": function(destructors, o) {
+              if (elementsLength !== o.length) {
+                throw new TypeError("Incorrect number of tuple elements for " + reg.name + ": expected=" + elementsLength + ", actual=" + o.length);
+              }
+              var ptr = rawConstructor();
+              for (var i = 0; i < elementsLength; ++i) {
+                elements[i].write(ptr, o[i]);
+              }
+              if (destructors !== null) {
+                destructors.push(rawDestructor, ptr);
+              }
+              return ptr;
+            }, "argPackAdvance": 8, "readValueFromPointer": simpleReadValueFromPointer, destructorFunction: rawDestructor }];
+          });
+        }
+        var structRegistrations = {};
+        function __embind_finalize_value_object(structType) {
+          var reg = structRegistrations[structType];
+          delete structRegistrations[structType];
+          var rawConstructor = reg.rawConstructor;
+          var rawDestructor = reg.rawDestructor;
+          var fieldRecords = reg.fields;
+          var fieldTypes = fieldRecords.map(function(field) {
+            return field.getterReturnType;
+          }).concat(fieldRecords.map(function(field) {
+            return field.setterArgumentType;
+          }));
+          whenDependentTypesAreResolved([structType], fieldTypes, function(fieldTypes2) {
+            var fields = {};
+            fieldRecords.forEach(function(field, i) {
+              var fieldName = field.fieldName;
+              var getterReturnType = fieldTypes2[i];
+              var getter = field.getter;
+              var getterContext = field.getterContext;
+              var setterArgumentType = fieldTypes2[i + fieldRecords.length];
+              var setter = field.setter;
+              var setterContext = field.setterContext;
+              fields[fieldName] = { read: function(ptr) {
+                return getterReturnType["fromWireType"](getter(getterContext, ptr));
+              }, write: function(ptr, o) {
+                var destructors = [];
+                setter(setterContext, ptr, setterArgumentType["toWireType"](destructors, o));
+                runDestructors(destructors);
+              } };
+            });
+            return [{ name: reg.name, "fromWireType": function(ptr) {
+              var rv = {};
+              for (var i in fields) {
+                rv[i] = fields[i].read(ptr);
+              }
+              rawDestructor(ptr);
+              return rv;
+            }, "toWireType": function(destructors, o) {
+              for (var fieldName in fields) {
+                if (!(fieldName in o)) {
+                  throw new TypeError('Missing field:  "' + fieldName + '"');
+                }
+              }
+              var ptr = rawConstructor();
+              for (fieldName in fields) {
+                fields[fieldName].write(ptr, o[fieldName]);
+              }
+              if (destructors !== null) {
+                destructors.push(rawDestructor, ptr);
+              }
+              return ptr;
+            }, "argPackAdvance": 8, "readValueFromPointer": simpleReadValueFromPointer, destructorFunction: rawDestructor }];
+          });
+        }
+        function getShiftFromSize(size) {
+          switch (size) {
+            case 1:
+              return 0;
+            case 2:
+              return 1;
+            case 4:
+              return 2;
+            case 8:
+              return 3;
+            default:
+              throw new TypeError("Unknown type size: " + size);
+          }
+        }
+        function embind_init_charCodes() {
+          var codes = new Array(256);
+          for (var i = 0; i < 256; ++i) {
+            codes[i] = String.fromCharCode(i);
+          }
+          embind_charCodes = codes;
+        }
+        var embind_charCodes = void 0;
+        function readLatin1String(ptr) {
+          var ret = "";
+          var c = ptr;
+          while (HEAPU8[c >>> 0]) {
+            ret += embind_charCodes[HEAPU8[c++ >>> 0]];
+          }
+          return ret;
+        }
+        var BindingError = void 0;
+        function throwBindingError(message) {
+          throw new BindingError(message);
+        }
+        function registerType(rawType, registeredInstance, options) {
+          options = options || {};
+          if (!("argPackAdvance" in registeredInstance)) {
+            throw new TypeError("registerType registeredInstance requires argPackAdvance");
+          }
+          var name2 = registeredInstance.name;
+          if (!rawType) {
+            throwBindingError('type "' + name2 + '" must have a positive integer typeid pointer');
+          }
+          if (registeredTypes.hasOwnProperty(rawType)) {
+            if (options.ignoreDuplicateRegistrations) {
+              return;
+            } else {
+              throwBindingError("Cannot register type '" + name2 + "' twice");
+            }
+          }
+          registeredTypes[rawType] = registeredInstance;
+          delete typeDependencies[rawType];
+          if (awaitingDependencies.hasOwnProperty(rawType)) {
+            var callbacks = awaitingDependencies[rawType];
+            delete awaitingDependencies[rawType];
+            callbacks.forEach(function(cb) {
+              cb();
+            });
+          }
+        }
+        function __embind_register_bool(rawType, name2, size, trueValue, falseValue) {
+          var shift = getShiftFromSize(size);
+          name2 = readLatin1String(name2);
+          registerType(rawType, { name: name2, "fromWireType": function(wt) {
+            return !!wt;
+          }, "toWireType": function(destructors, o) {
+            return o ? trueValue : falseValue;
+          }, "argPackAdvance": 8, "readValueFromPointer": function(pointer) {
+            var heap;
+            if (size === 1) {
+              heap = HEAP8;
+            } else if (size === 2) {
+              heap = HEAP16;
+            } else if (size === 4) {
+              heap = HEAP32;
+            } else {
+              throw new TypeError("Unknown boolean type size: " + name2);
+            }
+            return this["fromWireType"](heap[pointer >>> shift]);
+          }, destructorFunction: null });
+        }
+        function ClassHandle_isAliasOf(other) {
+          if (!(this instanceof ClassHandle)) {
+            return false;
+          }
+          if (!(other instanceof ClassHandle)) {
+            return false;
+          }
+          var leftClass = this.$$.ptrType.registeredClass;
+          var left = this.$$.ptr;
+          var rightClass = other.$$.ptrType.registeredClass;
+          var right = other.$$.ptr;
+          while (leftClass.baseClass) {
+            left = leftClass.upcast(left);
+            leftClass = leftClass.baseClass;
+          }
+          while (rightClass.baseClass) {
+            right = rightClass.upcast(right);
+            rightClass = rightClass.baseClass;
+          }
+          return leftClass === rightClass && left === right;
+        }
+        function shallowCopyInternalPointer(o) {
+          return { count: o.count, deleteScheduled: o.deleteScheduled, preservePointerOnDelete: o.preservePointerOnDelete, ptr: o.ptr, ptrType: o.ptrType, smartPtr: o.smartPtr, smartPtrType: o.smartPtrType };
+        }
+        function throwInstanceAlreadyDeleted(obj) {
+          function getInstanceTypeName(handle) {
+            return handle.$$.ptrType.registeredClass.name;
+          }
+          throwBindingError(getInstanceTypeName(obj) + " instance already deleted");
+        }
+        var finalizationGroup = false;
+        function detachFinalizer(handle) {
+        }
+        function runDestructor($$) {
+          if ($$.smartPtr) {
+            $$.smartPtrType.rawDestructor($$.smartPtr);
+          } else {
+            $$.ptrType.registeredClass.rawDestructor($$.ptr);
+          }
+        }
+        function releaseClassHandle($$) {
+          $$.count.value -= 1;
+          var toDelete = $$.count.value === 0;
+          if (toDelete) {
+            runDestructor($$);
+          }
+        }
+        function attachFinalizer(handle) {
+          if (typeof FinalizationGroup === "undefined") {
+            attachFinalizer = function(handle2) {
+              return handle2;
+            };
             return handle;
           }
+          finalizationGroup = new FinalizationGroup(function(iter) {
+            for (var result = iter.next(); !result.done; result = iter.next()) {
+              var $$ = result.value;
+              if (!$$.ptr) {
+                console.warn("object already deleted: " + $$.ptr);
+              } else {
+                releaseClassHandle($$);
+              }
+            }
+          });
+          attachFinalizer = function(handle2) {
+            finalizationGroup.register(handle2, handle2.$$, handle2.$$);
+            return handle2;
+          };
+          detachFinalizer = function(handle2) {
+            finalizationGroup.unregister(handle2.$$);
+          };
+          return attachFinalizer(handle);
         }
-      }
-      function __embind_register_emval(rawType, name2) {
-        name2 = readLatin1String(name2);
-        registerType(rawType, {name: name2, fromWireType: function(handle) {
-          var rv = emval_handle_array[handle].value;
-          __emval_decref(handle);
-          return rv;
-        }, toWireType: function(destructors, value) {
-          return __emval_register(value);
-        }, argPackAdvance: 8, readValueFromPointer: simpleReadValueFromPointer, destructorFunction: null});
-      }
-      function _embind_repr(v) {
-        if (v === null) {
-          return "null";
-        }
-        var t = typeof v;
-        if (t === "object" || t === "array" || t === "function") {
-          return v.toString();
-        } else {
-          return "" + v;
-        }
-      }
-      function floatReadValueFromPointer(name2, shift) {
-        switch (shift) {
-          case 2:
-            return function(pointer) {
-              return this["fromWireType"](HEAPF32[pointer >> 2]);
-            };
-          case 3:
-            return function(pointer) {
-              return this["fromWireType"](HEAPF64[pointer >> 3]);
-            };
-          default:
-            throw new TypeError("Unknown float type: " + name2);
-        }
-      }
-      function __embind_register_float(rawType, name2, size) {
-        var shift = getShiftFromSize(size);
-        name2 = readLatin1String(name2);
-        registerType(rawType, {name: name2, fromWireType: function(value) {
-          return value;
-        }, toWireType: function(destructors, value) {
-          if (typeof value !== "number" && typeof value !== "boolean") {
-            throw new TypeError('Cannot convert "' + _embind_repr(value) + '" to ' + this.name);
+        function ClassHandle_clone() {
+          if (!this.$$.ptr) {
+            throwInstanceAlreadyDeleted(this);
           }
-          return value;
-        }, argPackAdvance: 8, readValueFromPointer: floatReadValueFromPointer(name2, shift), destructorFunction: null});
-      }
-      function __embind_register_function(name2, argCount, rawArgTypesAddr, signature, rawInvoker, fn) {
-        var argTypes = heap32VectorToArray(argCount, rawArgTypesAddr);
-        name2 = readLatin1String(name2);
-        rawInvoker = embind__requireFunction(signature, rawInvoker);
-        exposePublicSymbol(name2, function() {
-          throwUnboundTypeError("Cannot call " + name2 + " due to unbound types", argTypes);
-        }, argCount - 1);
-        whenDependentTypesAreResolved([], argTypes, function(argTypes2) {
-          var invokerArgsArray = [argTypes2[0], null].concat(argTypes2.slice(1));
-          replacePublicSymbol(name2, craftInvokerFunction(name2, invokerArgsArray, null, rawInvoker, fn), argCount - 1);
-          return [];
-        });
-      }
-      function integerReadValueFromPointer(name2, shift, signed) {
-        switch (shift) {
-          case 0:
-            return signed ? function readS8FromPointer(pointer) {
-              return HEAP8[pointer];
-            } : function readU8FromPointer(pointer) {
-              return HEAPU8[pointer];
-            };
-          case 1:
-            return signed ? function readS16FromPointer(pointer) {
-              return HEAP16[pointer >> 1];
-            } : function readU16FromPointer(pointer) {
-              return HEAPU16[pointer >> 1];
-            };
-          case 2:
-            return signed ? function readS32FromPointer(pointer) {
-              return HEAP32[pointer >> 2];
-            } : function readU32FromPointer(pointer) {
-              return HEAPU32[pointer >> 2];
-            };
-          default:
-            throw new TypeError("Unknown integer type: " + name2);
+          if (this.$$.preservePointerOnDelete) {
+            this.$$.count.value += 1;
+            return this;
+          } else {
+            var clone = attachFinalizer(Object.create(Object.getPrototypeOf(this), { $$: { value: shallowCopyInternalPointer(this.$$) } }));
+            clone.$$.count.value += 1;
+            clone.$$.deleteScheduled = false;
+            return clone;
+          }
         }
-      }
-      function __embind_register_integer(primitiveType, name2, size, minRange, maxRange) {
-        name2 = readLatin1String(name2);
-        if (maxRange === -1) {
-          maxRange = 4294967295;
+        function ClassHandle_delete() {
+          if (!this.$$.ptr) {
+            throwInstanceAlreadyDeleted(this);
+          }
+          if (this.$$.deleteScheduled && !this.$$.preservePointerOnDelete) {
+            throwBindingError("Object already scheduled for deletion");
+          }
+          detachFinalizer(this);
+          releaseClassHandle(this.$$);
+          if (!this.$$.preservePointerOnDelete) {
+            this.$$.smartPtr = void 0;
+            this.$$.ptr = void 0;
+          }
         }
-        var shift = getShiftFromSize(size);
-        var fromWireType = function(value) {
-          return value;
-        };
-        if (minRange === 0) {
-          var bitshift = 32 - 8 * size;
-          fromWireType = function(value) {
-            return value << bitshift >>> bitshift;
+        function ClassHandle_isDeleted() {
+          return !this.$$.ptr;
+        }
+        var delayFunction = void 0;
+        var deletionQueue = [];
+        function flushPendingDeletes() {
+          while (deletionQueue.length) {
+            var obj = deletionQueue.pop();
+            obj.$$.deleteScheduled = false;
+            obj["delete"]();
+          }
+        }
+        function ClassHandle_deleteLater() {
+          if (!this.$$.ptr) {
+            throwInstanceAlreadyDeleted(this);
+          }
+          if (this.$$.deleteScheduled && !this.$$.preservePointerOnDelete) {
+            throwBindingError("Object already scheduled for deletion");
+          }
+          deletionQueue.push(this);
+          if (deletionQueue.length === 1 && delayFunction) {
+            delayFunction(flushPendingDeletes);
+          }
+          this.$$.deleteScheduled = true;
+          return this;
+        }
+        function init_ClassHandle() {
+          ClassHandle.prototype["isAliasOf"] = ClassHandle_isAliasOf;
+          ClassHandle.prototype["clone"] = ClassHandle_clone;
+          ClassHandle.prototype["delete"] = ClassHandle_delete;
+          ClassHandle.prototype["isDeleted"] = ClassHandle_isDeleted;
+          ClassHandle.prototype["deleteLater"] = ClassHandle_deleteLater;
+        }
+        function ClassHandle() {
+        }
+        var registeredPointers = {};
+        function ensureOverloadTable(proto, methodName, humanName) {
+          if (proto[methodName].overloadTable === void 0) {
+            var prevFunc = proto[methodName];
+            proto[methodName] = function() {
+              if (!proto[methodName].overloadTable.hasOwnProperty(arguments.length)) {
+                throwBindingError("Function '" + humanName + "' called with an invalid number of arguments (" + arguments.length + ") - expects one of (" + proto[methodName].overloadTable + ")!");
+              }
+              return proto[methodName].overloadTable[arguments.length].apply(this, arguments);
+            };
+            proto[methodName].overloadTable = [];
+            proto[methodName].overloadTable[prevFunc.argCount] = prevFunc;
+          }
+        }
+        function exposePublicSymbol(name2, value, numArguments) {
+          if (Module.hasOwnProperty(name2)) {
+            if (numArguments === void 0 || Module[name2].overloadTable !== void 0 && Module[name2].overloadTable[numArguments] !== void 0) {
+              throwBindingError("Cannot register public name '" + name2 + "' twice");
+            }
+            ensureOverloadTable(Module, name2, name2);
+            if (Module.hasOwnProperty(numArguments)) {
+              throwBindingError("Cannot register multiple overloads of a function with the same number of arguments (" + numArguments + ")!");
+            }
+            Module[name2].overloadTable[numArguments] = value;
+          } else {
+            Module[name2] = value;
+            if (numArguments !== void 0) {
+              Module[name2].numArguments = numArguments;
+            }
+          }
+        }
+        function RegisteredClass(name2, constructor, instancePrototype, rawDestructor, baseClass, getActualType, upcast, downcast) {
+          this.name = name2;
+          this.constructor = constructor;
+          this.instancePrototype = instancePrototype;
+          this.rawDestructor = rawDestructor;
+          this.baseClass = baseClass;
+          this.getActualType = getActualType;
+          this.upcast = upcast;
+          this.downcast = downcast;
+          this.pureVirtualFunctions = [];
+        }
+        function upcastPointer(ptr, ptrClass, desiredClass) {
+          while (ptrClass !== desiredClass) {
+            if (!ptrClass.upcast) {
+              throwBindingError("Expected null or instance of " + desiredClass.name + ", got an instance of " + ptrClass.name);
+            }
+            ptr = ptrClass.upcast(ptr);
+            ptrClass = ptrClass.baseClass;
+          }
+          return ptr;
+        }
+        function constNoSmartPtrRawPointerToWireType(destructors, handle) {
+          if (handle === null) {
+            if (this.isReference) {
+              throwBindingError("null is not a valid " + this.name);
+            }
+            return 0;
+          }
+          if (!handle.$$) {
+            throwBindingError('Cannot pass "' + _embind_repr(handle) + '" as a ' + this.name);
+          }
+          if (!handle.$$.ptr) {
+            throwBindingError("Cannot pass deleted object as a pointer of type " + this.name);
+          }
+          var handleClass = handle.$$.ptrType.registeredClass;
+          var ptr = upcastPointer(handle.$$.ptr, handleClass, this.registeredClass);
+          return ptr;
+        }
+        function genericPointerToWireType(destructors, handle) {
+          var ptr;
+          if (handle === null) {
+            if (this.isReference) {
+              throwBindingError("null is not a valid " + this.name);
+            }
+            if (this.isSmartPointer) {
+              ptr = this.rawConstructor();
+              if (destructors !== null) {
+                destructors.push(this.rawDestructor, ptr);
+              }
+              return ptr;
+            } else {
+              return 0;
+            }
+          }
+          if (!handle.$$) {
+            throwBindingError('Cannot pass "' + _embind_repr(handle) + '" as a ' + this.name);
+          }
+          if (!handle.$$.ptr) {
+            throwBindingError("Cannot pass deleted object as a pointer of type " + this.name);
+          }
+          if (!this.isConst && handle.$$.ptrType.isConst) {
+            throwBindingError("Cannot convert argument of type " + (handle.$$.smartPtrType ? handle.$$.smartPtrType.name : handle.$$.ptrType.name) + " to parameter type " + this.name);
+          }
+          var handleClass = handle.$$.ptrType.registeredClass;
+          ptr = upcastPointer(handle.$$.ptr, handleClass, this.registeredClass);
+          if (this.isSmartPointer) {
+            if (handle.$$.smartPtr === void 0) {
+              throwBindingError("Passing raw pointer to smart pointer is illegal");
+            }
+            switch (this.sharingPolicy) {
+              case 0:
+                if (handle.$$.smartPtrType === this) {
+                  ptr = handle.$$.smartPtr;
+                } else {
+                  throwBindingError("Cannot convert argument of type " + (handle.$$.smartPtrType ? handle.$$.smartPtrType.name : handle.$$.ptrType.name) + " to parameter type " + this.name);
+                }
+                break;
+              case 1:
+                ptr = handle.$$.smartPtr;
+                break;
+              case 2:
+                if (handle.$$.smartPtrType === this) {
+                  ptr = handle.$$.smartPtr;
+                } else {
+                  var clonedHandle = handle["clone"]();
+                  ptr = this.rawShare(ptr, __emval_register(function() {
+                    clonedHandle["delete"]();
+                  }));
+                  if (destructors !== null) {
+                    destructors.push(this.rawDestructor, ptr);
+                  }
+                }
+                break;
+              default:
+                throwBindingError("Unsupporting sharing policy");
+            }
+          }
+          return ptr;
+        }
+        function nonConstNoSmartPtrRawPointerToWireType(destructors, handle) {
+          if (handle === null) {
+            if (this.isReference) {
+              throwBindingError("null is not a valid " + this.name);
+            }
+            return 0;
+          }
+          if (!handle.$$) {
+            throwBindingError('Cannot pass "' + _embind_repr(handle) + '" as a ' + this.name);
+          }
+          if (!handle.$$.ptr) {
+            throwBindingError("Cannot pass deleted object as a pointer of type " + this.name);
+          }
+          if (handle.$$.ptrType.isConst) {
+            throwBindingError("Cannot convert argument of type " + handle.$$.ptrType.name + " to parameter type " + this.name);
+          }
+          var handleClass = handle.$$.ptrType.registeredClass;
+          var ptr = upcastPointer(handle.$$.ptr, handleClass, this.registeredClass);
+          return ptr;
+        }
+        function RegisteredPointer_getPointee(ptr) {
+          if (this.rawGetPointee) {
+            ptr = this.rawGetPointee(ptr);
+          }
+          return ptr;
+        }
+        function RegisteredPointer_destructor(ptr) {
+          if (this.rawDestructor) {
+            this.rawDestructor(ptr);
+          }
+        }
+        function RegisteredPointer_deleteObject(handle) {
+          if (handle !== null) {
+            handle["delete"]();
+          }
+        }
+        function downcastPointer(ptr, ptrClass, desiredClass) {
+          if (ptrClass === desiredClass) {
+            return ptr;
+          }
+          if (desiredClass.baseClass === void 0) {
+            return null;
+          }
+          var rv = downcastPointer(ptr, ptrClass, desiredClass.baseClass);
+          if (rv === null) {
+            return null;
+          }
+          return desiredClass.downcast(rv);
+        }
+        function getInheritedInstanceCount() {
+          return Object.keys(registeredInstances).length;
+        }
+        function getLiveInheritedInstances() {
+          var rv = [];
+          for (var k in registeredInstances) {
+            if (registeredInstances.hasOwnProperty(k)) {
+              rv.push(registeredInstances[k]);
+            }
+          }
+          return rv;
+        }
+        function setDelayFunction(fn) {
+          delayFunction = fn;
+          if (deletionQueue.length && delayFunction) {
+            delayFunction(flushPendingDeletes);
+          }
+        }
+        function init_embind() {
+          Module["getInheritedInstanceCount"] = getInheritedInstanceCount;
+          Module["getLiveInheritedInstances"] = getLiveInheritedInstances;
+          Module["flushPendingDeletes"] = flushPendingDeletes;
+          Module["setDelayFunction"] = setDelayFunction;
+        }
+        var registeredInstances = {};
+        function getBasestPointer(class_, ptr) {
+          if (ptr === void 0) {
+            throwBindingError("ptr should not be undefined");
+          }
+          while (class_.baseClass) {
+            ptr = class_.upcast(ptr);
+            class_ = class_.baseClass;
+          }
+          return ptr;
+        }
+        function getInheritedInstance(class_, ptr) {
+          ptr = getBasestPointer(class_, ptr);
+          return registeredInstances[ptr];
+        }
+        function makeClassHandle(prototype, record) {
+          if (!record.ptrType || !record.ptr) {
+            throwInternalError("makeClassHandle requires ptr and ptrType");
+          }
+          var hasSmartPtrType = !!record.smartPtrType;
+          var hasSmartPtr = !!record.smartPtr;
+          if (hasSmartPtrType !== hasSmartPtr) {
+            throwInternalError("Both smartPtrType and smartPtr must be specified");
+          }
+          record.count = { value: 1 };
+          return attachFinalizer(Object.create(prototype, { $$: { value: record } }));
+        }
+        function RegisteredPointer_fromWireType(ptr) {
+          var rawPointer = this.getPointee(ptr);
+          if (!rawPointer) {
+            this.destructor(ptr);
+            return null;
+          }
+          var registeredInstance = getInheritedInstance(this.registeredClass, rawPointer);
+          if (registeredInstance !== void 0) {
+            if (registeredInstance.$$.count.value === 0) {
+              registeredInstance.$$.ptr = rawPointer;
+              registeredInstance.$$.smartPtr = ptr;
+              return registeredInstance["clone"]();
+            } else {
+              var rv = registeredInstance["clone"]();
+              this.destructor(ptr);
+              return rv;
+            }
+          }
+          function makeDefaultHandle() {
+            if (this.isSmartPointer) {
+              return makeClassHandle(this.registeredClass.instancePrototype, { ptrType: this.pointeeType, ptr: rawPointer, smartPtrType: this, smartPtr: ptr });
+            } else {
+              return makeClassHandle(this.registeredClass.instancePrototype, { ptrType: this, ptr });
+            }
+          }
+          var actualType = this.registeredClass.getActualType(rawPointer);
+          var registeredPointerRecord = registeredPointers[actualType];
+          if (!registeredPointerRecord) {
+            return makeDefaultHandle.call(this);
+          }
+          var toType;
+          if (this.isConst) {
+            toType = registeredPointerRecord.constPointerType;
+          } else {
+            toType = registeredPointerRecord.pointerType;
+          }
+          var dp = downcastPointer(rawPointer, this.registeredClass, toType.registeredClass);
+          if (dp === null) {
+            return makeDefaultHandle.call(this);
+          }
+          if (this.isSmartPointer) {
+            return makeClassHandle(toType.registeredClass.instancePrototype, { ptrType: toType, ptr: dp, smartPtrType: this, smartPtr: ptr });
+          } else {
+            return makeClassHandle(toType.registeredClass.instancePrototype, { ptrType: toType, ptr: dp });
+          }
+        }
+        function init_RegisteredPointer() {
+          RegisteredPointer.prototype.getPointee = RegisteredPointer_getPointee;
+          RegisteredPointer.prototype.destructor = RegisteredPointer_destructor;
+          RegisteredPointer.prototype["argPackAdvance"] = 8;
+          RegisteredPointer.prototype["readValueFromPointer"] = simpleReadValueFromPointer;
+          RegisteredPointer.prototype["deleteObject"] = RegisteredPointer_deleteObject;
+          RegisteredPointer.prototype["fromWireType"] = RegisteredPointer_fromWireType;
+        }
+        function RegisteredPointer(name2, registeredClass, isReference, isConst, isSmartPointer, pointeeType, sharingPolicy, rawGetPointee, rawConstructor, rawShare, rawDestructor) {
+          this.name = name2;
+          this.registeredClass = registeredClass;
+          this.isReference = isReference;
+          this.isConst = isConst;
+          this.isSmartPointer = isSmartPointer;
+          this.pointeeType = pointeeType;
+          this.sharingPolicy = sharingPolicy;
+          this.rawGetPointee = rawGetPointee;
+          this.rawConstructor = rawConstructor;
+          this.rawShare = rawShare;
+          this.rawDestructor = rawDestructor;
+          if (!isSmartPointer && registeredClass.baseClass === void 0) {
+            if (isConst) {
+              this["toWireType"] = constNoSmartPtrRawPointerToWireType;
+              this.destructorFunction = null;
+            } else {
+              this["toWireType"] = nonConstNoSmartPtrRawPointerToWireType;
+              this.destructorFunction = null;
+            }
+          } else {
+            this["toWireType"] = genericPointerToWireType;
+          }
+        }
+        function replacePublicSymbol(name2, value, numArguments) {
+          if (!Module.hasOwnProperty(name2)) {
+            throwInternalError("Replacing nonexistant public symbol");
+          }
+          if (Module[name2].overloadTable !== void 0 && numArguments !== void 0) {
+            Module[name2].overloadTable[numArguments] = value;
+          } else {
+            Module[name2] = value;
+            Module[name2].argCount = numArguments;
+          }
+        }
+        function getDynCaller(sig, ptr) {
+          assert(sig.indexOf("j") >= 0, "getDynCaller should only be called with i64 sigs");
+          var argCache = [];
+          return function() {
+            argCache.length = arguments.length;
+            for (var i = 0; i < arguments.length; i++) {
+              argCache[i] = arguments[i];
+            }
+            return dynCall(sig, ptr, argCache);
           };
         }
-        var isUnsignedType = name2.indexOf("unsigned") != -1;
-        registerType(primitiveType, {name: name2, fromWireType, toWireType: function(destructors, value) {
-          if (typeof value !== "number" && typeof value !== "boolean") {
-            throw new TypeError('Cannot convert "' + _embind_repr(value) + '" to ' + this.name);
+        function embind__requireFunction(signature, rawFunction) {
+          signature = readLatin1String(signature);
+          function makeDynCaller() {
+            if (signature.indexOf("j") != -1) {
+              return getDynCaller(signature, rawFunction);
+            }
+            return wasmTable.get(rawFunction);
           }
-          if (value < minRange || value > maxRange) {
-            throw new TypeError('Passing a number "' + _embind_repr(value) + '" from JS side to C/C++ side to an argument of type "' + name2 + '", which is outside the valid range [' + minRange + ", " + maxRange + "]!");
+          var fp = makeDynCaller();
+          if (typeof fp !== "function") {
+            throwBindingError("unknown function pointer with signature " + signature + ": " + rawFunction);
           }
-          return isUnsignedType ? value >>> 0 : value | 0;
-        }, argPackAdvance: 8, readValueFromPointer: integerReadValueFromPointer(name2, shift, minRange !== 0), destructorFunction: null});
-      }
-      function __embind_register_memory_view(rawType, dataTypeIndex, name2) {
-        var typeMapping = [Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array];
-        var TA = typeMapping[dataTypeIndex];
-        function decodeMemoryView(handle) {
-          handle = handle >> 2;
-          var heap = HEAPU32;
-          var size = heap[handle];
-          var data = heap[handle + 1];
-          return new TA(buffer, data, size);
+          return fp;
         }
-        name2 = readLatin1String(name2);
-        registerType(rawType, {name: name2, fromWireType: decodeMemoryView, argPackAdvance: 8, readValueFromPointer: decodeMemoryView}, {ignoreDuplicateRegistrations: true});
-      }
-      function __embind_register_std_string(rawType, name2) {
-        name2 = readLatin1String(name2);
-        var stdStringIsUTF8 = name2 === "std::string";
-        registerType(rawType, {name: name2, fromWireType: function(value) {
-          var length = HEAPU32[value >> 2];
-          var str;
-          if (stdStringIsUTF8) {
+        var UnboundTypeError = void 0;
+        function getTypeName(type) {
+          var ptr = ___getTypeName(type);
+          var rv = readLatin1String(ptr);
+          _free(ptr);
+          return rv;
+        }
+        function throwUnboundTypeError(message, types) {
+          var unboundTypes = [];
+          var seen = {};
+          function visit(type) {
+            if (seen[type]) {
+              return;
+            }
+            if (registeredTypes[type]) {
+              return;
+            }
+            if (typeDependencies[type]) {
+              typeDependencies[type].forEach(visit);
+              return;
+            }
+            unboundTypes.push(type);
+            seen[type] = true;
+          }
+          types.forEach(visit);
+          throw new UnboundTypeError(message + ": " + unboundTypes.map(getTypeName).join([", "]));
+        }
+        function __embind_register_class(rawType, rawPointerType, rawConstPointerType, baseClassRawType, getActualTypeSignature, getActualType, upcastSignature, upcast, downcastSignature, downcast, name2, destructorSignature, rawDestructor) {
+          name2 = readLatin1String(name2);
+          getActualType = embind__requireFunction(getActualTypeSignature, getActualType);
+          if (upcast) {
+            upcast = embind__requireFunction(upcastSignature, upcast);
+          }
+          if (downcast) {
+            downcast = embind__requireFunction(downcastSignature, downcast);
+          }
+          rawDestructor = embind__requireFunction(destructorSignature, rawDestructor);
+          var legalFunctionName = makeLegalFunctionName(name2);
+          exposePublicSymbol(legalFunctionName, function() {
+            throwUnboundTypeError("Cannot construct " + name2 + " due to unbound types", [baseClassRawType]);
+          });
+          whenDependentTypesAreResolved([rawType, rawPointerType, rawConstPointerType], baseClassRawType ? [baseClassRawType] : [], function(base) {
+            base = base[0];
+            var baseClass;
+            var basePrototype;
+            if (baseClassRawType) {
+              baseClass = base.registeredClass;
+              basePrototype = baseClass.instancePrototype;
+            } else {
+              basePrototype = ClassHandle.prototype;
+            }
+            var constructor = createNamedFunction(legalFunctionName, function() {
+              if (Object.getPrototypeOf(this) !== instancePrototype) {
+                throw new BindingError("Use 'new' to construct " + name2);
+              }
+              if (registeredClass.constructor_body === void 0) {
+                throw new BindingError(name2 + " has no accessible constructor");
+              }
+              var body = registeredClass.constructor_body[arguments.length];
+              if (body === void 0) {
+                throw new BindingError("Tried to invoke ctor of " + name2 + " with invalid number of parameters (" + arguments.length + ") - expected (" + Object.keys(registeredClass.constructor_body).toString() + ") parameters instead!");
+              }
+              return body.apply(this, arguments);
+            });
+            var instancePrototype = Object.create(basePrototype, { constructor: { value: constructor } });
+            constructor.prototype = instancePrototype;
+            var registeredClass = new RegisteredClass(name2, constructor, instancePrototype, rawDestructor, baseClass, getActualType, upcast, downcast);
+            var referenceConverter = new RegisteredPointer(name2, registeredClass, true, false, false);
+            var pointerConverter = new RegisteredPointer(name2 + "*", registeredClass, false, false, false);
+            var constPointerConverter = new RegisteredPointer(name2 + " const*", registeredClass, false, true, false);
+            registeredPointers[rawType] = { pointerType: pointerConverter, constPointerType: constPointerConverter };
+            replacePublicSymbol(legalFunctionName, constructor);
+            return [referenceConverter, pointerConverter, constPointerConverter];
+          });
+        }
+        function heap32VectorToArray(count, firstElement) {
+          var array = [];
+          for (var i = 0; i < count; i++) {
+            array.push(HEAP32[(firstElement >> 2) + i >>> 0]);
+          }
+          return array;
+        }
+        function __embind_register_class_constructor(rawClassType, argCount, rawArgTypesAddr, invokerSignature, invoker, rawConstructor) {
+          assert(argCount > 0);
+          var rawArgTypes = heap32VectorToArray(argCount, rawArgTypesAddr);
+          invoker = embind__requireFunction(invokerSignature, invoker);
+          var args = [rawConstructor];
+          var destructors = [];
+          whenDependentTypesAreResolved([], [rawClassType], function(classType) {
+            classType = classType[0];
+            var humanName = "constructor " + classType.name;
+            if (classType.registeredClass.constructor_body === void 0) {
+              classType.registeredClass.constructor_body = [];
+            }
+            if (classType.registeredClass.constructor_body[argCount - 1] !== void 0) {
+              throw new BindingError("Cannot register multiple constructors with identical number of parameters (" + (argCount - 1) + ") for class '" + classType.name + "'! Overload resolution is currently only performed using the parameter count, not actual type info!");
+            }
+            classType.registeredClass.constructor_body[argCount - 1] = function unboundTypeHandler() {
+              throwUnboundTypeError("Cannot construct " + classType.name + " due to unbound types", rawArgTypes);
+            };
+            whenDependentTypesAreResolved([], rawArgTypes, function(argTypes) {
+              classType.registeredClass.constructor_body[argCount - 1] = function constructor_body() {
+                if (arguments.length !== argCount - 1) {
+                  throwBindingError(humanName + " called with " + arguments.length + " arguments, expected " + (argCount - 1));
+                }
+                destructors.length = 0;
+                args.length = argCount;
+                for (var i = 1; i < argCount; ++i) {
+                  args[i] = argTypes[i]["toWireType"](destructors, arguments[i - 1]);
+                }
+                var ptr = invoker.apply(null, args);
+                runDestructors(destructors);
+                return argTypes[0]["fromWireType"](ptr);
+              };
+              return [];
+            });
+            return [];
+          });
+        }
+        function new_(constructor, argumentList) {
+          if (!(constructor instanceof Function)) {
+            throw new TypeError("new_ called with constructor type " + typeof constructor + " which is not a function");
+          }
+          var dummy = createNamedFunction(constructor.name || "unknownFunctionName", function() {
+          });
+          dummy.prototype = constructor.prototype;
+          var obj = new dummy();
+          var r = constructor.apply(obj, argumentList);
+          return r instanceof Object ? r : obj;
+        }
+        function craftInvokerFunction(humanName, argTypes, classType, cppInvokerFunc, cppTargetFunc) {
+          var argCount = argTypes.length;
+          if (argCount < 2) {
+            throwBindingError("argTypes array size mismatch! Must at least get return value and 'this' types!");
+          }
+          var isClassMethodFunc = argTypes[1] !== null && classType !== null;
+          var needsDestructorStack = false;
+          for (var i = 1; i < argTypes.length; ++i) {
+            if (argTypes[i] !== null && argTypes[i].destructorFunction === void 0) {
+              needsDestructorStack = true;
+              break;
+            }
+          }
+          var returns = argTypes[0].name !== "void";
+          var argsList = "";
+          var argsListWired = "";
+          for (var i = 0; i < argCount - 2; ++i) {
+            argsList += (i !== 0 ? ", " : "") + "arg" + i;
+            argsListWired += (i !== 0 ? ", " : "") + "arg" + i + "Wired";
+          }
+          var invokerFnBody = "return function " + makeLegalFunctionName(humanName) + "(" + argsList + ") {\nif (arguments.length !== " + (argCount - 2) + ") {\nthrowBindingError('function " + humanName + " called with ' + arguments.length + ' arguments, expected " + (argCount - 2) + " args!');\n}\n";
+          if (needsDestructorStack) {
+            invokerFnBody += "var destructors = [];\n";
+          }
+          var dtorStack = needsDestructorStack ? "destructors" : "null";
+          var args1 = ["throwBindingError", "invoker", "fn", "runDestructors", "retType", "classParam"];
+          var args2 = [throwBindingError, cppInvokerFunc, cppTargetFunc, runDestructors, argTypes[0], argTypes[1]];
+          if (isClassMethodFunc) {
+            invokerFnBody += "var thisWired = classParam.toWireType(" + dtorStack + ", this);\n";
+          }
+          for (var i = 0; i < argCount - 2; ++i) {
+            invokerFnBody += "var arg" + i + "Wired = argType" + i + ".toWireType(" + dtorStack + ", arg" + i + "); // " + argTypes[i + 2].name + "\n";
+            args1.push("argType" + i);
+            args2.push(argTypes[i + 2]);
+          }
+          if (isClassMethodFunc) {
+            argsListWired = "thisWired" + (argsListWired.length > 0 ? ", " : "") + argsListWired;
+          }
+          invokerFnBody += (returns ? "var rv = " : "") + "invoker(fn" + (argsListWired.length > 0 ? ", " : "") + argsListWired + ");\n";
+          if (needsDestructorStack) {
+            invokerFnBody += "runDestructors(destructors);\n";
+          } else {
+            for (var i = isClassMethodFunc ? 1 : 2; i < argTypes.length; ++i) {
+              var paramName = i === 1 ? "thisWired" : "arg" + (i - 2) + "Wired";
+              if (argTypes[i].destructorFunction !== null) {
+                invokerFnBody += paramName + "_dtor(" + paramName + "); // " + argTypes[i].name + "\n";
+                args1.push(paramName + "_dtor");
+                args2.push(argTypes[i].destructorFunction);
+              }
+            }
+          }
+          if (returns) {
+            invokerFnBody += "var ret = retType.fromWireType(rv);\nreturn ret;\n";
+          }
+          invokerFnBody += "}\n";
+          args1.push(invokerFnBody);
+          var invokerFunction = new_(Function, args1).apply(null, args2);
+          return invokerFunction;
+        }
+        function __embind_register_class_function(rawClassType, methodName, argCount, rawArgTypesAddr, invokerSignature, rawInvoker, context, isPureVirtual) {
+          var rawArgTypes = heap32VectorToArray(argCount, rawArgTypesAddr);
+          methodName = readLatin1String(methodName);
+          rawInvoker = embind__requireFunction(invokerSignature, rawInvoker);
+          whenDependentTypesAreResolved([], [rawClassType], function(classType) {
+            classType = classType[0];
+            var humanName = classType.name + "." + methodName;
+            if (isPureVirtual) {
+              classType.registeredClass.pureVirtualFunctions.push(methodName);
+            }
+            function unboundTypesHandler() {
+              throwUnboundTypeError("Cannot call " + humanName + " due to unbound types", rawArgTypes);
+            }
+            var proto = classType.registeredClass.instancePrototype;
+            var method = proto[methodName];
+            if (method === void 0 || method.overloadTable === void 0 && method.className !== classType.name && method.argCount === argCount - 2) {
+              unboundTypesHandler.argCount = argCount - 2;
+              unboundTypesHandler.className = classType.name;
+              proto[methodName] = unboundTypesHandler;
+            } else {
+              ensureOverloadTable(proto, methodName, humanName);
+              proto[methodName].overloadTable[argCount - 2] = unboundTypesHandler;
+            }
+            whenDependentTypesAreResolved([], rawArgTypes, function(argTypes) {
+              var memberFunction = craftInvokerFunction(humanName, argTypes, classType, rawInvoker, context);
+              if (proto[methodName].overloadTable === void 0) {
+                memberFunction.argCount = argCount - 2;
+                proto[methodName] = memberFunction;
+              } else {
+                proto[methodName].overloadTable[argCount - 2] = memberFunction;
+              }
+              return [];
+            });
+            return [];
+          });
+        }
+        var emval_free_list = [];
+        var emval_handle_array = [{}, { value: void 0 }, { value: null }, { value: true }, { value: false }];
+        function __emval_decref(handle) {
+          if (handle > 4 && --emval_handle_array[handle].refcount === 0) {
+            emval_handle_array[handle] = void 0;
+            emval_free_list.push(handle);
+          }
+        }
+        function count_emval_handles() {
+          var count = 0;
+          for (var i = 5; i < emval_handle_array.length; ++i) {
+            if (emval_handle_array[i] !== void 0) {
+              ++count;
+            }
+          }
+          return count;
+        }
+        function get_first_emval() {
+          for (var i = 5; i < emval_handle_array.length; ++i) {
+            if (emval_handle_array[i] !== void 0) {
+              return emval_handle_array[i];
+            }
+          }
+          return null;
+        }
+        function init_emval() {
+          Module["count_emval_handles"] = count_emval_handles;
+          Module["get_first_emval"] = get_first_emval;
+        }
+        function __emval_register(value) {
+          switch (value) {
+            case void 0: {
+              return 1;
+            }
+            case null: {
+              return 2;
+            }
+            case true: {
+              return 3;
+            }
+            case false: {
+              return 4;
+            }
+            default: {
+              var handle = emval_free_list.length ? emval_free_list.pop() : emval_handle_array.length;
+              emval_handle_array[handle] = { refcount: 1, value };
+              return handle;
+            }
+          }
+        }
+        function __embind_register_emval(rawType, name2) {
+          name2 = readLatin1String(name2);
+          registerType(rawType, { name: name2, "fromWireType": function(handle) {
+            var rv = emval_handle_array[handle].value;
+            __emval_decref(handle);
+            return rv;
+          }, "toWireType": function(destructors, value) {
+            return __emval_register(value);
+          }, "argPackAdvance": 8, "readValueFromPointer": simpleReadValueFromPointer, destructorFunction: null });
+        }
+        function enumReadValueFromPointer(name2, shift, signed) {
+          switch (shift) {
+            case 0:
+              return function(pointer) {
+                var heap = signed ? HEAP8 : HEAPU8;
+                return this["fromWireType"](heap[pointer >>> 0]);
+              };
+            case 1:
+              return function(pointer) {
+                var heap = signed ? HEAP16 : HEAPU16;
+                return this["fromWireType"](heap[pointer >>> 1]);
+              };
+            case 2:
+              return function(pointer) {
+                var heap = signed ? HEAP32 : HEAPU32;
+                return this["fromWireType"](heap[pointer >>> 2]);
+              };
+            default:
+              throw new TypeError("Unknown integer type: " + name2);
+          }
+        }
+        function __embind_register_enum(rawType, name2, size, isSigned) {
+          var shift = getShiftFromSize(size);
+          name2 = readLatin1String(name2);
+          function ctor() {
+          }
+          ctor.values = {};
+          registerType(rawType, { name: name2, constructor: ctor, "fromWireType": function(c) {
+            return this.constructor.values[c];
+          }, "toWireType": function(destructors, c) {
+            return c.value;
+          }, "argPackAdvance": 8, "readValueFromPointer": enumReadValueFromPointer(name2, shift, isSigned), destructorFunction: null });
+          exposePublicSymbol(name2, ctor);
+        }
+        function requireRegisteredType(rawType, humanName) {
+          var impl = registeredTypes[rawType];
+          if (impl === void 0) {
+            throwBindingError(humanName + " has unknown type " + getTypeName(rawType));
+          }
+          return impl;
+        }
+        function __embind_register_enum_value(rawEnumType, name2, enumValue) {
+          var enumType = requireRegisteredType(rawEnumType, "enum");
+          name2 = readLatin1String(name2);
+          var Enum = enumType.constructor;
+          var Value2 = Object.create(enumType.constructor.prototype, { value: { value: enumValue }, constructor: { value: createNamedFunction(enumType.name + "_" + name2, function() {
+          }) } });
+          Enum.values[enumValue] = Value2;
+          Enum[name2] = Value2;
+        }
+        function _embind_repr(v) {
+          if (v === null) {
+            return "null";
+          }
+          var t = typeof v;
+          if (t === "object" || t === "array" || t === "function") {
+            return v.toString();
+          } else {
+            return "" + v;
+          }
+        }
+        function floatReadValueFromPointer(name2, shift) {
+          switch (shift) {
+            case 2:
+              return function(pointer) {
+                return this["fromWireType"](HEAPF32[pointer >>> 2]);
+              };
+            case 3:
+              return function(pointer) {
+                return this["fromWireType"](HEAPF64[pointer >>> 3]);
+              };
+            default:
+              throw new TypeError("Unknown float type: " + name2);
+          }
+        }
+        function __embind_register_float(rawType, name2, size) {
+          var shift = getShiftFromSize(size);
+          name2 = readLatin1String(name2);
+          registerType(rawType, { name: name2, "fromWireType": function(value) {
+            return value;
+          }, "toWireType": function(destructors, value) {
+            if (typeof value !== "number" && typeof value !== "boolean") {
+              throw new TypeError('Cannot convert "' + _embind_repr(value) + '" to ' + this.name);
+            }
+            return value;
+          }, "argPackAdvance": 8, "readValueFromPointer": floatReadValueFromPointer(name2, shift), destructorFunction: null });
+        }
+        function __embind_register_function(name2, argCount, rawArgTypesAddr, signature, rawInvoker, fn) {
+          var argTypes = heap32VectorToArray(argCount, rawArgTypesAddr);
+          name2 = readLatin1String(name2);
+          rawInvoker = embind__requireFunction(signature, rawInvoker);
+          exposePublicSymbol(name2, function() {
+            throwUnboundTypeError("Cannot call " + name2 + " due to unbound types", argTypes);
+          }, argCount - 1);
+          whenDependentTypesAreResolved([], argTypes, function(argTypes2) {
+            var invokerArgsArray = [argTypes2[0], null].concat(argTypes2.slice(1));
+            replacePublicSymbol(name2, craftInvokerFunction(name2, invokerArgsArray, null, rawInvoker, fn), argCount - 1);
+            return [];
+          });
+        }
+        function integerReadValueFromPointer(name2, shift, signed) {
+          switch (shift) {
+            case 0:
+              return signed ? function readS8FromPointer(pointer) {
+                return HEAP8[pointer >>> 0];
+              } : function readU8FromPointer(pointer) {
+                return HEAPU8[pointer >>> 0];
+              };
+            case 1:
+              return signed ? function readS16FromPointer(pointer) {
+                return HEAP16[pointer >>> 1];
+              } : function readU16FromPointer(pointer) {
+                return HEAPU16[pointer >>> 1];
+              };
+            case 2:
+              return signed ? function readS32FromPointer(pointer) {
+                return HEAP32[pointer >>> 2];
+              } : function readU32FromPointer(pointer) {
+                return HEAPU32[pointer >>> 2];
+              };
+            default:
+              throw new TypeError("Unknown integer type: " + name2);
+          }
+        }
+        function __embind_register_integer(primitiveType, name2, size, minRange, maxRange) {
+          name2 = readLatin1String(name2);
+          if (maxRange === -1) {
+            maxRange = 4294967295;
+          }
+          var shift = getShiftFromSize(size);
+          var fromWireType = function(value) {
+            return value;
+          };
+          if (minRange === 0) {
+            var bitshift = 32 - 8 * size;
+            fromWireType = function(value) {
+              return value << bitshift >>> bitshift;
+            };
+          }
+          var isUnsignedType = name2.indexOf("unsigned") != -1;
+          registerType(primitiveType, { name: name2, "fromWireType": fromWireType, "toWireType": function(destructors, value) {
+            if (typeof value !== "number" && typeof value !== "boolean") {
+              throw new TypeError('Cannot convert "' + _embind_repr(value) + '" to ' + this.name);
+            }
+            if (value < minRange || value > maxRange) {
+              throw new TypeError('Passing a number "' + _embind_repr(value) + '" from JS side to C/C++ side to an argument of type "' + name2 + '", which is outside the valid range [' + minRange + ", " + maxRange + "]!");
+            }
+            return isUnsignedType ? value >>> 0 : value | 0;
+          }, "argPackAdvance": 8, "readValueFromPointer": integerReadValueFromPointer(name2, shift, minRange !== 0), destructorFunction: null });
+        }
+        function __embind_register_memory_view(rawType, dataTypeIndex, name2) {
+          var typeMapping = [Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array];
+          var TA = typeMapping[dataTypeIndex];
+          function decodeMemoryView(handle) {
+            handle = handle >> 2;
+            var heap = HEAPU32;
+            var size = heap[handle >>> 0];
+            var data = heap[handle + 1 >>> 0];
+            return new TA(buffer, data, size);
+          }
+          name2 = readLatin1String(name2);
+          registerType(rawType, { name: name2, "fromWireType": decodeMemoryView, "argPackAdvance": 8, "readValueFromPointer": decodeMemoryView }, { ignoreDuplicateRegistrations: true });
+        }
+        function __embind_register_std_string(rawType, name2) {
+          name2 = readLatin1String(name2);
+          var stdStringIsUTF8 = name2 === "std::string";
+          registerType(rawType, { name: name2, "fromWireType": function(value) {
+            var length = HEAPU32[value >>> 2];
+            var str;
+            if (stdStringIsUTF8) {
+              var decodeStartPtr = value + 4;
+              for (var i = 0; i <= length; ++i) {
+                var currentBytePtr = value + 4 + i;
+                if (i == length || HEAPU8[currentBytePtr >>> 0] == 0) {
+                  var maxRead = currentBytePtr - decodeStartPtr;
+                  var stringSegment = UTF8ToString(decodeStartPtr, maxRead);
+                  if (str === void 0) {
+                    str = stringSegment;
+                  } else {
+                    str += String.fromCharCode(0);
+                    str += stringSegment;
+                  }
+                  decodeStartPtr = currentBytePtr + 1;
+                }
+              }
+            } else {
+              var a = new Array(length);
+              for (var i = 0; i < length; ++i) {
+                a[i] = String.fromCharCode(HEAPU8[value + 4 + i >>> 0]);
+              }
+              str = a.join("");
+            }
+            _free(value);
+            return str;
+          }, "toWireType": function(destructors, value) {
+            if (value instanceof ArrayBuffer) {
+              value = new Uint8Array(value);
+            }
+            var getLength;
+            var valueIsOfTypeString = typeof value === "string";
+            if (!(valueIsOfTypeString || value instanceof Uint8Array || value instanceof Uint8ClampedArray || value instanceof Int8Array)) {
+              throwBindingError("Cannot pass non-string to std::string");
+            }
+            if (stdStringIsUTF8 && valueIsOfTypeString) {
+              getLength = function() {
+                return lengthBytesUTF8(value);
+              };
+            } else {
+              getLength = function() {
+                return value.length;
+              };
+            }
+            var length = getLength();
+            var ptr = _malloc(4 + length + 1);
+            ptr >>>= 0;
+            HEAPU32[ptr >>> 2] = length;
+            if (stdStringIsUTF8 && valueIsOfTypeString) {
+              stringToUTF8(value, ptr + 4, length + 1);
+            } else {
+              if (valueIsOfTypeString) {
+                for (var i = 0; i < length; ++i) {
+                  var charCode = value.charCodeAt(i);
+                  if (charCode > 255) {
+                    _free(ptr);
+                    throwBindingError("String has UTF-16 code units that do not fit in 8 bits");
+                  }
+                  HEAPU8[ptr + 4 + i >>> 0] = charCode;
+                }
+              } else {
+                for (var i = 0; i < length; ++i) {
+                  HEAPU8[ptr + 4 + i >>> 0] = value[i];
+                }
+              }
+            }
+            if (destructors !== null) {
+              destructors.push(_free, ptr);
+            }
+            return ptr;
+          }, "argPackAdvance": 8, "readValueFromPointer": simpleReadValueFromPointer, destructorFunction: function(ptr) {
+            _free(ptr);
+          } });
+        }
+        function __embind_register_std_wstring(rawType, charSize, name2) {
+          name2 = readLatin1String(name2);
+          var decodeString, encodeString, getHeap, lengthBytesUTF, shift;
+          if (charSize === 2) {
+            decodeString = UTF16ToString;
+            encodeString = stringToUTF16;
+            lengthBytesUTF = lengthBytesUTF16;
+            getHeap = function() {
+              return HEAPU16;
+            };
+            shift = 1;
+          } else if (charSize === 4) {
+            decodeString = UTF32ToString;
+            encodeString = stringToUTF32;
+            lengthBytesUTF = lengthBytesUTF32;
+            getHeap = function() {
+              return HEAPU32;
+            };
+            shift = 2;
+          }
+          registerType(rawType, { name: name2, "fromWireType": function(value) {
+            var length = HEAPU32[value >>> 2];
+            var HEAP = getHeap();
+            var str;
             var decodeStartPtr = value + 4;
             for (var i = 0; i <= length; ++i) {
-              var currentBytePtr = value + 4 + i;
-              if (i == length || HEAPU8[currentBytePtr] == 0) {
-                var maxRead = currentBytePtr - decodeStartPtr;
-                var stringSegment = UTF8ToString(decodeStartPtr, maxRead);
+              var currentBytePtr = value + 4 + i * charSize;
+              if (i == length || HEAP[currentBytePtr >>> shift] == 0) {
+                var maxReadBytes = currentBytePtr - decodeStartPtr;
+                var stringSegment = decodeString(decodeStartPtr, maxReadBytes);
                 if (str === void 0) {
                   str = stringSegment;
                 } else {
                   str += String.fromCharCode(0);
                   str += stringSegment;
                 }
-                decodeStartPtr = currentBytePtr + 1;
+                decodeStartPtr = currentBytePtr + charSize;
               }
             }
-          } else {
-            var a = new Array(length);
-            for (var i = 0; i < length; ++i) {
-              a[i] = String.fromCharCode(HEAPU8[value + 4 + i]);
+            _free(value);
+            return str;
+          }, "toWireType": function(destructors, value) {
+            if (!(typeof value === "string")) {
+              throwBindingError("Cannot pass non-string to C++ string type " + name2);
             }
-            str = a.join("");
-          }
-          _free(value);
-          return str;
-        }, toWireType: function(destructors, value) {
-          if (value instanceof ArrayBuffer) {
-            value = new Uint8Array(value);
-          }
-          var getLength;
-          var valueIsOfTypeString = typeof value === "string";
-          if (!(valueIsOfTypeString || value instanceof Uint8Array || value instanceof Uint8ClampedArray || value instanceof Int8Array)) {
-            throwBindingError("Cannot pass non-string to std::string");
-          }
-          if (stdStringIsUTF8 && valueIsOfTypeString) {
-            getLength = function() {
-              return lengthBytesUTF8(value);
-            };
-          } else {
-            getLength = function() {
-              return value.length;
-            };
-          }
-          var length = getLength();
-          var ptr = _malloc(4 + length + 1);
-          HEAPU32[ptr >> 2] = length;
-          if (stdStringIsUTF8 && valueIsOfTypeString) {
-            stringToUTF8(value, ptr + 4, length + 1);
-          } else {
-            if (valueIsOfTypeString) {
-              for (var i = 0; i < length; ++i) {
-                var charCode = value.charCodeAt(i);
-                if (charCode > 255) {
-                  _free(ptr);
-                  throwBindingError("String has UTF-16 code units that do not fit in 8 bits");
-                }
-                HEAPU8[ptr + 4 + i] = charCode;
-              }
-            } else {
-              for (var i = 0; i < length; ++i) {
-                HEAPU8[ptr + 4 + i] = value[i];
-              }
+            var length = lengthBytesUTF(value);
+            var ptr = _malloc(4 + length + charSize);
+            ptr >>>= 0;
+            HEAPU32[ptr >>> 2] = length >> shift;
+            encodeString(value, ptr + 4, length + charSize);
+            if (destructors !== null) {
+              destructors.push(_free, ptr);
             }
+            return ptr;
+          }, "argPackAdvance": 8, "readValueFromPointer": simpleReadValueFromPointer, destructorFunction: function(ptr) {
+            _free(ptr);
+          } });
+        }
+        function __embind_register_value_array(rawType, name2, constructorSignature, rawConstructor, destructorSignature, rawDestructor) {
+          tupleRegistrations[rawType] = { name: readLatin1String(name2), rawConstructor: embind__requireFunction(constructorSignature, rawConstructor), rawDestructor: embind__requireFunction(destructorSignature, rawDestructor), elements: [] };
+        }
+        function __embind_register_value_array_element(rawTupleType, getterReturnType, getterSignature, getter, getterContext, setterArgumentType, setterSignature, setter, setterContext) {
+          tupleRegistrations[rawTupleType].elements.push({ getterReturnType, getter: embind__requireFunction(getterSignature, getter), getterContext, setterArgumentType, setter: embind__requireFunction(setterSignature, setter), setterContext });
+        }
+        function __embind_register_value_object(rawType, name2, constructorSignature, rawConstructor, destructorSignature, rawDestructor) {
+          structRegistrations[rawType] = { name: readLatin1String(name2), rawConstructor: embind__requireFunction(constructorSignature, rawConstructor), rawDestructor: embind__requireFunction(destructorSignature, rawDestructor), fields: [] };
+        }
+        function __embind_register_value_object_field(structType, fieldName, getterReturnType, getterSignature, getter, getterContext, setterArgumentType, setterSignature, setter, setterContext) {
+          structRegistrations[structType].fields.push({ fieldName: readLatin1String(fieldName), getterReturnType, getter: embind__requireFunction(getterSignature, getter), getterContext, setterArgumentType, setter: embind__requireFunction(setterSignature, setter), setterContext });
+        }
+        function __embind_register_void(rawType, name2) {
+          name2 = readLatin1String(name2);
+          registerType(rawType, { isVoid: true, name: name2, "argPackAdvance": 0, "fromWireType": function() {
+            return void 0;
+          }, "toWireType": function(destructors, o) {
+            return void 0;
+          } });
+        }
+        function requireHandle(handle) {
+          if (!handle) {
+            throwBindingError("Cannot use deleted val. handle = " + handle);
           }
-          if (destructors !== null) {
-            destructors.push(_free, ptr);
+          return emval_handle_array[handle].value;
+        }
+        function __emval_as(handle, returnType, destructorsRef) {
+          handle = requireHandle(handle);
+          returnType = requireRegisteredType(returnType, "emval::as");
+          var destructors = [];
+          var rd = __emval_register(destructors);
+          HEAP32[destructorsRef >>> 2] = rd;
+          return returnType["toWireType"](destructors, handle);
+        }
+        function __emval_lookupTypes(argCount, argTypes) {
+          var a = new Array(argCount);
+          for (var i = 0; i < argCount; ++i) {
+            a[i] = requireRegisteredType(HEAP32[(argTypes >> 2) + i >>> 0], "parameter " + i);
           }
-          return ptr;
-        }, argPackAdvance: 8, readValueFromPointer: simpleReadValueFromPointer, destructorFunction: function(ptr) {
-          _free(ptr);
-        }});
-      }
-      function __embind_register_std_wstring(rawType, charSize, name2) {
-        name2 = readLatin1String(name2);
-        var decodeString, encodeString, getHeap, lengthBytesUTF, shift;
-        if (charSize === 2) {
-          decodeString = UTF16ToString;
-          encodeString = stringToUTF16;
-          lengthBytesUTF = lengthBytesUTF16;
-          getHeap = function() {
-            return HEAPU16;
+          return a;
+        }
+        function __emval_call(handle, argCount, argTypes, argv) {
+          handle = requireHandle(handle);
+          var types = __emval_lookupTypes(argCount, argTypes);
+          var args = new Array(argCount);
+          for (var i = 0; i < argCount; ++i) {
+            var type = types[i];
+            args[i] = type["readValueFromPointer"](argv);
+            argv += type["argPackAdvance"];
+          }
+          var rv = handle.apply(void 0, args);
+          return __emval_register(rv);
+        }
+        var emval_symbols = {};
+        function getStringOrSymbol(address) {
+          var symbol = emval_symbols[address];
+          if (symbol === void 0) {
+            return readLatin1String(address);
+          } else {
+            return symbol;
+          }
+        }
+        function emval_get_global() {
+          if (typeof globalThis === "object") {
+            return globalThis;
+          }
+          return function() {
+            return Function;
+          }()("return this")();
+        }
+        function __emval_get_global(name2) {
+          if (name2 === 0) {
+            return __emval_register(emval_get_global());
+          } else {
+            name2 = getStringOrSymbol(name2);
+            return __emval_register(emval_get_global()[name2]);
+          }
+        }
+        function __emval_get_property(handle, key2) {
+          handle = requireHandle(handle);
+          key2 = requireHandle(key2);
+          return __emval_register(handle[key2]);
+        }
+        function __emval_incref(handle) {
+          if (handle > 4) {
+            emval_handle_array[handle].refcount += 1;
+          }
+        }
+        function __emval_instanceof(object, constructor) {
+          object = requireHandle(object);
+          constructor = requireHandle(constructor);
+          return object instanceof constructor;
+        }
+        function __emval_is_number(handle) {
+          handle = requireHandle(handle);
+          return typeof handle === "number";
+        }
+        function __emval_new_array() {
+          return __emval_register([]);
+        }
+        function __emval_new_cstring(v) {
+          return __emval_register(getStringOrSymbol(v));
+        }
+        function __emval_new_object() {
+          return __emval_register({});
+        }
+        function __emval_run_destructors(handle) {
+          var destructors = emval_handle_array[handle].value;
+          runDestructors(destructors);
+          __emval_decref(handle);
+        }
+        function __emval_set_property(handle, key2, value) {
+          handle = requireHandle(handle);
+          key2 = requireHandle(key2);
+          value = requireHandle(value);
+          handle[key2] = value;
+        }
+        function __emval_take_value(type, argv) {
+          type = requireRegisteredType(type, "_emval_take_value");
+          var v = type["readValueFromPointer"](argv);
+          return __emval_register(v);
+        }
+        function _abort() {
+          abort();
+        }
+        var _emscripten_get_now;
+        if (ENVIRONMENT_IS_NODE) {
+          _emscripten_get_now = function() {
+            var t = process["hrtime"]();
+            return t[0] * 1e3 + t[1] / 1e6;
           };
-          shift = 1;
-        } else if (charSize === 4) {
-          decodeString = UTF32ToString;
-          encodeString = stringToUTF32;
-          lengthBytesUTF = lengthBytesUTF32;
-          getHeap = function() {
-            return HEAPU32;
+        } else if (typeof dateNow !== "undefined") {
+          _emscripten_get_now = dateNow;
+        } else
+          _emscripten_get_now = function() {
+            return performance.now();
           };
-          shift = 2;
+        var _emscripten_get_now_is_monotonic = true;
+        function _clock_gettime(clk_id, tp) {
+          var now;
+          if (clk_id === 0) {
+            now = Date.now();
+          } else if ((clk_id === 1 || clk_id === 4) && _emscripten_get_now_is_monotonic) {
+            now = _emscripten_get_now();
+          } else {
+            setErrNo(28);
+            return -1;
+          }
+          HEAP32[tp >>> 2] = now / 1e3 | 0;
+          HEAP32[tp + 4 >>> 2] = now % 1e3 * 1e3 * 1e3 | 0;
+          return 0;
         }
-        registerType(rawType, {name: name2, fromWireType: function(value) {
-          var length = HEAPU32[value >> 2];
-          var HEAP = getHeap();
-          var str;
-          var decodeStartPtr = value + 4;
-          for (var i = 0; i <= length; ++i) {
-            var currentBytePtr = value + 4 + i * charSize;
-            if (i == length || HEAP[currentBytePtr >> shift] == 0) {
-              var maxReadBytes = currentBytePtr - decodeStartPtr;
-              var stringSegment = decodeString(decodeStartPtr, maxReadBytes);
-              if (str === void 0) {
-                str = stringSegment;
-              } else {
-                str += String.fromCharCode(0);
-                str += stringSegment;
-              }
-              decodeStartPtr = currentBytePtr + charSize;
+        function _emscripten_memcpy_big(dest, src, num) {
+          HEAPU8.copyWithin(dest >>> 0, src >>> 0, src + num >>> 0);
+        }
+        function _emscripten_get_heap_size() {
+          return HEAPU8.length;
+        }
+        function emscripten_realloc_buffer(size) {
+          try {
+            wasmMemory.grow(size - buffer.byteLength + 65535 >>> 16);
+            updateGlobalBufferAndViews(wasmMemory.buffer);
+            return 1;
+          } catch (e) {
+          }
+        }
+        function _emscripten_resize_heap(requestedSize) {
+          requestedSize = requestedSize >>> 0;
+          var oldSize = _emscripten_get_heap_size();
+          var maxHeapSize = 4294967296;
+          if (requestedSize > maxHeapSize) {
+            return false;
+          }
+          var minHeapSize = 16777216;
+          for (var cutDown = 1; cutDown <= 4; cutDown *= 2) {
+            var overGrownHeapSize = oldSize * (1 + 0.2 / cutDown);
+            overGrownHeapSize = Math.min(overGrownHeapSize, requestedSize + 100663296);
+            var newSize = Math.min(maxHeapSize, alignUp(Math.max(minHeapSize, requestedSize, overGrownHeapSize), 65536));
+            var replacement = emscripten_realloc_buffer(newSize);
+            if (replacement) {
+              return true;
             }
           }
-          _free(value);
-          return str;
-        }, toWireType: function(destructors, value) {
-          if (!(typeof value === "string")) {
-            throwBindingError("Cannot pass non-string to C++ string type " + name2);
-          }
-          var length = lengthBytesUTF(value);
-          var ptr = _malloc(4 + length + charSize);
-          HEAPU32[ptr >> 2] = length >> shift;
-          encodeString(value, ptr + 4, length + charSize);
-          if (destructors !== null) {
-            destructors.push(_free, ptr);
-          }
-          return ptr;
-        }, argPackAdvance: 8, readValueFromPointer: simpleReadValueFromPointer, destructorFunction: function(ptr) {
-          _free(ptr);
-        }});
-      }
-      function __embind_register_value_array(rawType, name2, constructorSignature, rawConstructor, destructorSignature, rawDestructor) {
-        tupleRegistrations[rawType] = {name: readLatin1String(name2), rawConstructor: embind__requireFunction(constructorSignature, rawConstructor), rawDestructor: embind__requireFunction(destructorSignature, rawDestructor), elements: []};
-      }
-      function __embind_register_value_array_element(rawTupleType, getterReturnType, getterSignature, getter, getterContext, setterArgumentType, setterSignature, setter, setterContext) {
-        tupleRegistrations[rawTupleType].elements.push({getterReturnType, getter: embind__requireFunction(getterSignature, getter), getterContext, setterArgumentType, setter: embind__requireFunction(setterSignature, setter), setterContext});
-      }
-      function __embind_register_value_object(rawType, name2, constructorSignature, rawConstructor, destructorSignature, rawDestructor) {
-        structRegistrations[rawType] = {name: readLatin1String(name2), rawConstructor: embind__requireFunction(constructorSignature, rawConstructor), rawDestructor: embind__requireFunction(destructorSignature, rawDestructor), fields: []};
-      }
-      function __embind_register_value_object_field(structType, fieldName, getterReturnType, getterSignature, getter, getterContext, setterArgumentType, setterSignature, setter, setterContext) {
-        structRegistrations[structType].fields.push({fieldName: readLatin1String(fieldName), getterReturnType, getter: embind__requireFunction(getterSignature, getter), getterContext, setterArgumentType, setter: embind__requireFunction(setterSignature, setter), setterContext});
-      }
-      function __embind_register_void(rawType, name2) {
-        name2 = readLatin1String(name2);
-        registerType(rawType, {isVoid: true, name: name2, argPackAdvance: 0, fromWireType: function() {
-          return void 0;
-        }, toWireType: function(destructors, o) {
-          return void 0;
-        }});
-      }
-      function requireHandle(handle) {
-        if (!handle) {
-          throwBindingError("Cannot use deleted val. handle = " + handle);
-        }
-        return emval_handle_array[handle].value;
-      }
-      function requireRegisteredType(rawType, humanName) {
-        var impl = registeredTypes[rawType];
-        if (impl === void 0) {
-          throwBindingError(humanName + " has unknown type " + getTypeName(rawType));
-        }
-        return impl;
-      }
-      function __emval_as(handle, returnType, destructorsRef) {
-        handle = requireHandle(handle);
-        returnType = requireRegisteredType(returnType, "emval::as");
-        var destructors = [];
-        var rd = __emval_register(destructors);
-        HEAP32[destructorsRef >> 2] = rd;
-        return returnType["toWireType"](destructors, handle);
-      }
-      var emval_symbols = {};
-      function getStringOrSymbol(address) {
-        var symbol = emval_symbols[address];
-        if (symbol === void 0) {
-          return readLatin1String(address);
-        } else {
-          return symbol;
-        }
-      }
-      function emval_get_global() {
-        if (typeof globalThis === "object") {
-          return globalThis;
-        }
-        return function() {
-          return Function;
-        }()("return this")();
-      }
-      function __emval_get_global(name2) {
-        if (name2 === 0) {
-          return __emval_register(emval_get_global());
-        } else {
-          name2 = getStringOrSymbol(name2);
-          return __emval_register(emval_get_global()[name2]);
-        }
-      }
-      function __emval_get_property(handle, key2) {
-        handle = requireHandle(handle);
-        key2 = requireHandle(key2);
-        return __emval_register(handle[key2]);
-      }
-      function __emval_incref(handle) {
-        if (handle > 4) {
-          emval_handle_array[handle].refcount += 1;
-        }
-      }
-      function __emval_instanceof(object, constructor) {
-        object = requireHandle(object);
-        constructor = requireHandle(constructor);
-        return object instanceof constructor;
-      }
-      function __emval_is_number(handle) {
-        handle = requireHandle(handle);
-        return typeof handle === "number";
-      }
-      function __emval_new_array() {
-        return __emval_register([]);
-      }
-      function __emval_new_cstring(v) {
-        return __emval_register(getStringOrSymbol(v));
-      }
-      function __emval_new_object() {
-        return __emval_register({});
-      }
-      function __emval_run_destructors(handle) {
-        var destructors = emval_handle_array[handle].value;
-        runDestructors(destructors);
-        __emval_decref(handle);
-      }
-      function __emval_set_property(handle, key2, value) {
-        handle = requireHandle(handle);
-        key2 = requireHandle(key2);
-        value = requireHandle(value);
-        handle[key2] = value;
-      }
-      function __emval_take_value(type, argv) {
-        type = requireRegisteredType(type, "_emval_take_value");
-        var v = type["readValueFromPointer"](argv);
-        return __emval_register(v);
-      }
-      function _abort() {
-        abort();
-      }
-      var _emscripten_get_now;
-      if (ENVIRONMENT_IS_NODE) {
-        _emscripten_get_now = function() {
-          var t = process["hrtime"]();
-          return t[0] * 1e3 + t[1] / 1e6;
-        };
-      } else if (typeof dateNow !== "undefined") {
-        _emscripten_get_now = dateNow;
-      } else
-        _emscripten_get_now = function() {
-          return performance.now();
-        };
-      var _emscripten_get_now_is_monotonic = true;
-      function _clock_gettime(clk_id, tp) {
-        var now;
-        if (clk_id === 0) {
-          now = Date.now();
-        } else if ((clk_id === 1 || clk_id === 4) && _emscripten_get_now_is_monotonic) {
-          now = _emscripten_get_now();
-        } else {
-          setErrNo(28);
-          return -1;
-        }
-        HEAP32[tp >> 2] = now / 1e3 | 0;
-        HEAP32[tp + 4 >> 2] = now % 1e3 * 1e3 * 1e3 | 0;
-        return 0;
-      }
-      function _emscripten_memcpy_big(dest, src, num) {
-        HEAPU8.copyWithin(dest, src, src + num);
-      }
-      function _emscripten_get_heap_size() {
-        return HEAPU8.length;
-      }
-      function emscripten_realloc_buffer(size) {
-        try {
-          wasmMemory.grow(size - buffer.byteLength + 65535 >>> 16);
-          updateGlobalBufferAndViews(wasmMemory.buffer);
-          return 1;
-        } catch (e) {
-        }
-      }
-      function _emscripten_resize_heap(requestedSize) {
-        requestedSize = requestedSize >>> 0;
-        var oldSize = _emscripten_get_heap_size();
-        var maxHeapSize = 2147483648;
-        if (requestedSize > maxHeapSize) {
           return false;
         }
-        var minHeapSize = 16777216;
-        for (var cutDown = 1; cutDown <= 4; cutDown *= 2) {
-          var overGrownHeapSize = oldSize * (1 + 0.2 / cutDown);
-          overGrownHeapSize = Math.min(overGrownHeapSize, requestedSize + 100663296);
-          var newSize = Math.min(maxHeapSize, alignUp(Math.max(minHeapSize, requestedSize, overGrownHeapSize), 65536));
-          var replacement = emscripten_realloc_buffer(newSize);
-          if (replacement) {
-            return true;
+        var ENV = {};
+        function getExecutableName() {
+          return thisProgram || "./this.program";
+        }
+        function getEnvStrings() {
+          if (!getEnvStrings.strings) {
+            var lang = (typeof navigator === "object" && navigator.languages && navigator.languages[0] || "C").replace("-", "_") + ".UTF-8";
+            var env = { "USER": "web_user", "LOGNAME": "web_user", "PATH": "/", "PWD": "/", "HOME": "/home/web_user", "LANG": lang, "_": getExecutableName() };
+            for (var x in ENV) {
+              env[x] = ENV[x];
+            }
+            var strings = [];
+            for (var x in env) {
+              strings.push(x + "=" + env[x]);
+            }
+            getEnvStrings.strings = strings;
+          }
+          return getEnvStrings.strings;
+        }
+        function _environ_get(__environ, environ_buf) {
+          try {
+            var bufSize = 0;
+            getEnvStrings().forEach(function(string, i) {
+              var ptr = environ_buf + bufSize;
+              HEAP32[__environ + i * 4 >>> 2] = ptr;
+              writeAsciiToMemory(string, ptr);
+              bufSize += string.length + 1;
+            });
+            return 0;
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return e.errno;
           }
         }
-        return false;
-      }
-      var ENV = {};
-      function getExecutableName() {
-        return thisProgram || "./this.program";
-      }
-      function getEnvStrings() {
-        if (!getEnvStrings.strings) {
-          var lang = (typeof navigator === "object" && navigator.languages && navigator.languages[0] || "C").replace("-", "_") + ".UTF-8";
-          var env = {USER: "web_user", LOGNAME: "web_user", PATH: "/", PWD: "/", HOME: "/home/web_user", LANG: lang, _: getExecutableName()};
-          for (var x in ENV) {
-            env[x] = ENV[x];
+        function _environ_sizes_get(penviron_count, penviron_buf_size) {
+          try {
+            var strings = getEnvStrings();
+            HEAP32[penviron_count >>> 2] = strings.length;
+            var bufSize = 0;
+            strings.forEach(function(string) {
+              bufSize += string.length + 1;
+            });
+            HEAP32[penviron_buf_size >>> 2] = bufSize;
+            return 0;
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return e.errno;
           }
-          var strings = [];
-          for (var x in env) {
-            strings.push(x + "=" + env[x]);
+        }
+        function _fd_close(fd) {
+          try {
+            var stream = SYSCALLS.getStreamFromFD(fd);
+            FS.close(stream);
+            return 0;
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return e.errno;
           }
-          getEnvStrings.strings = strings;
         }
-        return getEnvStrings.strings;
-      }
-      function _environ_get(__environ, environ_buf) {
-        try {
-          var bufSize = 0;
-          getEnvStrings().forEach(function(string, i) {
-            var ptr = environ_buf + bufSize;
-            HEAP32[__environ + i * 4 >> 2] = ptr;
-            writeAsciiToMemory(string, ptr);
-            bufSize += string.length + 1;
-          });
-          return 0;
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return e.errno;
-        }
-      }
-      function _environ_sizes_get(penviron_count, penviron_buf_size) {
-        try {
-          var strings = getEnvStrings();
-          HEAP32[penviron_count >> 2] = strings.length;
-          var bufSize = 0;
-          strings.forEach(function(string) {
-            bufSize += string.length + 1;
-          });
-          HEAP32[penviron_buf_size >> 2] = bufSize;
-          return 0;
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return e.errno;
-        }
-      }
-      function _fd_close(fd) {
-        try {
-          var stream = SYSCALLS.getStreamFromFD(fd);
-          FS.close(stream);
-          return 0;
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return e.errno;
-        }
-      }
-      function _fd_read(fd, iov, iovcnt, pnum) {
-        try {
-          var stream = SYSCALLS.getStreamFromFD(fd);
-          var num = SYSCALLS.doReadv(stream, iov, iovcnt);
-          HEAP32[pnum >> 2] = num;
-          return 0;
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return e.errno;
-        }
-      }
-      function _fd_seek(fd, offset_low, offset_high, whence, newOffset) {
-        try {
-          var stream = SYSCALLS.getStreamFromFD(fd);
-          var HIGH_OFFSET = 4294967296;
-          var offset = offset_high * HIGH_OFFSET + (offset_low >>> 0);
-          var DOUBLE_LIMIT = 9007199254740992;
-          if (offset <= -DOUBLE_LIMIT || offset >= DOUBLE_LIMIT) {
-            return -61;
+        function _fd_read(fd, iov, iovcnt, pnum) {
+          try {
+            var stream = SYSCALLS.getStreamFromFD(fd);
+            var num = SYSCALLS.doReadv(stream, iov, iovcnt);
+            HEAP32[pnum >>> 2] = num;
+            return 0;
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return e.errno;
           }
-          FS.llseek(stream, offset, whence);
-          tempI64 = [stream.position >>> 0, (tempDouble = stream.position, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[newOffset >> 2] = tempI64[0], HEAP32[newOffset + 4 >> 2] = tempI64[1];
-          if (stream.getdents && offset === 0 && whence === 0)
-            stream.getdents = null;
-          return 0;
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return e.errno;
         }
-      }
-      function _fd_write(fd, iov, iovcnt, pnum) {
-        try {
-          var stream = SYSCALLS.getStreamFromFD(fd);
-          var num = SYSCALLS.doWritev(stream, iov, iovcnt);
-          HEAP32[pnum >> 2] = num;
-          return 0;
-        } catch (e) {
-          if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
-            abort(e);
-          return e.errno;
+        function _fd_seek(fd, offset_low, offset_high, whence, newOffset) {
+          try {
+            var stream = SYSCALLS.getStreamFromFD(fd);
+            var HIGH_OFFSET = 4294967296;
+            var offset = offset_high * HIGH_OFFSET + (offset_low >>> 0);
+            var DOUBLE_LIMIT = 9007199254740992;
+            if (offset <= -DOUBLE_LIMIT || offset >= DOUBLE_LIMIT) {
+              return -61;
+            }
+            FS.llseek(stream, offset, whence);
+            tempI64 = [stream.position >>> 0, (tempDouble = stream.position, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0)], HEAP32[newOffset >>> 2] = tempI64[0], HEAP32[newOffset + 4 >>> 2] = tempI64[1];
+            if (stream.getdents && offset === 0 && whence === 0)
+              stream.getdents = null;
+            return 0;
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return e.errno;
+          }
         }
-      }
-      function _setTempRet0($i) {
-      }
-      function __isLeapYear(year) {
-        return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-      }
-      function __arraySum(array, index) {
-        var sum = 0;
-        for (var i = 0; i <= index; sum += array[i++]) {
+        function _fd_write(fd, iov, iovcnt, pnum) {
+          try {
+            var stream = SYSCALLS.getStreamFromFD(fd);
+            var num = SYSCALLS.doWritev(stream, iov, iovcnt);
+            HEAP32[pnum >>> 2] = num;
+            return 0;
+          } catch (e) {
+            if (typeof FS === "undefined" || !(e instanceof FS.ErrnoError))
+              abort(e);
+            return e.errno;
+          }
         }
-        return sum;
-      }
-      var __MONTH_DAYS_LEAP = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-      var __MONTH_DAYS_REGULAR = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-      function __addDays(date, days) {
-        var newDate = new Date(date.getTime());
-        while (days > 0) {
-          var leap = __isLeapYear(newDate.getFullYear());
-          var currentMonth = newDate.getMonth();
-          var daysInCurrentMonth = (leap ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR)[currentMonth];
-          if (days > daysInCurrentMonth - newDate.getDate()) {
-            days -= daysInCurrentMonth - newDate.getDate() + 1;
-            newDate.setDate(1);
-            if (currentMonth < 11) {
-              newDate.setMonth(currentMonth + 1);
+        function _setTempRet0($i) {
+        }
+        function __isLeapYear(year) {
+          return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+        }
+        function __arraySum(array, index) {
+          var sum = 0;
+          for (var i = 0; i <= index; sum += array[i++]) {
+          }
+          return sum;
+        }
+        var __MONTH_DAYS_LEAP = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        var __MONTH_DAYS_REGULAR = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        function __addDays(date, days) {
+          var newDate = new Date(date.getTime());
+          while (days > 0) {
+            var leap = __isLeapYear(newDate.getFullYear());
+            var currentMonth = newDate.getMonth();
+            var daysInCurrentMonth = (leap ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR)[currentMonth];
+            if (days > daysInCurrentMonth - newDate.getDate()) {
+              days -= daysInCurrentMonth - newDate.getDate() + 1;
+              newDate.setDate(1);
+              if (currentMonth < 11) {
+                newDate.setMonth(currentMonth + 1);
+              } else {
+                newDate.setMonth(0);
+                newDate.setFullYear(newDate.getFullYear() + 1);
+              }
             } else {
-              newDate.setMonth(0);
-              newDate.setFullYear(newDate.getFullYear() + 1);
-            }
-          } else {
-            newDate.setDate(newDate.getDate() + days);
-            return newDate;
-          }
-        }
-        return newDate;
-      }
-      function _strftime(s, maxsize, format, tm) {
-        var tm_zone = HEAP32[tm + 40 >> 2];
-        var date = {tm_sec: HEAP32[tm >> 2], tm_min: HEAP32[tm + 4 >> 2], tm_hour: HEAP32[tm + 8 >> 2], tm_mday: HEAP32[tm + 12 >> 2], tm_mon: HEAP32[tm + 16 >> 2], tm_year: HEAP32[tm + 20 >> 2], tm_wday: HEAP32[tm + 24 >> 2], tm_yday: HEAP32[tm + 28 >> 2], tm_isdst: HEAP32[tm + 32 >> 2], tm_gmtoff: HEAP32[tm + 36 >> 2], tm_zone: tm_zone ? UTF8ToString(tm_zone) : ""};
-        var pattern = UTF8ToString(format);
-        var EXPANSION_RULES_1 = {"%c": "%a %b %d %H:%M:%S %Y", "%D": "%m/%d/%y", "%F": "%Y-%m-%d", "%h": "%b", "%r": "%I:%M:%S %p", "%R": "%H:%M", "%T": "%H:%M:%S", "%x": "%m/%d/%y", "%X": "%H:%M:%S", "%Ec": "%c", "%EC": "%C", "%Ex": "%m/%d/%y", "%EX": "%H:%M:%S", "%Ey": "%y", "%EY": "%Y", "%Od": "%d", "%Oe": "%e", "%OH": "%H", "%OI": "%I", "%Om": "%m", "%OM": "%M", "%OS": "%S", "%Ou": "%u", "%OU": "%U", "%OV": "%V", "%Ow": "%w", "%OW": "%W", "%Oy": "%y"};
-        for (var rule in EXPANSION_RULES_1) {
-          pattern = pattern.replace(new RegExp(rule, "g"), EXPANSION_RULES_1[rule]);
-        }
-        var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-        function leadingSomething(value, digits, character) {
-          var str = typeof value === "number" ? value.toString() : value || "";
-          while (str.length < digits) {
-            str = character[0] + str;
-          }
-          return str;
-        }
-        function leadingNulls(value, digits) {
-          return leadingSomething(value, digits, "0");
-        }
-        function compareByDay(date1, date2) {
-          function sgn(value) {
-            return value < 0 ? -1 : value > 0 ? 1 : 0;
-          }
-          var compare;
-          if ((compare = sgn(date1.getFullYear() - date2.getFullYear())) === 0) {
-            if ((compare = sgn(date1.getMonth() - date2.getMonth())) === 0) {
-              compare = sgn(date1.getDate() - date2.getDate());
+              newDate.setDate(newDate.getDate() + days);
+              return newDate;
             }
           }
-          return compare;
+          return newDate;
         }
-        function getFirstWeekStartDate(janFourth) {
-          switch (janFourth.getDay()) {
-            case 0:
-              return new Date(janFourth.getFullYear() - 1, 11, 29);
-            case 1:
-              return janFourth;
-            case 2:
-              return new Date(janFourth.getFullYear(), 0, 3);
-            case 3:
-              return new Date(janFourth.getFullYear(), 0, 2);
-            case 4:
-              return new Date(janFourth.getFullYear(), 0, 1);
-            case 5:
-              return new Date(janFourth.getFullYear() - 1, 11, 31);
-            case 6:
-              return new Date(janFourth.getFullYear() - 1, 11, 30);
+        function _strftime(s, maxsize, format, tm) {
+          var tm_zone = HEAP32[tm + 40 >>> 2];
+          var date = { tm_sec: HEAP32[tm >>> 2], tm_min: HEAP32[tm + 4 >>> 2], tm_hour: HEAP32[tm + 8 >>> 2], tm_mday: HEAP32[tm + 12 >>> 2], tm_mon: HEAP32[tm + 16 >>> 2], tm_year: HEAP32[tm + 20 >>> 2], tm_wday: HEAP32[tm + 24 >>> 2], tm_yday: HEAP32[tm + 28 >>> 2], tm_isdst: HEAP32[tm + 32 >>> 2], tm_gmtoff: HEAP32[tm + 36 >>> 2], tm_zone: tm_zone ? UTF8ToString(tm_zone) : "" };
+          var pattern = UTF8ToString(format);
+          var EXPANSION_RULES_1 = { "%c": "%a %b %d %H:%M:%S %Y", "%D": "%m/%d/%y", "%F": "%Y-%m-%d", "%h": "%b", "%r": "%I:%M:%S %p", "%R": "%H:%M", "%T": "%H:%M:%S", "%x": "%m/%d/%y", "%X": "%H:%M:%S", "%Ec": "%c", "%EC": "%C", "%Ex": "%m/%d/%y", "%EX": "%H:%M:%S", "%Ey": "%y", "%EY": "%Y", "%Od": "%d", "%Oe": "%e", "%OH": "%H", "%OI": "%I", "%Om": "%m", "%OM": "%M", "%OS": "%S", "%Ou": "%u", "%OU": "%U", "%OV": "%V", "%Ow": "%w", "%OW": "%W", "%Oy": "%y" };
+          for (var rule in EXPANSION_RULES_1) {
+            pattern = pattern.replace(new RegExp(rule, "g"), EXPANSION_RULES_1[rule]);
           }
-        }
-        function getWeekBasedYear(date2) {
-          var thisDate = __addDays(new Date(date2.tm_year + 1900, 0, 1), date2.tm_yday);
-          var janFourthThisYear = new Date(thisDate.getFullYear(), 0, 4);
-          var janFourthNextYear = new Date(thisDate.getFullYear() + 1, 0, 4);
-          var firstWeekStartThisYear = getFirstWeekStartDate(janFourthThisYear);
-          var firstWeekStartNextYear = getFirstWeekStartDate(janFourthNextYear);
-          if (compareByDay(firstWeekStartThisYear, thisDate) <= 0) {
-            if (compareByDay(firstWeekStartNextYear, thisDate) <= 0) {
-              return thisDate.getFullYear() + 1;
+          var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+          var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+          function leadingSomething(value, digits, character) {
+            var str = typeof value === "number" ? value.toString() : value || "";
+            while (str.length < digits) {
+              str = character[0] + str;
+            }
+            return str;
+          }
+          function leadingNulls(value, digits) {
+            return leadingSomething(value, digits, "0");
+          }
+          function compareByDay(date1, date2) {
+            function sgn(value) {
+              return value < 0 ? -1 : value > 0 ? 1 : 0;
+            }
+            var compare;
+            if ((compare = sgn(date1.getFullYear() - date2.getFullYear())) === 0) {
+              if ((compare = sgn(date1.getMonth() - date2.getMonth())) === 0) {
+                compare = sgn(date1.getDate() - date2.getDate());
+              }
+            }
+            return compare;
+          }
+          function getFirstWeekStartDate(janFourth) {
+            switch (janFourth.getDay()) {
+              case 0:
+                return new Date(janFourth.getFullYear() - 1, 11, 29);
+              case 1:
+                return janFourth;
+              case 2:
+                return new Date(janFourth.getFullYear(), 0, 3);
+              case 3:
+                return new Date(janFourth.getFullYear(), 0, 2);
+              case 4:
+                return new Date(janFourth.getFullYear(), 0, 1);
+              case 5:
+                return new Date(janFourth.getFullYear() - 1, 11, 31);
+              case 6:
+                return new Date(janFourth.getFullYear() - 1, 11, 30);
+            }
+          }
+          function getWeekBasedYear(date2) {
+            var thisDate = __addDays(new Date(date2.tm_year + 1900, 0, 1), date2.tm_yday);
+            var janFourthThisYear = new Date(thisDate.getFullYear(), 0, 4);
+            var janFourthNextYear = new Date(thisDate.getFullYear() + 1, 0, 4);
+            var firstWeekStartThisYear = getFirstWeekStartDate(janFourthThisYear);
+            var firstWeekStartNextYear = getFirstWeekStartDate(janFourthNextYear);
+            if (compareByDay(firstWeekStartThisYear, thisDate) <= 0) {
+              if (compareByDay(firstWeekStartNextYear, thisDate) <= 0) {
+                return thisDate.getFullYear() + 1;
+              } else {
+                return thisDate.getFullYear();
+              }
             } else {
-              return thisDate.getFullYear();
+              return thisDate.getFullYear() - 1;
             }
-          } else {
-            return thisDate.getFullYear() - 1;
           }
-        }
-        var EXPANSION_RULES_2 = {"%a": function(date2) {
-          return WEEKDAYS[date2.tm_wday].substring(0, 3);
-        }, "%A": function(date2) {
-          return WEEKDAYS[date2.tm_wday];
-        }, "%b": function(date2) {
-          return MONTHS[date2.tm_mon].substring(0, 3);
-        }, "%B": function(date2) {
-          return MONTHS[date2.tm_mon];
-        }, "%C": function(date2) {
-          var year = date2.tm_year + 1900;
-          return leadingNulls(year / 100 | 0, 2);
-        }, "%d": function(date2) {
-          return leadingNulls(date2.tm_mday, 2);
-        }, "%e": function(date2) {
-          return leadingSomething(date2.tm_mday, 2, " ");
-        }, "%g": function(date2) {
-          return getWeekBasedYear(date2).toString().substring(2);
-        }, "%G": function(date2) {
-          return getWeekBasedYear(date2);
-        }, "%H": function(date2) {
-          return leadingNulls(date2.tm_hour, 2);
-        }, "%I": function(date2) {
-          var twelveHour = date2.tm_hour;
-          if (twelveHour == 0)
-            twelveHour = 12;
-          else if (twelveHour > 12)
-            twelveHour -= 12;
-          return leadingNulls(twelveHour, 2);
-        }, "%j": function(date2) {
-          return leadingNulls(date2.tm_mday + __arraySum(__isLeapYear(date2.tm_year + 1900) ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR, date2.tm_mon - 1), 3);
-        }, "%m": function(date2) {
-          return leadingNulls(date2.tm_mon + 1, 2);
-        }, "%M": function(date2) {
-          return leadingNulls(date2.tm_min, 2);
-        }, "%n": function() {
-          return "\n";
-        }, "%p": function(date2) {
-          if (date2.tm_hour >= 0 && date2.tm_hour < 12) {
-            return "AM";
-          } else {
-            return "PM";
-          }
-        }, "%S": function(date2) {
-          return leadingNulls(date2.tm_sec, 2);
-        }, "%t": function() {
-          return "	";
-        }, "%u": function(date2) {
-          return date2.tm_wday || 7;
-        }, "%U": function(date2) {
-          var janFirst = new Date(date2.tm_year + 1900, 0, 1);
-          var firstSunday = janFirst.getDay() === 0 ? janFirst : __addDays(janFirst, 7 - janFirst.getDay());
-          var endDate = new Date(date2.tm_year + 1900, date2.tm_mon, date2.tm_mday);
-          if (compareByDay(firstSunday, endDate) < 0) {
-            var februaryFirstUntilEndMonth = __arraySum(__isLeapYear(endDate.getFullYear()) ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR, endDate.getMonth() - 1) - 31;
-            var firstSundayUntilEndJanuary = 31 - firstSunday.getDate();
-            var days = firstSundayUntilEndJanuary + februaryFirstUntilEndMonth + endDate.getDate();
-            return leadingNulls(Math.ceil(days / 7), 2);
-          }
-          return compareByDay(firstSunday, janFirst) === 0 ? "01" : "00";
-        }, "%V": function(date2) {
-          var janFourthThisYear = new Date(date2.tm_year + 1900, 0, 4);
-          var janFourthNextYear = new Date(date2.tm_year + 1901, 0, 4);
-          var firstWeekStartThisYear = getFirstWeekStartDate(janFourthThisYear);
-          var firstWeekStartNextYear = getFirstWeekStartDate(janFourthNextYear);
-          var endDate = __addDays(new Date(date2.tm_year + 1900, 0, 1), date2.tm_yday);
-          if (compareByDay(endDate, firstWeekStartThisYear) < 0) {
-            return "53";
-          }
-          if (compareByDay(firstWeekStartNextYear, endDate) <= 0) {
-            return "01";
-          }
-          var daysDifference;
-          if (firstWeekStartThisYear.getFullYear() < date2.tm_year + 1900) {
-            daysDifference = date2.tm_yday + 32 - firstWeekStartThisYear.getDate();
-          } else {
-            daysDifference = date2.tm_yday + 1 - firstWeekStartThisYear.getDate();
-          }
-          return leadingNulls(Math.ceil(daysDifference / 7), 2);
-        }, "%w": function(date2) {
-          return date2.tm_wday;
-        }, "%W": function(date2) {
-          var janFirst = new Date(date2.tm_year, 0, 1);
-          var firstMonday = janFirst.getDay() === 1 ? janFirst : __addDays(janFirst, janFirst.getDay() === 0 ? 1 : 7 - janFirst.getDay() + 1);
-          var endDate = new Date(date2.tm_year + 1900, date2.tm_mon, date2.tm_mday);
-          if (compareByDay(firstMonday, endDate) < 0) {
-            var februaryFirstUntilEndMonth = __arraySum(__isLeapYear(endDate.getFullYear()) ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR, endDate.getMonth() - 1) - 31;
-            var firstMondayUntilEndJanuary = 31 - firstMonday.getDate();
-            var days = firstMondayUntilEndJanuary + februaryFirstUntilEndMonth + endDate.getDate();
-            return leadingNulls(Math.ceil(days / 7), 2);
-          }
-          return compareByDay(firstMonday, janFirst) === 0 ? "01" : "00";
-        }, "%y": function(date2) {
-          return (date2.tm_year + 1900).toString().substring(2);
-        }, "%Y": function(date2) {
-          return date2.tm_year + 1900;
-        }, "%z": function(date2) {
-          var off = date2.tm_gmtoff;
-          var ahead = off >= 0;
-          off = Math.abs(off) / 60;
-          off = off / 60 * 100 + off % 60;
-          return (ahead ? "+" : "-") + String("0000" + off).slice(-4);
-        }, "%Z": function(date2) {
-          return date2.tm_zone;
-        }, "%%": function() {
-          return "%";
-        }};
-        for (var rule in EXPANSION_RULES_2) {
-          if (pattern.indexOf(rule) >= 0) {
-            pattern = pattern.replace(new RegExp(rule, "g"), EXPANSION_RULES_2[rule](date));
-          }
-        }
-        var bytes = intArrayFromString(pattern, false);
-        if (bytes.length > maxsize) {
-          return 0;
-        }
-        writeArrayToMemory(bytes, s);
-        return bytes.length - 1;
-      }
-      function _strftime_l(s, maxsize, format, tm) {
-        return _strftime(s, maxsize, format, tm);
-      }
-      var FSNode = function(parent, name2, mode, rdev) {
-        if (!parent) {
-          parent = this;
-        }
-        this.parent = parent;
-        this.mount = parent.mount;
-        this.mounted = null;
-        this.id = FS.nextInode++;
-        this.name = name2;
-        this.mode = mode;
-        this.node_ops = {};
-        this.stream_ops = {};
-        this.rdev = rdev;
-      };
-      var readMode = 292 | 73;
-      var writeMode = 146;
-      Object.defineProperties(FSNode.prototype, {read: {get: function() {
-        return (this.mode & readMode) === readMode;
-      }, set: function(val) {
-        val ? this.mode |= readMode : this.mode &= ~readMode;
-      }}, write: {get: function() {
-        return (this.mode & writeMode) === writeMode;
-      }, set: function(val) {
-        val ? this.mode |= writeMode : this.mode &= ~writeMode;
-      }}, isFolder: {get: function() {
-        return FS.isDir(this.mode);
-      }}, isDevice: {get: function() {
-        return FS.isChrdev(this.mode);
-      }}});
-      FS.FSNode = FSNode;
-      FS.staticInit();
-      Module["FS_createPath"] = FS.createPath;
-      Module["FS_createDataFile"] = FS.createDataFile;
-      Module["FS_createPreloadedFile"] = FS.createPreloadedFile;
-      Module["FS_createLazyFile"] = FS.createLazyFile;
-      Module["FS_createDevice"] = FS.createDevice;
-      Module["FS_unlink"] = FS.unlink;
-      InternalError = Module["InternalError"] = extendError(Error, "InternalError");
-      embind_init_charCodes();
-      BindingError = Module["BindingError"] = extendError(Error, "BindingError");
-      init_ClassHandle();
-      init_RegisteredPointer();
-      init_embind();
-      UnboundTypeError = Module["UnboundTypeError"] = extendError(Error, "UnboundTypeError");
-      init_emval();
-      function intArrayFromString(stringy, dontAddNull, length) {
-        var len = length > 0 ? length : lengthBytesUTF8(stringy) + 1;
-        var u8array = new Array(len);
-        var numBytesWritten = stringToUTF8Array(stringy, u8array, 0, u8array.length);
-        if (dontAddNull)
-          u8array.length = numBytesWritten;
-        return u8array;
-      }
-      __ATINIT__.push({func: function() {
-        ___wasm_call_ctors();
-      }});
-      var asmLibraryArg = {x: ___assert_fail, A: ___sys_fcntl64, O: ___sys_ioctl, P: ___sys_open, U: __embind_finalize_value_array, s: __embind_finalize_value_object, S: __embind_register_bool, v: __embind_register_class, u: __embind_register_class_constructor, d: __embind_register_class_function, R: __embind_register_emval, C: __embind_register_float, i: __embind_register_function, m: __embind_register_integer, j: __embind_register_memory_view, D: __embind_register_std_string, w: __embind_register_std_wstring, V: __embind_register_value_array, g: __embind_register_value_array_element, t: __embind_register_value_object, k: __embind_register_value_object_field, T: __embind_register_void, q: __emval_as, b: __emval_decref, L: __emval_get_global, n: __emval_get_property, l: __emval_incref, Q: __emval_instanceof, E: __emval_is_number, y: __emval_new_array, f: __emval_new_cstring, r: __emval_new_object, p: __emval_run_destructors, h: __emval_set_property, e: __emval_take_value, c: _abort, M: _clock_gettime, H: _emscripten_memcpy_big, o: _emscripten_resize_heap, J: _environ_get, K: _environ_sizes_get, B: _fd_close, N: _fd_read, F: _fd_seek, z: _fd_write, a: wasmMemory, G: _setTempRet0, I: _strftime_l};
-      createWasm();
-      var ___wasm_call_ctors = Module["___wasm_call_ctors"] = function() {
-        return (___wasm_call_ctors = Module["___wasm_call_ctors"] = Module["asm"]["X"]).apply(null, arguments);
-      };
-      Module["_main"] = function() {
-        return (Module["_main"] = Module["asm"]["Y"]).apply(null, arguments);
-      };
-      var _malloc = Module["_malloc"] = function() {
-        return (_malloc = Module["_malloc"] = Module["asm"]["Z"]).apply(null, arguments);
-      };
-      var ___getTypeName = Module["___getTypeName"] = function() {
-        return (___getTypeName = Module["___getTypeName"] = Module["asm"]["_"]).apply(null, arguments);
-      };
-      Module["___embind_register_native_and_builtin_types"] = function() {
-        return (Module["___embind_register_native_and_builtin_types"] = Module["asm"]["$"]).apply(null, arguments);
-      };
-      var ___errno_location = Module["___errno_location"] = function() {
-        return (___errno_location = Module["___errno_location"] = Module["asm"]["aa"]).apply(null, arguments);
-      };
-      var _free = Module["_free"] = function() {
-        return (_free = Module["_free"] = Module["asm"]["ba"]).apply(null, arguments);
-      };
-      Module["dynCall_jiji"] = function() {
-        return (Module["dynCall_jiji"] = Module["asm"]["ca"]).apply(null, arguments);
-      };
-      Module["dynCall_viijii"] = function() {
-        return (Module["dynCall_viijii"] = Module["asm"]["da"]).apply(null, arguments);
-      };
-      Module["dynCall_iiiiiijj"] = function() {
-        return (Module["dynCall_iiiiiijj"] = Module["asm"]["ea"]).apply(null, arguments);
-      };
-      Module["dynCall_iiiiij"] = function() {
-        return (Module["dynCall_iiiiij"] = Module["asm"]["fa"]).apply(null, arguments);
-      };
-      Module["dynCall_iiiiijj"] = function() {
-        return (Module["dynCall_iiiiijj"] = Module["asm"]["ga"]).apply(null, arguments);
-      };
-      Module["addRunDependency"] = addRunDependency;
-      Module["removeRunDependency"] = removeRunDependency;
-      Module["FS_createPath"] = FS.createPath;
-      Module["FS_createDataFile"] = FS.createDataFile;
-      Module["FS_createPreloadedFile"] = FS.createPreloadedFile;
-      Module["FS_createLazyFile"] = FS.createLazyFile;
-      Module["FS_createDevice"] = FS.createDevice;
-      Module["FS_unlink"] = FS.unlink;
-      Module["FS"] = FS;
-      var calledRun;
-      function ExitStatus(status) {
-        this.name = "ExitStatus";
-        this.message = "Program terminated with exit(" + status + ")";
-        this.status = status;
-      }
-      dependenciesFulfilled = function runCaller() {
-        if (!calledRun)
-          run();
-        if (!calledRun)
-          dependenciesFulfilled = runCaller;
-      };
-      function callMain(args) {
-        var entryFunction = Module["_main"];
-        var argc = 0;
-        var argv = 0;
-        try {
-          var ret = entryFunction(argc, argv);
-          exit(ret, true);
-        } catch (e) {
-          if (e instanceof ExitStatus) {
-            return;
-          } else if (e == "unwind") {
-            noExitRuntime = true;
-            return;
-          } else {
-            var toLog = e;
-            if (e && typeof e === "object" && e.stack) {
-              toLog = [e, e.stack];
+          var EXPANSION_RULES_2 = { "%a": function(date2) {
+            return WEEKDAYS[date2.tm_wday].substring(0, 3);
+          }, "%A": function(date2) {
+            return WEEKDAYS[date2.tm_wday];
+          }, "%b": function(date2) {
+            return MONTHS[date2.tm_mon].substring(0, 3);
+          }, "%B": function(date2) {
+            return MONTHS[date2.tm_mon];
+          }, "%C": function(date2) {
+            var year = date2.tm_year + 1900;
+            return leadingNulls(year / 100 | 0, 2);
+          }, "%d": function(date2) {
+            return leadingNulls(date2.tm_mday, 2);
+          }, "%e": function(date2) {
+            return leadingSomething(date2.tm_mday, 2, " ");
+          }, "%g": function(date2) {
+            return getWeekBasedYear(date2).toString().substring(2);
+          }, "%G": function(date2) {
+            return getWeekBasedYear(date2);
+          }, "%H": function(date2) {
+            return leadingNulls(date2.tm_hour, 2);
+          }, "%I": function(date2) {
+            var twelveHour = date2.tm_hour;
+            if (twelveHour == 0)
+              twelveHour = 12;
+            else if (twelveHour > 12)
+              twelveHour -= 12;
+            return leadingNulls(twelveHour, 2);
+          }, "%j": function(date2) {
+            return leadingNulls(date2.tm_mday + __arraySum(__isLeapYear(date2.tm_year + 1900) ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR, date2.tm_mon - 1), 3);
+          }, "%m": function(date2) {
+            return leadingNulls(date2.tm_mon + 1, 2);
+          }, "%M": function(date2) {
+            return leadingNulls(date2.tm_min, 2);
+          }, "%n": function() {
+            return "\n";
+          }, "%p": function(date2) {
+            if (date2.tm_hour >= 0 && date2.tm_hour < 12) {
+              return "AM";
+            } else {
+              return "PM";
             }
-            err("exception thrown: " + toLog);
-            quit_(1, e);
+          }, "%S": function(date2) {
+            return leadingNulls(date2.tm_sec, 2);
+          }, "%t": function() {
+            return "	";
+          }, "%u": function(date2) {
+            return date2.tm_wday || 7;
+          }, "%U": function(date2) {
+            var janFirst = new Date(date2.tm_year + 1900, 0, 1);
+            var firstSunday = janFirst.getDay() === 0 ? janFirst : __addDays(janFirst, 7 - janFirst.getDay());
+            var endDate = new Date(date2.tm_year + 1900, date2.tm_mon, date2.tm_mday);
+            if (compareByDay(firstSunday, endDate) < 0) {
+              var februaryFirstUntilEndMonth = __arraySum(__isLeapYear(endDate.getFullYear()) ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR, endDate.getMonth() - 1) - 31;
+              var firstSundayUntilEndJanuary = 31 - firstSunday.getDate();
+              var days = firstSundayUntilEndJanuary + februaryFirstUntilEndMonth + endDate.getDate();
+              return leadingNulls(Math.ceil(days / 7), 2);
+            }
+            return compareByDay(firstSunday, janFirst) === 0 ? "01" : "00";
+          }, "%V": function(date2) {
+            var janFourthThisYear = new Date(date2.tm_year + 1900, 0, 4);
+            var janFourthNextYear = new Date(date2.tm_year + 1901, 0, 4);
+            var firstWeekStartThisYear = getFirstWeekStartDate(janFourthThisYear);
+            var firstWeekStartNextYear = getFirstWeekStartDate(janFourthNextYear);
+            var endDate = __addDays(new Date(date2.tm_year + 1900, 0, 1), date2.tm_yday);
+            if (compareByDay(endDate, firstWeekStartThisYear) < 0) {
+              return "53";
+            }
+            if (compareByDay(firstWeekStartNextYear, endDate) <= 0) {
+              return "01";
+            }
+            var daysDifference;
+            if (firstWeekStartThisYear.getFullYear() < date2.tm_year + 1900) {
+              daysDifference = date2.tm_yday + 32 - firstWeekStartThisYear.getDate();
+            } else {
+              daysDifference = date2.tm_yday + 1 - firstWeekStartThisYear.getDate();
+            }
+            return leadingNulls(Math.ceil(daysDifference / 7), 2);
+          }, "%w": function(date2) {
+            return date2.tm_wday;
+          }, "%W": function(date2) {
+            var janFirst = new Date(date2.tm_year, 0, 1);
+            var firstMonday = janFirst.getDay() === 1 ? janFirst : __addDays(janFirst, janFirst.getDay() === 0 ? 1 : 7 - janFirst.getDay() + 1);
+            var endDate = new Date(date2.tm_year + 1900, date2.tm_mon, date2.tm_mday);
+            if (compareByDay(firstMonday, endDate) < 0) {
+              var februaryFirstUntilEndMonth = __arraySum(__isLeapYear(endDate.getFullYear()) ? __MONTH_DAYS_LEAP : __MONTH_DAYS_REGULAR, endDate.getMonth() - 1) - 31;
+              var firstMondayUntilEndJanuary = 31 - firstMonday.getDate();
+              var days = firstMondayUntilEndJanuary + februaryFirstUntilEndMonth + endDate.getDate();
+              return leadingNulls(Math.ceil(days / 7), 2);
+            }
+            return compareByDay(firstMonday, janFirst) === 0 ? "01" : "00";
+          }, "%y": function(date2) {
+            return (date2.tm_year + 1900).toString().substring(2);
+          }, "%Y": function(date2) {
+            return date2.tm_year + 1900;
+          }, "%z": function(date2) {
+            var off = date2.tm_gmtoff;
+            var ahead = off >= 0;
+            off = Math.abs(off) / 60;
+            off = off / 60 * 100 + off % 60;
+            return (ahead ? "+" : "-") + String("0000" + off).slice(-4);
+          }, "%Z": function(date2) {
+            return date2.tm_zone;
+          }, "%%": function() {
+            return "%";
+          } };
+          for (var rule in EXPANSION_RULES_2) {
+            if (pattern.indexOf(rule) >= 0) {
+              pattern = pattern.replace(new RegExp(rule, "g"), EXPANSION_RULES_2[rule](date));
+            }
           }
-        } finally {
+          var bytes = intArrayFromString(pattern, false);
+          if (bytes.length > maxsize) {
+            return 0;
+          }
+          writeArrayToMemory(bytes, s);
+          return bytes.length - 1;
         }
-      }
-      function run(args) {
-        if (runDependencies > 0) {
-          return;
+        function _strftime_l(s, maxsize, format, tm) {
+          return _strftime(s, maxsize, format, tm);
         }
-        preRun();
-        if (runDependencies > 0)
-          return;
-        function doRun() {
-          if (calledRun)
+        var FSNode = function(parent, name2, mode, rdev) {
+          if (!parent) {
+            parent = this;
+          }
+          this.parent = parent;
+          this.mount = parent.mount;
+          this.mounted = null;
+          this.id = FS.nextInode++;
+          this.name = name2;
+          this.mode = mode;
+          this.node_ops = {};
+          this.stream_ops = {};
+          this.rdev = rdev;
+        };
+        var readMode = 292 | 73;
+        var writeMode = 146;
+        Object.defineProperties(FSNode.prototype, { read: { get: function() {
+          return (this.mode & readMode) === readMode;
+        }, set: function(val) {
+          val ? this.mode |= readMode : this.mode &= ~readMode;
+        } }, write: { get: function() {
+          return (this.mode & writeMode) === writeMode;
+        }, set: function(val) {
+          val ? this.mode |= writeMode : this.mode &= ~writeMode;
+        } }, isFolder: { get: function() {
+          return FS.isDir(this.mode);
+        } }, isDevice: { get: function() {
+          return FS.isChrdev(this.mode);
+        } } });
+        FS.FSNode = FSNode;
+        FS.staticInit();
+        Module["FS_createPath"] = FS.createPath;
+        Module["FS_createDataFile"] = FS.createDataFile;
+        Module["FS_createPreloadedFile"] = FS.createPreloadedFile;
+        Module["FS_createLazyFile"] = FS.createLazyFile;
+        Module["FS_createDevice"] = FS.createDevice;
+        Module["FS_unlink"] = FS.unlink;
+        InternalError = Module["InternalError"] = extendError(Error, "InternalError");
+        embind_init_charCodes();
+        BindingError = Module["BindingError"] = extendError(Error, "BindingError");
+        init_ClassHandle();
+        init_RegisteredPointer();
+        init_embind();
+        UnboundTypeError = Module["UnboundTypeError"] = extendError(Error, "UnboundTypeError");
+        init_emval();
+        function intArrayFromString(stringy, dontAddNull, length) {
+          var len = length > 0 ? length : lengthBytesUTF8(stringy) + 1;
+          var u8array = new Array(len);
+          var numBytesWritten = stringToUTF8Array(stringy, u8array, 0, u8array.length);
+          if (dontAddNull)
+            u8array.length = numBytesWritten;
+          return u8array;
+        }
+        __ATINIT__.push({ func: function() {
+          ___wasm_call_ctors();
+        } });
+        var asmLibraryArg = { "y": ___assert_fail, "B": ___sys_fcntl64, "Q": ___sys_ioctl, "R": ___sys_open, "W": __embind_finalize_value_array, "r": __embind_finalize_value_object, "T": __embind_register_bool, "u": __embind_register_class, "t": __embind_register_class_constructor, "d": __embind_register_class_function, "S": __embind_register_emval, "V": __embind_register_enum, "w": __embind_register_enum_value, "D": __embind_register_float, "h": __embind_register_function, "n": __embind_register_integer, "l": __embind_register_memory_view, "E": __embind_register_std_string, "x": __embind_register_std_wstring, "X": __embind_register_value_array, "i": __embind_register_value_array_element, "s": __embind_register_value_object, "f": __embind_register_value_object_field, "U": __embind_register_void, "p": __emval_as, "Y": __emval_call, "b": __emval_decref, "G": __emval_get_global, "m": __emval_get_property, "k": __emval_incref, "P": __emval_instanceof, "F": __emval_is_number, "z": __emval_new_array, "g": __emval_new_cstring, "v": __emval_new_object, "o": __emval_run_destructors, "j": __emval_set_property, "e": __emval_take_value, "c": _abort, "N": _clock_gettime, "J": _emscripten_memcpy_big, "q": _emscripten_resize_heap, "L": _environ_get, "M": _environ_sizes_get, "C": _fd_close, "O": _fd_read, "H": _fd_seek, "A": _fd_write, "a": wasmMemory, "I": _setTempRet0, "K": _strftime_l };
+        createWasm();
+        var ___wasm_call_ctors = Module["___wasm_call_ctors"] = function() {
+          return (___wasm_call_ctors = Module["___wasm_call_ctors"] = Module["asm"]["_"]).apply(null, arguments);
+        };
+        Module["_main"] = function() {
+          return (Module["_main"] = Module["asm"]["$"]).apply(null, arguments);
+        };
+        var _malloc = Module["_malloc"] = function() {
+          return (_malloc = Module["_malloc"] = Module["asm"]["aa"]).apply(null, arguments);
+        };
+        var ___getTypeName = Module["___getTypeName"] = function() {
+          return (___getTypeName = Module["___getTypeName"] = Module["asm"]["ba"]).apply(null, arguments);
+        };
+        Module["___embind_register_native_and_builtin_types"] = function() {
+          return (Module["___embind_register_native_and_builtin_types"] = Module["asm"]["ca"]).apply(null, arguments);
+        };
+        var ___errno_location = Module["___errno_location"] = function() {
+          return (___errno_location = Module["___errno_location"] = Module["asm"]["da"]).apply(null, arguments);
+        };
+        var _free = Module["_free"] = function() {
+          return (_free = Module["_free"] = Module["asm"]["ea"]).apply(null, arguments);
+        };
+        Module["dynCall_jiji"] = function() {
+          return (Module["dynCall_jiji"] = Module["asm"]["fa"]).apply(null, arguments);
+        };
+        Module["dynCall_viijii"] = function() {
+          return (Module["dynCall_viijii"] = Module["asm"]["ga"]).apply(null, arguments);
+        };
+        Module["dynCall_iiiiiijj"] = function() {
+          return (Module["dynCall_iiiiiijj"] = Module["asm"]["ha"]).apply(null, arguments);
+        };
+        Module["dynCall_iiiiij"] = function() {
+          return (Module["dynCall_iiiiij"] = Module["asm"]["ia"]).apply(null, arguments);
+        };
+        Module["dynCall_iiiiijj"] = function() {
+          return (Module["dynCall_iiiiijj"] = Module["asm"]["ja"]).apply(null, arguments);
+        };
+        Module["addRunDependency"] = addRunDependency;
+        Module["removeRunDependency"] = removeRunDependency;
+        Module["FS_createPath"] = FS.createPath;
+        Module["FS_createDataFile"] = FS.createDataFile;
+        Module["FS_createPreloadedFile"] = FS.createPreloadedFile;
+        Module["FS_createLazyFile"] = FS.createLazyFile;
+        Module["FS_createDevice"] = FS.createDevice;
+        Module["FS_unlink"] = FS.unlink;
+        Module["FS"] = FS;
+        var calledRun;
+        function ExitStatus(status) {
+          this.name = "ExitStatus";
+          this.message = "Program terminated with exit(" + status + ")";
+          this.status = status;
+        }
+        dependenciesFulfilled = function runCaller() {
+          if (!calledRun)
+            run();
+          if (!calledRun)
+            dependenciesFulfilled = runCaller;
+        };
+        function callMain(args) {
+          var entryFunction = Module["_main"];
+          var argc = 0;
+          var argv = 0;
+          try {
+            var ret = entryFunction(argc, argv);
+            exit(ret, true);
+          } catch (e) {
+            if (e instanceof ExitStatus) {
+              return;
+            } else if (e == "unwind") {
+              noExitRuntime = true;
+              return;
+            } else {
+              var toLog = e;
+              if (e && typeof e === "object" && e.stack) {
+                toLog = [e, e.stack];
+              }
+              err("exception thrown: " + toLog);
+              quit_(1, e);
+            }
+          } finally {
+          }
+        }
+        function run(args) {
+          if (runDependencies > 0) {
             return;
-          calledRun = true;
-          Module["calledRun"] = true;
-          if (ABORT)
+          }
+          preRun();
+          if (runDependencies > 0)
             return;
-          initRuntime();
-          preMain();
-          readyPromiseResolve(Module);
-          if (Module["onRuntimeInitialized"])
-            Module["onRuntimeInitialized"]();
-          if (shouldRunNow)
-            callMain();
-          postRun();
-        }
-        if (Module["setStatus"]) {
-          Module["setStatus"]("Running...");
-          setTimeout(function() {
+          function doRun() {
+            if (calledRun)
+              return;
+            calledRun = true;
+            Module["calledRun"] = true;
+            if (ABORT)
+              return;
+            initRuntime();
+            preMain();
+            readyPromiseResolve(Module);
+            if (Module["onRuntimeInitialized"])
+              Module["onRuntimeInitialized"]();
+            if (shouldRunNow)
+              callMain();
+            postRun();
+          }
+          if (Module["setStatus"]) {
+            Module["setStatus"]("Running...");
             setTimeout(function() {
-              Module["setStatus"]("");
+              setTimeout(function() {
+                Module["setStatus"]("");
+              }, 1);
+              doRun();
             }, 1);
+          } else {
             doRun();
-          }, 1);
-        } else {
-          doRun();
+          }
         }
-      }
-      Module["run"] = run;
-      function exit(status, implicit) {
-        if (implicit && noExitRuntime && status === 0) {
-          return;
+        Module["run"] = run;
+        function exit(status, implicit) {
+          if (implicit && noExitRuntime && status === 0) {
+            return;
+          }
+          if (noExitRuntime) ; else {
+            if (Module["onExit"])
+              Module["onExit"](status);
+            ABORT = true;
+          }
+          quit_(status, new ExitStatus(status));
         }
-        if (noExitRuntime) ; else {
-          if (Module["onExit"])
-            Module["onExit"](status);
-          ABORT = true;
+        if (Module["preInit"]) {
+          if (typeof Module["preInit"] == "function")
+            Module["preInit"] = [Module["preInit"]];
+          while (Module["preInit"].length > 0) {
+            Module["preInit"].pop()();
+          }
         }
-        quit_(status, new ExitStatus(status));
-      }
-      if (Module["preInit"]) {
-        if (typeof Module["preInit"] == "function")
-          Module["preInit"] = [Module["preInit"]];
-        while (Module["preInit"].length > 0) {
-          Module["preInit"].pop()();
-        }
-      }
-      var shouldRunNow = true;
-      if (Module["noInitialRun"])
-        shouldRunNow = false;
-      noExitRuntime = true;
-      run();
-      return WebIFCWasm3.ready;
-    };
-  }();
-  if (typeof exports === "object" && typeof module === "object")
-    module.exports = WebIFCWasm2;
-  else if (typeof define === "function" && define["amd"])
-    define([], function() {
-      return WebIFCWasm2;
-    });
-  else if (typeof exports === "object")
-    exports["WebIFCWasm"] = WebIFCWasm2;
+        var shouldRunNow = true;
+        if (Module["noInitialRun"])
+          shouldRunNow = false;
+        noExitRuntime = true;
+        run();
+        return WebIFCWasm3.ready;
+      };
+    }();
+    if (typeof exports === "object" && typeof module === "object")
+      module.exports = WebIFCWasm2;
+    else if (typeof define === "function" && define["amd"])
+      define([], function() {
+        return WebIFCWasm2;
+      });
+    else if (typeof exports === "object")
+      exports["WebIFCWasm"] = WebIFCWasm2;
+  }
 });
 
 // dist/ifc2x4.ts
@@ -66040,24 +67323,47 @@ var IfcAPI = class {
   constructor() {
     this.wasmModule = void 0;
     this.fs = void 0;
+    this.wasmPath = "";
   }
-  async Init() {
-    if (WebIFCWasm) {
-      this.wasmModule = await WebIFCWasm({noInitialRun: true});
-      this.fs = this.wasmModule.FS;
-    } else {
-      console.error(`Could not find wasm module at './web-ifc' from web-ifc-api.ts`);
-    }
+  Init() {
+    return __async(this, null, function* () {
+      if (WebIFCWasm) {
+        let locateFileHandler = (path, prefix) => {
+          if (path.endsWith(".wasm"))
+            return prefix + this.wasmPath + path;
+          return prefix + path;
+        };
+        this.wasmModule = yield WebIFCWasm({ noInitialRun: true, locateFile: locateFileHandler });
+        this.fs = this.wasmModule.FS;
+      } else {
+        console.error(`Could not find wasm module at './web-ifc' from web-ifc-api.ts`);
+      }
+    });
   }
   OpenModel(data, settings) {
     this.wasmModule["FS_createDataFile"]("/", "filename", data, true, true, true);
-    let s = {
+    let s = __spreadValues({
       COORDINATE_TO_ORIGIN: false,
       USE_FAST_BOOLS: false,
-      ...settings
-    };
+      CIRCLE_SEGMENTS_LOW: 5,
+      CIRCLE_SEGMENTS_MEDIUM: 8,
+      CIRCLE_SEGMENTS_HIGH: 12,
+      BOOL_ABORT_THRESHOLD: 1e4
+    }, settings);
     let result = this.wasmModule.OpenModel(s);
     this.wasmModule["FS_unlink"]("/filename");
+    return result;
+  }
+  CreateModel(settings) {
+    let s = __spreadValues({
+      COORDINATE_TO_ORIGIN: false,
+      USE_FAST_BOOLS: false,
+      CIRCLE_SEGMENTS_LOW: 5,
+      CIRCLE_SEGMENTS_MEDIUM: 8,
+      CIRCLE_SEGMENTS_HIGH: 12,
+      BOOL_ABORT_THRESHOLD: 1e4
+    }, settings);
+    let result = this.wasmModule.CreateModel(s);
     return result;
   }
   ExportFileAsIFC(modelID) {
@@ -66076,6 +67382,9 @@ var IfcAPI = class {
       this.FlattenLine(modelID, lineData);
     }
     return lineData;
+  }
+  GetAndClearErrors(modelID) {
+    return this.wasmModule.GetAndClearErrors(modelID);
   }
   WriteLine(modelID, lineObject) {
     Object.keys(lineObject).forEach((propertyName) => {
@@ -66136,6 +67445,9 @@ var IfcAPI = class {
     }
     this.wasmModule.SetGeometryTransformation(modelID, transformationMatrix);
   }
+  GetCoordinationMatrix(modelID) {
+    return this.wasmModule.GetCoordinationMatrix(modelID);
+  }
   GetVertexArray(ptr, size) {
     return this.getSubArray(this.wasmModule.HEAPF32, ptr, size);
   }
@@ -66148,6 +67460,12 @@ var IfcAPI = class {
   CloseModel(modelID) {
     this.wasmModule.CloseModel(modelID);
   }
+  StreamAllMeshes(modelID, meshCallback) {
+    this.wasmModule.StreamAllMeshes(modelID, meshCallback);
+  }
+  StreamAllMeshesWithTypes(modelID, types, meshCallback) {
+    this.wasmModule.StreamAllMeshesWithTypes(modelID, types, meshCallback);
+  }
   IsModelOpen(modelID) {
     return this.wasmModule.IsModelOpen(modelID);
   }
@@ -66158,938 +67476,279 @@ var IfcAPI = class {
     return this.wasmModule.GetFlatMesh(modelID, expressID);
   }
   SetWasmPath(path) {
-    WasmPath = path;
+    this.wasmPath = path;
   }
 };
 
-
- var WasmPath = "";
-
-class BufferGeometryUtils {
-
-	static computeTangents( geometry ) {
-
-		geometry.computeTangents();
-		console.warn( 'THREE.BufferGeometryUtils: .computeTangents() has been removed. Use BufferGeometry.computeTangents() instead.' );
-
-	}
-
-	/**
+/**
 	 * @param  {Array<BufferGeometry>} geometries
 	 * @param  {Boolean} useGroups
 	 * @return {BufferGeometry}
 	 */
-	static mergeBufferGeometries( geometries, useGroups = false ) {
+function mergeBufferGeometries( geometries, useGroups = false ) {
 
-		const isIndexed = geometries[ 0 ].index !== null;
+	const isIndexed = geometries[ 0 ].index !== null;
 
-		const attributesUsed = new Set( Object.keys( geometries[ 0 ].attributes ) );
-		const morphAttributesUsed = new Set( Object.keys( geometries[ 0 ].morphAttributes ) );
+	const attributesUsed = new Set( Object.keys( geometries[ 0 ].attributes ) );
+	const morphAttributesUsed = new Set( Object.keys( geometries[ 0 ].morphAttributes ) );
 
-		const attributes = {};
-		const morphAttributes = {};
+	const attributes = {};
+	const morphAttributes = {};
 
-		const morphTargetsRelative = geometries[ 0 ].morphTargetsRelative;
+	const morphTargetsRelative = geometries[ 0 ].morphTargetsRelative;
 
-		const mergedGeometry = new BufferGeometry();
+	const mergedGeometry = new BufferGeometry();
 
-		let offset = 0;
+	let offset = 0;
 
-		for ( let i = 0; i < geometries.length; ++ i ) {
+	for ( let i = 0; i < geometries.length; ++ i ) {
 
-			const geometry = geometries[ i ];
-			let attributesCount = 0;
+		const geometry = geometries[ i ];
+		let attributesCount = 0;
 
-			// ensure that all geometries are indexed, or none
+		// ensure that all geometries are indexed, or none
 
-			if ( isIndexed !== ( geometry.index !== null ) ) {
+		if ( isIndexed !== ( geometry.index !== null ) ) {
 
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. All geometries must have compatible attributes; make sure index attribute exists among all geometries, or in none of them.' );
-				return null;
-
-			}
-
-			// gather attributes, exit early if they're different
-
-			for ( const name in geometry.attributes ) {
-
-				if ( ! attributesUsed.has( name ) ) {
-
-					console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. All geometries must have compatible attributes; make sure "' + name + '" attribute exists among all geometries, or in none of them.' );
-					return null;
-
-				}
-
-				if ( attributes[ name ] === undefined ) attributes[ name ] = [];
-
-				attributes[ name ].push( geometry.attributes[ name ] );
-
-				attributesCount ++;
-
-			}
-
-			// ensure geometries have the same number of attributes
-
-			if ( attributesCount !== attributesUsed.size ) {
-
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. Make sure all geometries have the same number of attributes.' );
-				return null;
-
-			}
-
-			// gather morph attributes, exit early if they're different
-
-			if ( morphTargetsRelative !== geometry.morphTargetsRelative ) {
-
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. .morphTargetsRelative must be consistent throughout all geometries.' );
-				return null;
-
-			}
-
-			for ( const name in geometry.morphAttributes ) {
-
-				if ( ! morphAttributesUsed.has( name ) ) {
-
-					console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '.  .morphAttributes must be consistent throughout all geometries.' );
-					return null;
-
-				}
-
-				if ( morphAttributes[ name ] === undefined ) morphAttributes[ name ] = [];
-
-				morphAttributes[ name ].push( geometry.morphAttributes[ name ] );
-
-			}
-
-			// gather .userData
-
-			mergedGeometry.userData.mergedUserData = mergedGeometry.userData.mergedUserData || [];
-			mergedGeometry.userData.mergedUserData.push( geometry.userData );
-
-			if ( useGroups ) {
-
-				let count;
-
-				if ( isIndexed ) {
-
-					count = geometry.index.count;
-
-				} else if ( geometry.attributes.position !== undefined ) {
-
-					count = geometry.attributes.position.count;
-
-				} else {
-
-					console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. The geometry must have either an index or a position attribute' );
-					return null;
-
-				}
-
-				mergedGeometry.addGroup( offset, count, i );
-
-				offset += count;
-
-			}
-
-		}
-
-		// merge indices
-
-		if ( isIndexed ) {
-
-			let indexOffset = 0;
-			const mergedIndex = [];
-
-			for ( let i = 0; i < geometries.length; ++ i ) {
-
-				const index = geometries[ i ].index;
-
-				for ( let j = 0; j < index.count; ++ j ) {
-
-					mergedIndex.push( index.getX( j ) + indexOffset );
-
-				}
-
-				indexOffset += geometries[ i ].attributes.position.count;
-
-			}
-
-			mergedGeometry.setIndex( mergedIndex );
-
-		}
-
-		// merge attributes
-
-		for ( const name in attributes ) {
-
-			const mergedAttribute = this.mergeBufferAttributes( attributes[ name ] );
-
-			if ( ! mergedAttribute ) {
-
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed while trying to merge the ' + name + ' attribute.' );
-				return null;
-
-			}
-
-			mergedGeometry.setAttribute( name, mergedAttribute );
-
-		}
-
-		// merge morph attributes
-
-		for ( const name in morphAttributes ) {
-
-			const numMorphTargets = morphAttributes[ name ][ 0 ].length;
-
-			if ( numMorphTargets === 0 ) break;
-
-			mergedGeometry.morphAttributes = mergedGeometry.morphAttributes || {};
-			mergedGeometry.morphAttributes[ name ] = [];
-
-			for ( let i = 0; i < numMorphTargets; ++ i ) {
-
-				const morphAttributesToMerge = [];
-
-				for ( let j = 0; j < morphAttributes[ name ].length; ++ j ) {
-
-					morphAttributesToMerge.push( morphAttributes[ name ][ j ][ i ] );
-
-				}
-
-				const mergedMorphAttribute = this.mergeBufferAttributes( morphAttributesToMerge );
-
-				if ( ! mergedMorphAttribute ) {
-
-					console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed while trying to merge the ' + name + ' morphAttribute.' );
-					return null;
-
-				}
-
-				mergedGeometry.morphAttributes[ name ].push( mergedMorphAttribute );
-
-			}
-
-		}
-
-		return mergedGeometry;
-
-	}
-
-	/**
-	 * @param {Array<BufferAttribute>} attributes
-	 * @return {BufferAttribute}
-	 */
-	static mergeBufferAttributes( attributes ) {
-
-		let TypedArray;
-		let itemSize;
-		let normalized;
-		let arrayLength = 0;
-
-		for ( let i = 0; i < attributes.length; ++ i ) {
-
-			const attribute = attributes[ i ];
-
-			if ( attribute.isInterleavedBufferAttribute ) {
-
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. InterleavedBufferAttributes are not supported.' );
-				return null;
-
-			}
-
-			if ( TypedArray === undefined ) TypedArray = attribute.array.constructor;
-			if ( TypedArray !== attribute.array.constructor ) {
-
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.array must be of consistent array types across matching attributes.' );
-				return null;
-
-			}
-
-			if ( itemSize === undefined ) itemSize = attribute.itemSize;
-			if ( itemSize !== attribute.itemSize ) {
-
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.itemSize must be consistent across matching attributes.' );
-				return null;
-
-			}
-
-			if ( normalized === undefined ) normalized = attribute.normalized;
-			if ( normalized !== attribute.normalized ) {
-
-				console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.normalized must be consistent across matching attributes.' );
-				return null;
-
-			}
-
-			arrayLength += attribute.array.length;
-
-		}
-
-		const array = new TypedArray( arrayLength );
-		let offset = 0;
-
-		for ( let i = 0; i < attributes.length; ++ i ) {
-
-			array.set( attributes[ i ].array, offset );
-
-			offset += attributes[ i ].array.length;
-
-		}
-
-		return new BufferAttribute( array, itemSize, normalized );
-
-	}
-
-	/**
-	 * @param {Array<BufferAttribute>} attributes
-	 * @return {Array<InterleavedBufferAttribute>}
-	 */
-	static interleaveAttributes( attributes ) {
-
-		// Interleaves the provided attributes into an InterleavedBuffer and returns
-		// a set of InterleavedBufferAttributes for each attribute
-		let TypedArray;
-		let arrayLength = 0;
-		let stride = 0;
-
-		// calculate the the length and type of the interleavedBuffer
-		for ( let i = 0, l = attributes.length; i < l; ++ i ) {
-
-			const attribute = attributes[ i ];
-
-			if ( TypedArray === undefined ) TypedArray = attribute.array.constructor;
-			if ( TypedArray !== attribute.array.constructor ) {
-
-				console.error( 'AttributeBuffers of different types cannot be interleaved' );
-				return null;
-
-			}
-
-			arrayLength += attribute.array.length;
-			stride += attribute.itemSize;
-
-		}
-
-		// Create the set of buffer attributes
-		const interleavedBuffer = new InterleavedBuffer( new TypedArray( arrayLength ), stride );
-		let offset = 0;
-		const res = [];
-		const getters = [ 'getX', 'getY', 'getZ', 'getW' ];
-		const setters = [ 'setX', 'setY', 'setZ', 'setW' ];
-
-		for ( let j = 0, l = attributes.length; j < l; j ++ ) {
-
-			const attribute = attributes[ j ];
-			const itemSize = attribute.itemSize;
-			const count = attribute.count;
-			const iba = new InterleavedBufferAttribute( interleavedBuffer, itemSize, offset, attribute.normalized );
-			res.push( iba );
-
-			offset += itemSize;
-
-			// Move the data for each attribute into the new interleavedBuffer
-			// at the appropriate offset
-			for ( let c = 0; c < count; c ++ ) {
-
-				for ( let k = 0; k < itemSize; k ++ ) {
-
-					iba[ setters[ k ] ]( c, attribute[ getters[ k ] ]( c ) );
-
-				}
-
-			}
-
-		}
-
-		return res;
-
-	}
-
-	/**
-	 * @param {Array<BufferGeometry>} geometry
-	 * @return {number}
-	 */
-	static estimateBytesUsed( geometry ) {
-
-		// Return the estimated memory used by this geometry in bytes
-		// Calculate using itemSize, count, and BYTES_PER_ELEMENT to account
-		// for InterleavedBufferAttributes.
-		let mem = 0;
-		for ( const name in geometry.attributes ) {
-
-			const attr = geometry.getAttribute( name );
-			mem += attr.count * attr.itemSize * attr.array.BYTES_PER_ELEMENT;
-
-		}
-
-		const indices = geometry.getIndex();
-		mem += indices ? indices.count * indices.itemSize * indices.array.BYTES_PER_ELEMENT : 0;
-		return mem;
-
-	}
-
-	/**
-	 * @param {BufferGeometry} geometry
-	 * @param {number} tolerance
-	 * @return {BufferGeometry>}
-	 */
-	static mergeVertices( geometry, tolerance = 1e-4 ) {
-
-		tolerance = Math.max( tolerance, Number.EPSILON );
-
-		// Generate an index buffer if the geometry doesn't have one, or optimize it
-		// if it's already available.
-		const hashToIndex = {};
-		const indices = geometry.getIndex();
-		const positions = geometry.getAttribute( 'position' );
-		const vertexCount = indices ? indices.count : positions.count;
-
-		// next value for triangle indices
-		let nextIndex = 0;
-
-		// attributes and new attribute arrays
-		const attributeNames = Object.keys( geometry.attributes );
-		const attrArrays = {};
-		const morphAttrsArrays = {};
-		const newIndices = [];
-		const getters = [ 'getX', 'getY', 'getZ', 'getW' ];
-
-		// initialize the arrays
-		for ( let i = 0, l = attributeNames.length; i < l; i ++ ) {
-
-			const name = attributeNames[ i ];
-
-			attrArrays[ name ] = [];
-
-			const morphAttr = geometry.morphAttributes[ name ];
-			if ( morphAttr ) {
-
-				morphAttrsArrays[ name ] = new Array( morphAttr.length ).fill().map( () => [] );
-
-			}
-
-		}
-
-		// convert the error tolerance to an amount of decimal places to truncate to
-		const decimalShift = Math.log10( 1 / tolerance );
-		const shiftMultiplier = Math.pow( 10, decimalShift );
-		for ( let i = 0; i < vertexCount; i ++ ) {
-
-			const index = indices ? indices.getX( i ) : i;
-
-			// Generate a hash for the vertex attributes at the current index 'i'
-			let hash = '';
-			for ( let j = 0, l = attributeNames.length; j < l; j ++ ) {
-
-				const name = attributeNames[ j ];
-				const attribute = geometry.getAttribute( name );
-				const itemSize = attribute.itemSize;
-
-				for ( let k = 0; k < itemSize; k ++ ) {
-
-					// double tilde truncates the decimal value
-					hash += `${ ~ ~ ( attribute[ getters[ k ] ]( index ) * shiftMultiplier ) },`;
-
-				}
-
-			}
-
-			// Add another reference to the vertex if it's already
-			// used by another index
-			if ( hash in hashToIndex ) {
-
-				newIndices.push( hashToIndex[ hash ] );
-
-			} else {
-
-				// copy data to the new index in the attribute arrays
-				for ( let j = 0, l = attributeNames.length; j < l; j ++ ) {
-
-					const name = attributeNames[ j ];
-					const attribute = geometry.getAttribute( name );
-					const morphAttr = geometry.morphAttributes[ name ];
-					const itemSize = attribute.itemSize;
-					const newarray = attrArrays[ name ];
-					const newMorphArrays = morphAttrsArrays[ name ];
-
-					for ( let k = 0; k < itemSize; k ++ ) {
-
-						const getterFunc = getters[ k ];
-						newarray.push( attribute[ getterFunc ]( index ) );
-
-						if ( morphAttr ) {
-
-							for ( let m = 0, ml = morphAttr.length; m < ml; m ++ ) {
-
-								newMorphArrays[ m ].push( morphAttr[ m ][ getterFunc ]( index ) );
-
-							}
-
-						}
-
-					}
-
-				}
-
-				hashToIndex[ hash ] = nextIndex;
-				newIndices.push( nextIndex );
-				nextIndex ++;
-
-			}
-
-		}
-
-		// Generate typed arrays from new attribute arrays and update
-		// the attributeBuffers
-		const result = geometry.clone();
-		for ( let i = 0, l = attributeNames.length; i < l; i ++ ) {
-
-			const name = attributeNames[ i ];
-			const oldAttribute = geometry.getAttribute( name );
-
-			const buffer = new oldAttribute.array.constructor( attrArrays[ name ] );
-			const attribute = new BufferAttribute( buffer, oldAttribute.itemSize, oldAttribute.normalized );
-
-			result.setAttribute( name, attribute );
-
-			// Update the attribute arrays
-			if ( name in morphAttrsArrays ) {
-
-				for ( let j = 0; j < morphAttrsArrays[ name ].length; j ++ ) {
-
-					const oldMorphAttribute = geometry.morphAttributes[ name ][ j ];
-
-					const buffer = new oldMorphAttribute.array.constructor( morphAttrsArrays[ name ][ j ] );
-					const morphAttribute = new BufferAttribute( buffer, oldMorphAttribute.itemSize, oldMorphAttribute.normalized );
-					result.morphAttributes[ name ][ j ] = morphAttribute;
-
-				}
-
-			}
-
-		}
-
-		// indices
-
-		result.setIndex( newIndices );
-
-		return result;
-
-	}
-
-	/**
-	 * @param {BufferGeometry} geometry
-	 * @param {number} drawMode
-	 * @return {BufferGeometry>}
-	 */
-	static toTrianglesDrawMode( geometry, drawMode ) {
-
-		if ( drawMode === TrianglesDrawMode ) {
-
-			console.warn( 'THREE.BufferGeometryUtils.toTrianglesDrawMode(): Geometry already defined as triangles.' );
-			return geometry;
-
-		}
-
-		if ( drawMode === TriangleFanDrawMode || drawMode === TriangleStripDrawMode ) {
-
-			let index = geometry.getIndex();
-
-			// generate index if not present
-
-			if ( index === null ) {
-
-				const indices = [];
-
-				const position = geometry.getAttribute( 'position' );
-
-				if ( position !== undefined ) {
-
-					for ( let i = 0; i < position.count; i ++ ) {
-
-						indices.push( i );
-
-					}
-
-					geometry.setIndex( indices );
-					index = geometry.getIndex();
-
-				} else {
-
-					console.error( 'THREE.BufferGeometryUtils.toTrianglesDrawMode(): Undefined position attribute. Processing not possible.' );
-					return geometry;
-
-				}
-
-			}
-
-			//
-
-			const numberOfTriangles = index.count - 2;
-			const newIndices = [];
-
-			if ( drawMode === TriangleFanDrawMode ) {
-
-				// gl.TRIANGLE_FAN
-
-				for ( let i = 1; i <= numberOfTriangles; i ++ ) {
-
-					newIndices.push( index.getX( 0 ) );
-					newIndices.push( index.getX( i ) );
-					newIndices.push( index.getX( i + 1 ) );
-
-				}
-
-			} else {
-
-				// gl.TRIANGLE_STRIP
-
-				for ( let i = 0; i < numberOfTriangles; i ++ ) {
-
-					if ( i % 2 === 0 ) {
-
-						newIndices.push( index.getX( i ) );
-						newIndices.push( index.getX( i + 1 ) );
-						newIndices.push( index.getX( i + 2 ) );
-
-					} else {
-
-						newIndices.push( index.getX( i + 2 ) );
-						newIndices.push( index.getX( i + 1 ) );
-						newIndices.push( index.getX( i ) );
-
-					}
-
-				}
-
-			}
-
-			if ( ( newIndices.length / 3 ) !== numberOfTriangles ) {
-
-				console.error( 'THREE.BufferGeometryUtils.toTrianglesDrawMode(): Unable to generate correct amount of triangles.' );
-
-			}
-
-			// build final geometry
-
-			const newGeometry = geometry.clone();
-			newGeometry.setIndex( newIndices );
-			newGeometry.clearGroups();
-
-			return newGeometry;
-
-		} else {
-
-			console.error( 'THREE.BufferGeometryUtils.toTrianglesDrawMode(): Unknown draw mode:', drawMode );
-			return geometry;
-
-		}
-
-	}
-
-	/**
-	 * Calculates the morphed attributes of a morphed/skinned BufferGeometry.
-	 * Helpful for Raytracing or Decals.
-	 * @param {Mesh | Line | Points} object An instance of Mesh, Line or Points.
-	 * @return {Object} An Object with original position/normal attributes and morphed ones.
-	 */
-	static computeMorphedAttributes( object ) {
-
-		if ( object.geometry.isBufferGeometry !== true ) {
-
-			console.error( 'THREE.BufferGeometryUtils: Geometry is not of type BufferGeometry.' );
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. All geometries must have compatible attributes; make sure index attribute exists among all geometries, or in none of them.' );
 			return null;
 
 		}
 
-		const _vA = new Vector3();
-		const _vB = new Vector3();
-		const _vC = new Vector3();
+		// gather attributes, exit early if they're different
 
-		const _tempA = new Vector3();
-		const _tempB = new Vector3();
-		const _tempC = new Vector3();
+		for ( const name in geometry.attributes ) {
 
-		const _morphA = new Vector3();
-		const _morphB = new Vector3();
-		const _morphC = new Vector3();
+			if ( ! attributesUsed.has( name ) ) {
 
-		function _calculateMorphedAttributeData(
-			object,
-			material,
-			attribute,
-			morphAttribute,
-			morphTargetsRelative,
-			a,
-			b,
-			c,
-			modifiedAttributeArray
-		) {
-
-			_vA.fromBufferAttribute( attribute, a );
-			_vB.fromBufferAttribute( attribute, b );
-			_vC.fromBufferAttribute( attribute, c );
-
-			const morphInfluences = object.morphTargetInfluences;
-
-			if ( material.morphTargets && morphAttribute && morphInfluences ) {
-
-				_morphA.set( 0, 0, 0 );
-				_morphB.set( 0, 0, 0 );
-				_morphC.set( 0, 0, 0 );
-
-				for ( let i = 0, il = morphAttribute.length; i < il; i ++ ) {
-
-					const influence = morphInfluences[ i ];
-					const morph = morphAttribute[ i ];
-
-					if ( influence === 0 ) continue;
-
-					_tempA.fromBufferAttribute( morph, a );
-					_tempB.fromBufferAttribute( morph, b );
-					_tempC.fromBufferAttribute( morph, c );
-
-					if ( morphTargetsRelative ) {
-
-						_morphA.addScaledVector( _tempA, influence );
-						_morphB.addScaledVector( _tempB, influence );
-						_morphC.addScaledVector( _tempC, influence );
-
-					} else {
-
-						_morphA.addScaledVector( _tempA.sub( _vA ), influence );
-						_morphB.addScaledVector( _tempB.sub( _vB ), influence );
-						_morphC.addScaledVector( _tempC.sub( _vC ), influence );
-
-					}
-
-				}
-
-				_vA.add( _morphA );
-				_vB.add( _morphB );
-				_vC.add( _morphC );
+				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. All geometries must have compatible attributes; make sure "' + name + '" attribute exists among all geometries, or in none of them.' );
+				return null;
 
 			}
 
-			if ( object.isSkinnedMesh ) {
+			if ( attributes[ name ] === undefined ) attributes[ name ] = [];
 
-				object.boneTransform( a, _vA );
-				object.boneTransform( b, _vB );
-				object.boneTransform( c, _vC );
+			attributes[ name ].push( geometry.attributes[ name ] );
 
-			}
-
-			modifiedAttributeArray[ a * 3 + 0 ] = _vA.x;
-			modifiedAttributeArray[ a * 3 + 1 ] = _vA.y;
-			modifiedAttributeArray[ a * 3 + 2 ] = _vA.z;
-			modifiedAttributeArray[ b * 3 + 0 ] = _vB.x;
-			modifiedAttributeArray[ b * 3 + 1 ] = _vB.y;
-			modifiedAttributeArray[ b * 3 + 2 ] = _vB.z;
-			modifiedAttributeArray[ c * 3 + 0 ] = _vC.x;
-			modifiedAttributeArray[ c * 3 + 1 ] = _vC.y;
-			modifiedAttributeArray[ c * 3 + 2 ] = _vC.z;
+			attributesCount ++;
 
 		}
 
-		const geometry = object.geometry;
-		const material = object.material;
+		// ensure geometries have the same number of attributes
 
-		let a, b, c;
-		const index = geometry.index;
-		const positionAttribute = geometry.attributes.position;
-		const morphPosition = geometry.morphAttributes.position;
-		const morphTargetsRelative = geometry.morphTargetsRelative;
-		const normalAttribute = geometry.attributes.normal;
-		const morphNormal = geometry.morphAttributes.position;
+		if ( attributesCount !== attributesUsed.size ) {
 
-		const groups = geometry.groups;
-		const drawRange = geometry.drawRange;
-		let i, j, il, jl;
-		let group, groupMaterial;
-		let start, end;
-
-		const modifiedPosition = new Float32Array( positionAttribute.count * positionAttribute.itemSize );
-		const modifiedNormal = new Float32Array( normalAttribute.count * normalAttribute.itemSize );
-
-		if ( index !== null ) {
-
-			// indexed buffer geometry
-
-			if ( Array.isArray( material ) ) {
-
-				for ( i = 0, il = groups.length; i < il; i ++ ) {
-
-					group = groups[ i ];
-					groupMaterial = material[ group.materialIndex ];
-
-					start = Math.max( group.start, drawRange.start );
-					end = Math.min( ( group.start + group.count ), ( drawRange.start + drawRange.count ) );
-
-					for ( j = start, jl = end; j < jl; j += 3 ) {
-
-						a = index.getX( j );
-						b = index.getX( j + 1 );
-						c = index.getX( j + 2 );
-
-						_calculateMorphedAttributeData(
-							object,
-							groupMaterial,
-							positionAttribute,
-							morphPosition,
-							morphTargetsRelative,
-							a, b, c,
-							modifiedPosition
-						);
-
-						_calculateMorphedAttributeData(
-							object,
-							groupMaterial,
-							normalAttribute,
-							morphNormal,
-							morphTargetsRelative,
-							a, b, c,
-							modifiedNormal
-						);
-
-					}
-
-				}
-
-			} else {
-
-				start = Math.max( 0, drawRange.start );
-				end = Math.min( index.count, ( drawRange.start + drawRange.count ) );
-
-				for ( i = start, il = end; i < il; i += 3 ) {
-
-					a = index.getX( i );
-					b = index.getX( i + 1 );
-					c = index.getX( i + 2 );
-
-					_calculateMorphedAttributeData(
-						object,
-						material,
-						positionAttribute,
-						morphPosition,
-						morphTargetsRelative,
-						a, b, c,
-						modifiedPosition
-					);
-
-					_calculateMorphedAttributeData(
-						object,
-						material,
-						normalAttribute,
-						morphNormal,
-						morphTargetsRelative,
-						a, b, c,
-						modifiedNormal
-					);
-
-				}
-
-			}
-
-		} else if ( positionAttribute !== undefined ) {
-
-			// non-indexed buffer geometry
-
-			if ( Array.isArray( material ) ) {
-
-				for ( i = 0, il = groups.length; i < il; i ++ ) {
-
-					group = groups[ i ];
-					groupMaterial = material[ group.materialIndex ];
-
-					start = Math.max( group.start, drawRange.start );
-					end = Math.min( ( group.start + group.count ), ( drawRange.start + drawRange.count ) );
-
-					for ( j = start, jl = end; j < jl; j += 3 ) {
-
-						a = j;
-						b = j + 1;
-						c = j + 2;
-
-						_calculateMorphedAttributeData(
-							object,
-							groupMaterial,
-							positionAttribute,
-							morphPosition,
-							morphTargetsRelative,
-							a, b, c,
-							modifiedPosition
-						);
-
-						_calculateMorphedAttributeData(
-							object,
-							groupMaterial,
-							normalAttribute,
-							morphNormal,
-							morphTargetsRelative,
-							a, b, c,
-							modifiedNormal
-						);
-
-					}
-
-				}
-
-			} else {
-
-				start = Math.max( 0, drawRange.start );
-				end = Math.min( positionAttribute.count, ( drawRange.start + drawRange.count ) );
-
-				for ( i = start, il = end; i < il; i += 3 ) {
-
-					a = i;
-					b = i + 1;
-					c = i + 2;
-
-					_calculateMorphedAttributeData(
-						object,
-						material,
-						positionAttribute,
-						morphPosition,
-						morphTargetsRelative,
-						a, b, c,
-						modifiedPosition
-					);
-
-					_calculateMorphedAttributeData(
-						object,
-						material,
-						normalAttribute,
-						morphNormal,
-						morphTargetsRelative,
-						a, b, c,
-						modifiedNormal
-					);
-
-				}
-
-			}
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. Make sure all geometries have the same number of attributes.' );
+			return null;
 
 		}
 
-		const morphedPositionAttribute = new Float32BufferAttribute( modifiedPosition, 3 );
-		const morphedNormalAttribute = new Float32BufferAttribute( modifiedNormal, 3 );
+		// gather morph attributes, exit early if they're different
 
-		return {
+		if ( morphTargetsRelative !== geometry.morphTargetsRelative ) {
 
-			positionAttribute: positionAttribute,
-			normalAttribute: normalAttribute,
-			morphedPositionAttribute: morphedPositionAttribute,
-			morphedNormalAttribute: morphedNormalAttribute
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. .morphTargetsRelative must be consistent throughout all geometries.' );
+			return null;
 
-		};
+		}
+
+		for ( const name in geometry.morphAttributes ) {
+
+			if ( ! morphAttributesUsed.has( name ) ) {
+
+				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '.  .morphAttributes must be consistent throughout all geometries.' );
+				return null;
+
+			}
+
+			if ( morphAttributes[ name ] === undefined ) morphAttributes[ name ] = [];
+
+			morphAttributes[ name ].push( geometry.morphAttributes[ name ] );
+
+		}
+
+		// gather .userData
+
+		mergedGeometry.userData.mergedUserData = mergedGeometry.userData.mergedUserData || [];
+		mergedGeometry.userData.mergedUserData.push( geometry.userData );
+
+		if ( useGroups ) {
+
+			let count;
+
+			if ( isIndexed ) {
+
+				count = geometry.index.count;
+
+			} else if ( geometry.attributes.position !== undefined ) {
+
+				count = geometry.attributes.position.count;
+
+			} else {
+
+				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index ' + i + '. The geometry must have either an index or a position attribute' );
+				return null;
+
+			}
+
+			mergedGeometry.addGroup( offset, count, i );
+
+			offset += count;
+
+		}
 
 	}
+
+	// merge indices
+
+	if ( isIndexed ) {
+
+		let indexOffset = 0;
+		const mergedIndex = [];
+
+		for ( let i = 0; i < geometries.length; ++ i ) {
+
+			const index = geometries[ i ].index;
+
+			for ( let j = 0; j < index.count; ++ j ) {
+
+				mergedIndex.push( index.getX( j ) + indexOffset );
+
+			}
+
+			indexOffset += geometries[ i ].attributes.position.count;
+
+		}
+
+		mergedGeometry.setIndex( mergedIndex );
+
+	}
+
+	// merge attributes
+
+	for ( const name in attributes ) {
+
+		const mergedAttribute = mergeBufferAttributes( attributes[ name ] );
+
+		if ( ! mergedAttribute ) {
+
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed while trying to merge the ' + name + ' attribute.' );
+			return null;
+
+		}
+
+		mergedGeometry.setAttribute( name, mergedAttribute );
+
+	}
+
+	// merge morph attributes
+
+	for ( const name in morphAttributes ) {
+
+		const numMorphTargets = morphAttributes[ name ][ 0 ].length;
+
+		if ( numMorphTargets === 0 ) break;
+
+		mergedGeometry.morphAttributes = mergedGeometry.morphAttributes || {};
+		mergedGeometry.morphAttributes[ name ] = [];
+
+		for ( let i = 0; i < numMorphTargets; ++ i ) {
+
+			const morphAttributesToMerge = [];
+
+			for ( let j = 0; j < morphAttributes[ name ].length; ++ j ) {
+
+				morphAttributesToMerge.push( morphAttributes[ name ][ j ][ i ] );
+
+			}
+
+			const mergedMorphAttribute = mergeBufferAttributes( morphAttributesToMerge );
+
+			if ( ! mergedMorphAttribute ) {
+
+				console.error( 'THREE.BufferGeometryUtils: .mergeBufferGeometries() failed while trying to merge the ' + name + ' morphAttribute.' );
+				return null;
+
+			}
+
+			mergedGeometry.morphAttributes[ name ].push( mergedMorphAttribute );
+
+		}
+
+	}
+
+	return mergedGeometry;
+
+}
+
+/**
+ * @param {Array<BufferAttribute>} attributes
+ * @return {BufferAttribute}
+ */
+function mergeBufferAttributes( attributes ) {
+
+	let TypedArray;
+	let itemSize;
+	let normalized;
+	let arrayLength = 0;
+
+	for ( let i = 0; i < attributes.length; ++ i ) {
+
+		const attribute = attributes[ i ];
+
+		if ( attribute.isInterleavedBufferAttribute ) {
+
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. InterleavedBufferAttributes are not supported.' );
+			return null;
+
+		}
+
+		if ( TypedArray === undefined ) TypedArray = attribute.array.constructor;
+		if ( TypedArray !== attribute.array.constructor ) {
+
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.array must be of consistent array types across matching attributes.' );
+			return null;
+
+		}
+
+		if ( itemSize === undefined ) itemSize = attribute.itemSize;
+		if ( itemSize !== attribute.itemSize ) {
+
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.itemSize must be consistent across matching attributes.' );
+			return null;
+
+		}
+
+		if ( normalized === undefined ) normalized = attribute.normalized;
+		if ( normalized !== attribute.normalized ) {
+
+			console.error( 'THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.normalized must be consistent across matching attributes.' );
+			return null;
+
+		}
+
+		arrayLength += attribute.array.length;
+
+	}
+
+	const array = new TypedArray( arrayLength );
+	let offset = 0;
+
+	for ( let i = 0; i < attributes.length; ++ i ) {
+
+		array.set( attributes[ i ].array, offset );
+
+		offset += attributes[ i ].array.length;
+
+	}
+
+	return new BufferAttribute( array, itemSize, normalized );
 
 }
 
 const IdAttrName = 'expressID';
 const merge = (geoms, createGroups = false) => {
-  return BufferGeometryUtils.mergeBufferGeometries(geoms, createGroups);
+  return mergeBufferGeometries(geoms, createGroups);
 };
 const newFloatAttr = (data, size) => {
   return new BufferAttribute(new Float32Array(data), size);
@@ -67117,6 +67776,12 @@ const PropsNames = {
     related: 'RelatedObjects',
     key: 'hasPsets'
   },
+  materials: {
+    name: IFCRELASSOCIATESMATERIAL,
+    relating: 'RelatingMaterial',
+    related: 'RelatedObjects',
+    key: 'hasMaterial'
+  },
   type: {
     name: IFCRELDEFINESBYTYPE,
     relating: 'RelatingType',
@@ -67125,50 +67790,155 @@ const PropsNames = {
   }
 };
 
+let modelIdCounter = 0;
+const nullIfcManagerErrorMessage = "IfcManager is null!";
+
+class IFCModel extends Mesh {
+
+  constructor() {
+    super(...arguments);
+    this.modelID = modelIdCounter++;
+    this.ifcManager = null;
+    this.mesh = this;
+  }
+
+  setIFCManager(manager) {
+    this.ifcManager = manager;
+  }
+
+  setWasmPath(path) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    this.ifcManager.setWasmPath(path);
+  }
+
+  close(scene) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    this.ifcManager.close(this.modelID, scene);
+  }
+
+  getExpressId(geometry, faceIndex) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getExpressId(geometry, faceIndex);
+  }
+
+  getAllItemsOfType(type, verbose) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getAllItemsOfType(this.modelID, type, verbose);
+  }
+
+  getItemProperties(id, recursive = false) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getItemProperties(this.modelID, id, recursive);
+  }
+
+  getPropertySets(id, recursive = false) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getPropertySets(this.modelID, id, recursive);
+  }
+
+  getTypeProperties(id, recursive = false) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getTypeProperties(this.modelID, id, recursive);
+  }
+
+  getIfcType(id) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getIfcType(this.modelID, id);
+  }
+
+  getSpatialStructure() {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getSpatialStructure(this.modelID);
+  }
+
+  getSubset(material) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    return this.ifcManager.getSubset(this.modelID, material);
+  }
+
+  removeSubset(parent, material) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    this.ifcManager.removeSubset(this.modelID, parent, material);
+  }
+
+  createSubset(config) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    const modelConfig = {
+      ...config,
+      modelID: this.modelID
+    };
+    return this.ifcManager.createSubset(modelConfig);
+  }
+
+  hideItems(ids) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    this.ifcManager.hideItems(this.modelID, ids);
+  }
+
+  hideAllItems() {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    this.ifcManager.hideAllItems(this.modelID);
+  }
+
+  showItems(ids) {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    this.ifcManager.showItems(this.modelID, ids);
+  }
+
+  showAllItems() {
+    if (this.ifcManager === null)
+      throw new Error(nullIfcManagerErrorMessage);
+    this.ifcManager.showAllItems(this.modelID);
+  }
+
+}
+
 class IFCParser {
 
-  constructor(state) {
-    this.currentID = -1;
+  constructor(state, BVH) {
     this.state = state;
+    this.BVH = BVH;
+    this.loadedModels = 0;
+    this.currentWebIfcID = -1;
+    this.currentModelID = -1;
   }
 
   async parse(buffer) {
     if (this.state.api.wasmModule === undefined)
       await this.state.api.Init();
-    this.currentID = this.newIfcModel(buffer);
+    this.newIfcModel(buffer);
+    this.loadedModels++;
     return this.loadAllGeometry();
   }
 
-  initializeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast) {
-    this.computeBoundsTree = computeBoundsTree;
-    this.disposeBoundsTree = disposeBoundsTree;
-    this.acceleratedRaycast = acceleratedRaycast;
-    this.setupThreeMeshBVH();
-  }
-
-  setupThreeMeshBVH() {
-    if (!this.computeBoundsTree || !this.disposeBoundsTree || !this.acceleratedRaycast)
-      return;
-    BufferGeometry.prototype.computeBoundsTree = this.computeBoundsTree;
-    BufferGeometry.prototype.disposeBoundsTree = this.disposeBoundsTree;
-    Mesh.prototype.raycast = this.acceleratedRaycast;
-  }
-
-  applyThreeMeshBVH(geometry) {
-    if (this.computeBoundsTree)
-      geometry.computeBoundsTree();
-  }
+  getAndClearErrors(modelId) {}
 
   newIfcModel(buffer) {
     const data = new Uint8Array(buffer);
-    const modelID = this.state.api.OpenModel(data);
-    this.state.models[modelID] = {
-      modelID,
+    this.currentWebIfcID = this.state.api.OpenModel(data, this.state.webIfcSettings);
+    this.currentModelID = this.state.useJSON ? this.loadedModels : this.currentWebIfcID;
+    this.state.models[this.currentModelID] = {
+      modelID: this.currentModelID,
       mesh: {},
       items: {},
-      types: {}
+      types: {},
+      jsonData: {}
     };
-    return modelID;
   }
 
   loadAllGeometry() {
@@ -67178,15 +67948,15 @@ class IFCParser {
 
   generateAllGeometriesByMaterial() {
     const {geometry, materials} = this.getGeometryAndMaterials();
-    this.applyThreeMeshBVH(geometry);
-    const mesh = new Mesh(geometry, materials);
-    mesh.modelID = this.currentID;
-    this.state.models[this.currentID].mesh = mesh;
+    this.BVH.applyThreeMeshBVH(geometry);
+    const mesh = new IFCModel(geometry, materials);
+    mesh.modelID = this.currentModelID;
+    this.state.models[this.currentModelID].mesh = mesh;
     return mesh;
   }
 
   getGeometryAndMaterials() {
-    const items = this.state.models[this.currentID].items;
+    const items = this.state.models[this.currentModelID].items;
     const mergedByMaterial = [];
     const materials = [];
     for (let materialID in items) {
@@ -67202,7 +67972,7 @@ class IFCParser {
   }
 
   saveAllPlacedGeometriesByMaterial() {
-    const flatMeshes = this.state.api.LoadAllGeometry(this.currentID);
+    const flatMeshes = this.state.api.LoadAllGeometry(this.currentWebIfcID);
     for (let i = 0; i < flatMeshes.size(); i++) {
       const flatMesh = flatMeshes.get(i);
       const placedGeom = flatMesh.geometries;
@@ -67221,7 +67991,7 @@ class IFCParser {
   }
 
   getBufferGeometry(placed) {
-    const geometry = this.state.api.GetGeometry(this.currentID, placed.geometryExpressID);
+    const geometry = this.state.api.GetGeometry(this.currentWebIfcID, placed.geometryExpressID);
     const vertexData = this.getVertices(geometry);
     const indices = this.getIndices(geometry);
     const {vertices, normals} = this.extractVertexData(vertexData);
@@ -67274,12 +68044,11 @@ class IFCParser {
     const colorID = `${color.x}${color.y}${color.z}${color.w}`;
     this.storeGeometryAttribute(id, geom);
     this.createMaterial(colorID, color);
-    const item = this.state.models[this.currentID].items[colorID];
+    const item = this.state.models[this.currentModelID].items[colorID];
     const currentGeom = item.geometries[id];
     if (!currentGeom)
       return (item.geometries[id] = geom);
-    const merged = merge([currentGeom, geom]);
-    item.geometries[id] = merged;
+    item.geometries[id] = merge([currentGeom, geom]);
   }
 
   storeGeometryAttribute(id, geometry) {
@@ -67289,7 +68058,7 @@ class IFCParser {
   }
 
   createMaterial(colorID, color) {
-    const items = this.state.models[this.currentID].items;
+    const items = this.state.models[this.currentModelID].items;
     if (items[colorID])
       return;
     const col = new Color(color.x, color.y, color.z);
@@ -67310,8 +68079,22 @@ class IFCParser {
 
 class SubsetManager {
 
-  constructor(state) {
+  constructor(state, BVH) {
+    this.selected = {};
     this.state = state;
+    this.BVH = BVH;
+  }
+
+  dispose() {
+    this.BVH = null;
+    const items = Object.values(this.selected);
+    items.forEach(item => {
+      const mesh = item.mesh;
+      mesh.geometry.dispose();
+      Array.isArray(mesh.material) ?
+        mesh.material.forEach(mat => mat.dispose()) :
+        mesh.material.dispose();
+    });
     this.selected = {};
   }
 
@@ -67322,12 +68105,12 @@ class SubsetManager {
     return this.selected[currentMat].mesh;
   }
 
-  removeSubset(modelID, scene, material) {
+  removeSubset(modelID, parent, material) {
     const currentMat = this.matIDNoConfig(modelID, material);
     if (!this.selected[currentMat])
       return;
-    if (scene)
-      scene.remove(this.selected[currentMat].mesh);
+    if (parent)
+      parent.remove(this.selected[currentMat].mesh);
     delete this.selected[currentMat];
   }
 
@@ -67345,14 +68128,21 @@ class SubsetManager {
   createSelectionInScene(config) {
     const filtered = this.filter(config);
     const {geomsByMaterial, materials} = this.getGeomAndMat(filtered);
-    const hasDefaultMaterial = this.matID(config) == DEFAULT;
-    const geometry = merge(geomsByMaterial, hasDefaultMaterial);
-    const mats = hasDefaultMaterial ? materials : config.material;
+    const isDefMaterial = this.isDefaultMat(config);
+    const geometry = this.getMergedGeometry(geomsByMaterial, isDefMaterial);
+    const mats = isDefMaterial ? materials : config.material;
+    this.BVH.applyThreeMeshBVH(geometry);
     const mesh = new Mesh(geometry, mats);
     this.selected[this.matID(config)].mesh = mesh;
     mesh.modelID = config.modelID;
     config.scene.add(mesh);
     return mesh;
+  }
+
+  getMergedGeometry(geomsByMaterial, hasDefaultMaterial) {
+    return geomsByMaterial.length > 0
+      ? merge(geomsByMaterial, hasDefaultMaterial)
+      : new BufferGeometry();
   }
 
   isConfigValid(config) {
@@ -67385,11 +68175,11 @@ class SubsetManager {
     };
   }
 
-  updatePreviousSelection(scene, config) {
+  updatePreviousSelection(parent, config) {
     const previous = this.selected[this.matID(config)];
     if (!previous)
       return this.newSelectionGroup(config);
-    scene.remove(previous.mesh);
+    parent.remove(previous.mesh);
     config.removePrevious
       ? (previous.ids = new Set(config.ids))
       : config.ids.forEach((id) => previous.ids.add(id));
@@ -67427,19 +68217,20 @@ class SubsetManager {
   }
 
   filter(config) {
+    const ids = this.selected[this.matID(config)].ids;
     const items = this.state.models[config.modelID].items;
     const filtered = {};
     for (let matID in items) {
       filtered[matID] = {
         material: items[matID].material,
-        geometries: this.filterGeometries(new Set(config.ids), items[matID].geometries)
+        geometries: this.filterGeometries(ids, items[matID].geometries)
       };
     }
     return filtered;
   }
 
   filterGeometries(selectedIDs, geometries) {
-    const ids = Array. from (selectedIDs);
+    const ids = Array.from(selectedIDs);
     return Object.keys(geometries)
       .filter((key) => ids.includes(parseInt(key, 10)))
       .reduce((obj, key) => {
@@ -67452,163 +68243,989 @@ class SubsetManager {
 
   isEasySelection(config) {
     const matID = this.matID(config);
-    const def = this.matIDNoConfig(config.modelID);
-    if (!config.removePrevious && matID != def && this.selected[matID])
+    if (!config.removePrevious && !this.isDefaultMat(config) && this.selected[matID])
       return true;
   }
 
+  isDefaultMat(config) {
+    return this.matIDNoConfig(config.modelID) === this.matID(config);
+  }
+
   matID(config) {
+    let name;
     if (!config.material)
-      return DEFAULT;
-    const name = config.material.uuid || DEFAULT;
-    return name.concat(" - ").concat(config.modelID.toString());
+      name = DEFAULT;
+    else
+      name = config.material.uuid || DEFAULT;
+    return name.concat(' - ').concat(config.modelID.toString());
   }
 
   matIDNoConfig(modelID, material) {
     let name = DEFAULT;
     if (material)
       name = material.uuid;
-    return name.concat(" - ").concat(modelID.toString());
+    return name.concat(' - ').concat(modelID.toString());
   }
 
 }
 
 const IfcElements = {
-  '103090709': 'IFCPROJECT',
-  '4097777520': 'IFCSITE',
-  '4031249490': 'IFCBUILDING',
-  '3124254112': 'IFCBUILDINGSTOREY',
-  '3856911033': 'IFCSPACE',
-  '25142252': 'IFCCONTROLLER',
-  '32344328': 'IFCBOILER',
-  '76236018': 'IFCLAMP',
-  '90941305': 'IFCPUMP',
-  '177149247': 'IFCAIRTERMINALBOX',
-  '182646315': 'IFCFLOWINSTRUMENT',
-  '263784265': 'IFCFURNISHINGELEMENT',
-  '264262732': 'IFCELECTRICGENERATOR',
-  '277319702': 'IFCAUDIOVISUALAPPLIANCE',
-  '310824031': 'IFCPIPEFITTING',
-  '331165859': 'IFCSTAIR',
-  '342316401': 'IFCDUCTFITTING',
-  '377706215': 'IFCMECHANICALFASTENER',
-  '395920057': 'IFCDOOR',
-  '402227799': 'IFCELECTRICMOTOR',
-  '413509423': 'IFCSYSTEMFURNITUREELEMENT',
-  '484807127': 'IFCEVAPORATOR',
-  '486154966': 'IFCWINDOWSTANDARDCASE',
-  '629592764': 'IFCLIGHTFIXTURE',
-  '630975310': 'IFCUNITARYCONTROLELEMENT',
-  '635142910': 'IFCCABLECARRIERFITTING',
-  '639361253': 'IFCCOIL',
-  '647756555': 'IFCFASTENER',
-  '707683696': 'IFCFLOWSTORAGEDEVICE',
-  '738039164': 'IFCPROTECTIVEDEVICE',
-  '753842376': 'IFCBEAM',
-  '812556717': 'IFCTANK',
-  '819412036': 'IFCFILTER',
-  '843113511': 'IFCCOLUMN',
-  '862014818': 'IFCELECTRICDISTRIBUTIONBOARD',
-  '900683007': 'IFCFOOTING',
-  '905975707': 'IFCCOLUMNSTANDARDCASE',
-  '926996030': 'IFCVOIDINGFEATURE',
-  '979691226': 'IFCREINFORCINGBAR',
-  '987401354': 'IFCFLOWSEGMENT',
-  '1003880860': 'IFCELECTRICTIMECONTROL',
-  '1051757585': 'IFCCABLEFITTING',
-  '1052013943': 'IFCDISTRIBUTIONCHAMBERELEMENT',
-  '1062813311': 'IFCDISTRIBUTIONCONTROLELEMENT',
-  '1073191201': 'IFCMEMBER',
-  '1095909175': 'IFCBUILDINGELEMENTPROXY',
-  '1156407060': 'IFCPLATESTANDARDCASE',
-  '1162798199': 'IFCSWITCHINGDEVICE',
-  '1329646415': 'IFCSHADINGDEVICE',
-  '1335981549': 'IFCDISCRETEACCESSORY',
-  '1360408905': 'IFCDUCTSILENCER',
-  '1404847402': 'IFCSTACKTERMINAL',
-  '1426591983': 'IFCFIRESUPPRESSIONTERMINAL',
-  '1437502449': 'IFCMEDICALDEVICE',
-  '1509553395': 'IFCFURNITURE',
-  '1529196076': 'IFCSLAB',
-  '1620046519': 'IFCTRANSPORTELEMENT',
-  '1634111441': 'IFCAIRTERMINAL',
-  '1658829314': 'IFCENERGYCONVERSIONDEVICE',
-  '1677625105': 'IFCCIVILELEMENT',
-  '1687234759': 'IFCPILE',
-  '1904799276': 'IFCELECTRICAPPLIANCE',
-  '1911478936': 'IFCMEMBERSTANDARDCASE',
-  '1945004755': 'IFCDISTRIBUTIONELEMENT',
-  '1973544240': 'IFCCOVERING',
-  '1999602285': 'IFCSPACEHEATER',
-  '2016517767': 'IFCROOF',
-  '2056796094': 'IFCAIRTOAIRHEATRECOVERY',
-  '2058353004': 'IFCFLOWCONTROLLER',
-  '2068733104': 'IFCHUMIDIFIER',
-  '2176052936': 'IFCJUNCTIONBOX',
-  '2188021234': 'IFCFLOWMETER',
-  '2223149337': 'IFCFLOWTERMINAL',
-  '2262370178': 'IFCRAILING',
-  '2272882330': 'IFCCONDENSER',
-  '2295281155': 'IFCPROTECTIVEDEVICETRIPPINGUNIT',
-  '2320036040': 'IFCREINFORCINGMESH',
-  '2347447852': 'IFCTENDONANCHOR',
-  '2391383451': 'IFCVIBRATIONISOLATOR',
-  '2391406946': 'IFCWALL',
-  '2474470126': 'IFCMOTORCONNECTION',
-  '2769231204': 'IFCVIRTUALELEMENT',
-  '2814081492': 'IFCENGINE',
-  '2906023776': 'IFCBEAMSTANDARDCASE',
-  '2938176219': 'IFCBURNER',
-  '2979338954': 'IFCBUILDINGELEMENTPART',
-  '3024970846': 'IFCRAMP',
-  '3026737570': 'IFCTUBEBUNDLE',
-  '3027962421': 'IFCSLABSTANDARDCASE',
-  '3040386961': 'IFCDISTRIBUTIONFLOWELEMENT',
-  '3053780830': 'IFCSANITARYTERMINAL',
-  '3079942009': 'IFCOPENINGSTANDARDCASE',
-  '3087945054': 'IFCALARM',
-  '3101698114': 'IFCSURFACEFEATURE',
-  '3127900445': 'IFCSLABELEMENTEDCASE',
-  '3132237377': 'IFCFLOWMOVINGDEVICE',
-  '3171933400': 'IFCPLATE',
-  '3221913625': 'IFCCOMMUNICATIONSAPPLIANCE',
-  '3242481149': 'IFCDOORSTANDARDCASE',
-  '3283111854': 'IFCRAMPFLIGHT',
-  '3296154744': 'IFCCHIMNEY',
-  '3304561284': 'IFCWINDOW',
-  '3310460725': 'IFCELECTRICFLOWSTORAGEDEVICE',
-  '3319311131': 'IFCHEATEXCHANGER',
-  '3415622556': 'IFCFAN',
-  '3420628829': 'IFCSOLARDEVICE',
-  '3493046030': 'IFCGEOGRAPHICELEMENT',
-  '3495092785': 'IFCCURTAINWALL',
-  '3508470533': 'IFCFLOWTREATMENTDEVICE',
-  '3512223829': 'IFCWALLSTANDARDCASE',
-  '3518393246': 'IFCDUCTSEGMENT',
-  '3571504051': 'IFCCOMPRESSOR',
-  '3588315303': 'IFCOPENINGELEMENT',
-  '3612865200': 'IFCPIPESEGMENT',
-  '3640358203': 'IFCCOOLINGTOWER',
-  '3651124850': 'IFCPROJECTIONELEMENT',
-  '3694346114': 'IFCOUTLET',
-  '3747195512': 'IFCEVAPORATIVECOOLER',
-  '3758799889': 'IFCCABLECARRIERSEGMENT',
-  '3824725483': 'IFCTENDON',
-  '3825984169': 'IFCTRANSFORMER',
-  '3902619387': 'IFCCHILLER',
-  '4074379575': 'IFCDAMPER',
-  '4086658281': 'IFCSENSOR',
-  '4123344466': 'IFCELEMENTASSEMBLY',
-  '4136498852': 'IFCCOOLEDBEAM',
-  '4156078855': 'IFCWALLELEMENTEDCASE',
-  '4175244083': 'IFCINTERCEPTOR',
-  '4207607924': 'IFCVALVE',
-  '4217484030': 'IFCCABLESEGMENT',
-  '4237592921': 'IFCWASTETERMINAL',
-  '4252922144': 'IFCSTAIRFLIGHT',
-  '4278956645': 'IFCFLOWFITTING',
-  '4288193352': 'IFCACTUATOR',
-  '4292641817': 'IFCUNITARYEQUIPMENT'
+  103090709: 'IFCPROJECT',
+  4097777520: 'IFCSITE',
+  4031249490: 'IFCBUILDING',
+  3124254112: 'IFCBUILDINGSTOREY',
+  3856911033: 'IFCSPACE',
+  1674181508: 'IFCANNOTATION',
+  25142252: 'IFCCONTROLLER',
+  32344328: 'IFCBOILER',
+  76236018: 'IFCLAMP',
+  90941305: 'IFCPUMP',
+  177149247: 'IFCAIRTERMINALBOX',
+  182646315: 'IFCFLOWINSTRUMENT',
+  263784265: 'IFCFURNISHINGELEMENT',
+  264262732: 'IFCELECTRICGENERATOR',
+  277319702: 'IFCAUDIOVISUALAPPLIANCE',
+  310824031: 'IFCPIPEFITTING',
+  331165859: 'IFCSTAIR',
+  342316401: 'IFCDUCTFITTING',
+  377706215: 'IFCMECHANICALFASTENER',
+  395920057: 'IFCDOOR',
+  402227799: 'IFCELECTRICMOTOR',
+  413509423: 'IFCSYSTEMFURNITUREELEMENT',
+  484807127: 'IFCEVAPORATOR',
+  486154966: 'IFCWINDOWSTANDARDCASE',
+  629592764: 'IFCLIGHTFIXTURE',
+  630975310: 'IFCUNITARYCONTROLELEMENT',
+  635142910: 'IFCCABLECARRIERFITTING',
+  639361253: 'IFCCOIL',
+  647756555: 'IFCFASTENER',
+  707683696: 'IFCFLOWSTORAGEDEVICE',
+  738039164: 'IFCPROTECTIVEDEVICE',
+  753842376: 'IFCBEAM',
+  812556717: 'IFCTANK',
+  819412036: 'IFCFILTER',
+  843113511: 'IFCCOLUMN',
+  862014818: 'IFCELECTRICDISTRIBUTIONBOARD',
+  900683007: 'IFCFOOTING',
+  905975707: 'IFCCOLUMNSTANDARDCASE',
+  926996030: 'IFCVOIDINGFEATURE',
+  979691226: 'IFCREINFORCINGBAR',
+  987401354: 'IFCFLOWSEGMENT',
+  1003880860: 'IFCELECTRICTIMECONTROL',
+  1051757585: 'IFCCABLEFITTING',
+  1052013943: 'IFCDISTRIBUTIONCHAMBERELEMENT',
+  1062813311: 'IFCDISTRIBUTIONCONTROLELEMENT',
+  1073191201: 'IFCMEMBER',
+  1095909175: 'IFCBUILDINGELEMENTPROXY',
+  1156407060: 'IFCPLATESTANDARDCASE',
+  1162798199: 'IFCSWITCHINGDEVICE',
+  1329646415: 'IFCSHADINGDEVICE',
+  1335981549: 'IFCDISCRETEACCESSORY',
+  1360408905: 'IFCDUCTSILENCER',
+  1404847402: 'IFCSTACKTERMINAL',
+  1426591983: 'IFCFIRESUPPRESSIONTERMINAL',
+  1437502449: 'IFCMEDICALDEVICE',
+  1509553395: 'IFCFURNITURE',
+  1529196076: 'IFCSLAB',
+  1620046519: 'IFCTRANSPORTELEMENT',
+  1634111441: 'IFCAIRTERMINAL',
+  1658829314: 'IFCENERGYCONVERSIONDEVICE',
+  1677625105: 'IFCCIVILELEMENT',
+  1687234759: 'IFCPILE',
+  1904799276: 'IFCELECTRICAPPLIANCE',
+  1911478936: 'IFCMEMBERSTANDARDCASE',
+  1945004755: 'IFCDISTRIBUTIONELEMENT',
+  1973544240: 'IFCCOVERING',
+  1999602285: 'IFCSPACEHEATER',
+  2016517767: 'IFCROOF',
+  2056796094: 'IFCAIRTOAIRHEATRECOVERY',
+  2058353004: 'IFCFLOWCONTROLLER',
+  2068733104: 'IFCHUMIDIFIER',
+  2176052936: 'IFCJUNCTIONBOX',
+  2188021234: 'IFCFLOWMETER',
+  2223149337: 'IFCFLOWTERMINAL',
+  2262370178: 'IFCRAILING',
+  2272882330: 'IFCCONDENSER',
+  2295281155: 'IFCPROTECTIVEDEVICETRIPPINGUNIT',
+  2320036040: 'IFCREINFORCINGMESH',
+  2347447852: 'IFCTENDONANCHOR',
+  2391383451: 'IFCVIBRATIONISOLATOR',
+  2391406946: 'IFCWALL',
+  2474470126: 'IFCMOTORCONNECTION',
+  2769231204: 'IFCVIRTUALELEMENT',
+  2814081492: 'IFCENGINE',
+  2906023776: 'IFCBEAMSTANDARDCASE',
+  2938176219: 'IFCBURNER',
+  2979338954: 'IFCBUILDINGELEMENTPART',
+  3024970846: 'IFCRAMP',
+  3026737570: 'IFCTUBEBUNDLE',
+  3027962421: 'IFCSLABSTANDARDCASE',
+  3040386961: 'IFCDISTRIBUTIONFLOWELEMENT',
+  3053780830: 'IFCSANITARYTERMINAL',
+  3079942009: 'IFCOPENINGSTANDARDCASE',
+  3087945054: 'IFCALARM',
+  3101698114: 'IFCSURFACEFEATURE',
+  3127900445: 'IFCSLABELEMENTEDCASE',
+  3132237377: 'IFCFLOWMOVINGDEVICE',
+  3171933400: 'IFCPLATE',
+  3221913625: 'IFCCOMMUNICATIONSAPPLIANCE',
+  3242481149: 'IFCDOORSTANDARDCASE',
+  3283111854: 'IFCRAMPFLIGHT',
+  3296154744: 'IFCCHIMNEY',
+  3304561284: 'IFCWINDOW',
+  3310460725: 'IFCELECTRICFLOWSTORAGEDEVICE',
+  3319311131: 'IFCHEATEXCHANGER',
+  3415622556: 'IFCFAN',
+  3420628829: 'IFCSOLARDEVICE',
+  3493046030: 'IFCGEOGRAPHICELEMENT',
+  3495092785: 'IFCCURTAINWALL',
+  3508470533: 'IFCFLOWTREATMENTDEVICE',
+  3512223829: 'IFCWALLSTANDARDCASE',
+  3518393246: 'IFCDUCTSEGMENT',
+  3571504051: 'IFCCOMPRESSOR',
+  3588315303: 'IFCOPENINGELEMENT',
+  3612865200: 'IFCPIPESEGMENT',
+  3640358203: 'IFCCOOLINGTOWER',
+  3651124850: 'IFCPROJECTIONELEMENT',
+  3694346114: 'IFCOUTLET',
+  3747195512: 'IFCEVAPORATIVECOOLER',
+  3758799889: 'IFCCABLECARRIERSEGMENT',
+  3824725483: 'IFCTENDON',
+  3825984169: 'IFCTRANSFORMER',
+  3902619387: 'IFCCHILLER',
+  4074379575: 'IFCDAMPER',
+  4086658281: 'IFCSENSOR',
+  4123344466: 'IFCELEMENTASSEMBLY',
+  4136498852: 'IFCCOOLEDBEAM',
+  4156078855: 'IFCWALLELEMENTEDCASE',
+  4175244083: 'IFCINTERCEPTOR',
+  4207607924: 'IFCVALVE',
+  4217484030: 'IFCCABLESEGMENT',
+  4237592921: 'IFCWASTETERMINAL',
+  4252922144: 'IFCSTAIRFLIGHT',
+  4278956645: 'IFCFLOWFITTING',
+  4288193352: 'IFCACTUATOR',
+  4292641817: 'IFCUNITARYEQUIPMENT',
+  3009204131: 'IFCGRID'
+};
+
+const IfcTypesMap = {
+  3821786052: "IFCACTIONREQUEST",
+  2296667514: "IFCACTOR",
+  3630933823: "IFCACTORROLE",
+  4288193352: "IFCACTUATOR",
+  2874132201: "IFCACTUATORTYPE",
+  618182010: "IFCADDRESS",
+  1635779807: "IFCADVANCEDBREP",
+  2603310189: "IFCADVANCEDBREPWITHVOIDS",
+  3406155212: "IFCADVANCEDFACE",
+  1634111441: "IFCAIRTERMINAL",
+  177149247: "IFCAIRTERMINALBOX",
+  1411407467: "IFCAIRTERMINALBOXTYPE",
+  3352864051: "IFCAIRTERMINALTYPE",
+  2056796094: "IFCAIRTOAIRHEATRECOVERY",
+  1871374353: "IFCAIRTOAIRHEATRECOVERYTYPE",
+  3087945054: "IFCALARM",
+  3001207471: "IFCALARMTYPE",
+  325726236: "IFCALIGNMENT",
+  749761778: "IFCALIGNMENT2DHORIZONTAL",
+  3199563722: "IFCALIGNMENT2DHORIZONTALSEGMENT",
+  2483840362: "IFCALIGNMENT2DSEGMENT",
+  3379348081: "IFCALIGNMENT2DVERSEGCIRCULARARC",
+  3239324667: "IFCALIGNMENT2DVERSEGLINE",
+  4263986512: "IFCALIGNMENT2DVERSEGPARABOLICARC",
+  53199957: "IFCALIGNMENT2DVERTICAL",
+  2029264950: "IFCALIGNMENT2DVERTICALSEGMENT",
+  3512275521: "IFCALIGNMENTCURVE",
+  1674181508: "IFCANNOTATION",
+  669184980: "IFCANNOTATIONFILLAREA",
+  639542469: "IFCAPPLICATION",
+  411424972: "IFCAPPLIEDVALUE",
+  130549933: "IFCAPPROVAL",
+  3869604511: "IFCAPPROVALRELATIONSHIP",
+  3798115385: "IFCARBITRARYCLOSEDPROFILEDEF",
+  1310608509: "IFCARBITRARYOPENPROFILEDEF",
+  2705031697: "IFCARBITRARYPROFILEDEFWITHVOIDS",
+  3460190687: "IFCASSET",
+  3207858831: "IFCASYMMETRICISHAPEPROFILEDEF",
+  277319702: "IFCAUDIOVISUALAPPLIANCE",
+  1532957894: "IFCAUDIOVISUALAPPLIANCETYPE",
+  4261334040: "IFCAXIS1PLACEMENT",
+  3125803723: "IFCAXIS2PLACEMENT2D",
+  2740243338: "IFCAXIS2PLACEMENT3D",
+  1967976161: "IFCBSPLINECURVE",
+  2461110595: "IFCBSPLINECURVEWITHKNOTS",
+  2887950389: "IFCBSPLINESURFACE",
+  167062518: "IFCBSPLINESURFACEWITHKNOTS",
+  753842376: "IFCBEAM",
+  2906023776: "IFCBEAMSTANDARDCASE",
+  819618141: "IFCBEAMTYPE",
+  4196446775: "IFCBEARING",
+  3649138523: "IFCBEARINGTYPE",
+  616511568: "IFCBLOBTEXTURE",
+  1334484129: "IFCBLOCK",
+  32344328: "IFCBOILER",
+  231477066: "IFCBOILERTYPE",
+  3649129432: "IFCBOOLEANCLIPPINGRESULT",
+  2736907675: "IFCBOOLEANRESULT",
+  4037036970: "IFCBOUNDARYCONDITION",
+  1136057603: "IFCBOUNDARYCURVE",
+  1560379544: "IFCBOUNDARYEDGECONDITION",
+  3367102660: "IFCBOUNDARYFACECONDITION",
+  1387855156: "IFCBOUNDARYNODECONDITION",
+  2069777674: "IFCBOUNDARYNODECONDITIONWARPING",
+  1260505505: "IFCBOUNDEDCURVE",
+  4182860854: "IFCBOUNDEDSURFACE",
+  2581212453: "IFCBOUNDINGBOX",
+  2713105998: "IFCBOXEDHALFSPACE",
+  644574406: "IFCBRIDGE",
+  963979645: "IFCBRIDGEPART",
+  4031249490: "IFCBUILDING",
+  3299480353: "IFCBUILDINGELEMENT",
+  2979338954: "IFCBUILDINGELEMENTPART",
+  39481116: "IFCBUILDINGELEMENTPARTTYPE",
+  1095909175: "IFCBUILDINGELEMENTPROXY",
+  1909888760: "IFCBUILDINGELEMENTPROXYTYPE",
+  1950629157: "IFCBUILDINGELEMENTTYPE",
+  3124254112: "IFCBUILDINGSTOREY",
+  1177604601: "IFCBUILDINGSYSTEM",
+  2938176219: "IFCBURNER",
+  2188180465: "IFCBURNERTYPE",
+  2898889636: "IFCCSHAPEPROFILEDEF",
+  635142910: "IFCCABLECARRIERFITTING",
+  395041908: "IFCCABLECARRIERFITTINGTYPE",
+  3758799889: "IFCCABLECARRIERSEGMENT",
+  3293546465: "IFCCABLECARRIERSEGMENTTYPE",
+  1051757585: "IFCCABLEFITTING",
+  2674252688: "IFCCABLEFITTINGTYPE",
+  4217484030: "IFCCABLESEGMENT",
+  1285652485: "IFCCABLESEGMENTTYPE",
+  3999819293: "IFCCAISSONFOUNDATION",
+  3203706013: "IFCCAISSONFOUNDATIONTYPE",
+  1123145078: "IFCCARTESIANPOINT",
+  574549367: "IFCCARTESIANPOINTLIST",
+  1675464909: "IFCCARTESIANPOINTLIST2D",
+  2059837836: "IFCCARTESIANPOINTLIST3D",
+  59481748: "IFCCARTESIANTRANSFORMATIONOPERATOR",
+  3749851601: "IFCCARTESIANTRANSFORMATIONOPERATOR2D",
+  3486308946: "IFCCARTESIANTRANSFORMATIONOPERATOR2DNONUNIFORM",
+  3331915920: "IFCCARTESIANTRANSFORMATIONOPERATOR3D",
+  1416205885: "IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM",
+  3150382593: "IFCCENTERLINEPROFILEDEF",
+  3902619387: "IFCCHILLER",
+  2951183804: "IFCCHILLERTYPE",
+  3296154744: "IFCCHIMNEY",
+  2197970202: "IFCCHIMNEYTYPE",
+  2611217952: "IFCCIRCLE",
+  2937912522: "IFCCIRCLEHOLLOWPROFILEDEF",
+  1383045692: "IFCCIRCLEPROFILEDEF",
+  1062206242: "IFCCIRCULARARCSEGMENT2D",
+  1677625105: "IFCCIVILELEMENT",
+  3893394355: "IFCCIVILELEMENTTYPE",
+  747523909: "IFCCLASSIFICATION",
+  647927063: "IFCCLASSIFICATIONREFERENCE",
+  2205249479: "IFCCLOSEDSHELL",
+  639361253: "IFCCOIL",
+  2301859152: "IFCCOILTYPE",
+  776857604: "IFCCOLOURRGB",
+  3285139300: "IFCCOLOURRGBLIST",
+  3264961684: "IFCCOLOURSPECIFICATION",
+  843113511: "IFCCOLUMN",
+  905975707: "IFCCOLUMNSTANDARDCASE",
+  300633059: "IFCCOLUMNTYPE",
+  3221913625: "IFCCOMMUNICATIONSAPPLIANCE",
+  400855858: "IFCCOMMUNICATIONSAPPLIANCETYPE",
+  2542286263: "IFCCOMPLEXPROPERTY",
+  3875453745: "IFCCOMPLEXPROPERTYTEMPLATE",
+  3732776249: "IFCCOMPOSITECURVE",
+  15328376: "IFCCOMPOSITECURVEONSURFACE",
+  2485617015: "IFCCOMPOSITECURVESEGMENT",
+  1485152156: "IFCCOMPOSITEPROFILEDEF",
+  3571504051: "IFCCOMPRESSOR",
+  3850581409: "IFCCOMPRESSORTYPE",
+  2272882330: "IFCCONDENSER",
+  2816379211: "IFCCONDENSERTYPE",
+  2510884976: "IFCCONIC",
+  370225590: "IFCCONNECTEDFACESET",
+  1981873012: "IFCCONNECTIONCURVEGEOMETRY",
+  2859738748: "IFCCONNECTIONGEOMETRY",
+  45288368: "IFCCONNECTIONPOINTECCENTRICITY",
+  2614616156: "IFCCONNECTIONPOINTGEOMETRY",
+  2732653382: "IFCCONNECTIONSURFACEGEOMETRY",
+  775493141: "IFCCONNECTIONVOLUMEGEOMETRY",
+  1959218052: "IFCCONSTRAINT",
+  3898045240: "IFCCONSTRUCTIONEQUIPMENTRESOURCE",
+  2185764099: "IFCCONSTRUCTIONEQUIPMENTRESOURCETYPE",
+  1060000209: "IFCCONSTRUCTIONMATERIALRESOURCE",
+  4105962743: "IFCCONSTRUCTIONMATERIALRESOURCETYPE",
+  488727124: "IFCCONSTRUCTIONPRODUCTRESOURCE",
+  1525564444: "IFCCONSTRUCTIONPRODUCTRESOURCETYPE",
+  2559216714: "IFCCONSTRUCTIONRESOURCE",
+  2574617495: "IFCCONSTRUCTIONRESOURCETYPE",
+  3419103109: "IFCCONTEXT",
+  3050246964: "IFCCONTEXTDEPENDENTUNIT",
+  3293443760: "IFCCONTROL",
+  25142252: "IFCCONTROLLER",
+  578613899: "IFCCONTROLLERTYPE",
+  2889183280: "IFCCONVERSIONBASEDUNIT",
+  2713554722: "IFCCONVERSIONBASEDUNITWITHOFFSET",
+  4136498852: "IFCCOOLEDBEAM",
+  335055490: "IFCCOOLEDBEAMTYPE",
+  3640358203: "IFCCOOLINGTOWER",
+  2954562838: "IFCCOOLINGTOWERTYPE",
+  1785450214: "IFCCOORDINATEOPERATION",
+  1466758467: "IFCCOORDINATEREFERENCESYSTEM",
+  3895139033: "IFCCOSTITEM",
+  1419761937: "IFCCOSTSCHEDULE",
+  602808272: "IFCCOSTVALUE",
+  1973544240: "IFCCOVERING",
+  1916426348: "IFCCOVERINGTYPE",
+  3295246426: "IFCCREWRESOURCE",
+  1815067380: "IFCCREWRESOURCETYPE",
+  2506170314: "IFCCSGPRIMITIVE3D",
+  2147822146: "IFCCSGSOLID",
+  539742890: "IFCCURRENCYRELATIONSHIP",
+  3495092785: "IFCCURTAINWALL",
+  1457835157: "IFCCURTAINWALLTYPE",
+  2601014836: "IFCCURVE",
+  2827736869: "IFCCURVEBOUNDEDPLANE",
+  2629017746: "IFCCURVEBOUNDEDSURFACE",
+  1186437898: "IFCCURVESEGMENT2D",
+  3800577675: "IFCCURVESTYLE",
+  1105321065: "IFCCURVESTYLEFONT",
+  2367409068: "IFCCURVESTYLEFONTANDSCALING",
+  3510044353: "IFCCURVESTYLEFONTPATTERN",
+  1213902940: "IFCCYLINDRICALSURFACE",
+  4074379575: "IFCDAMPER",
+  3961806047: "IFCDAMPERTYPE",
+  3426335179: "IFCDEEPFOUNDATION",
+  1306400036: "IFCDEEPFOUNDATIONTYPE",
+  3632507154: "IFCDERIVEDPROFILEDEF",
+  1765591967: "IFCDERIVEDUNIT",
+  1045800335: "IFCDERIVEDUNITELEMENT",
+  2949456006: "IFCDIMENSIONALEXPONENTS",
+  32440307: "IFCDIRECTION",
+  1335981549: "IFCDISCRETEACCESSORY",
+  2635815018: "IFCDISCRETEACCESSORYTYPE",
+  1945343521: "IFCDISTANCEEXPRESSION",
+  1052013943: "IFCDISTRIBUTIONCHAMBERELEMENT",
+  1599208980: "IFCDISTRIBUTIONCHAMBERELEMENTTYPE",
+  562808652: "IFCDISTRIBUTIONCIRCUIT",
+  1062813311: "IFCDISTRIBUTIONCONTROLELEMENT",
+  2063403501: "IFCDISTRIBUTIONCONTROLELEMENTTYPE",
+  1945004755: "IFCDISTRIBUTIONELEMENT",
+  3256556792: "IFCDISTRIBUTIONELEMENTTYPE",
+  3040386961: "IFCDISTRIBUTIONFLOWELEMENT",
+  3849074793: "IFCDISTRIBUTIONFLOWELEMENTTYPE",
+  3041715199: "IFCDISTRIBUTIONPORT",
+  3205830791: "IFCDISTRIBUTIONSYSTEM",
+  1154170062: "IFCDOCUMENTINFORMATION",
+  770865208: "IFCDOCUMENTINFORMATIONRELATIONSHIP",
+  3732053477: "IFCDOCUMENTREFERENCE",
+  395920057: "IFCDOOR",
+  2963535650: "IFCDOORLININGPROPERTIES",
+  1714330368: "IFCDOORPANELPROPERTIES",
+  3242481149: "IFCDOORSTANDARDCASE",
+  526551008: "IFCDOORSTYLE",
+  2323601079: "IFCDOORTYPE",
+  445594917: "IFCDRAUGHTINGPREDEFINEDCOLOUR",
+  4006246654: "IFCDRAUGHTINGPREDEFINEDCURVEFONT",
+  342316401: "IFCDUCTFITTING",
+  869906466: "IFCDUCTFITTINGTYPE",
+  3518393246: "IFCDUCTSEGMENT",
+  3760055223: "IFCDUCTSEGMENTTYPE",
+  1360408905: "IFCDUCTSILENCER",
+  2030761528: "IFCDUCTSILENCERTYPE",
+  3900360178: "IFCEDGE",
+  476780140: "IFCEDGECURVE",
+  1472233963: "IFCEDGELOOP",
+  1904799276: "IFCELECTRICAPPLIANCE",
+  663422040: "IFCELECTRICAPPLIANCETYPE",
+  862014818: "IFCELECTRICDISTRIBUTIONBOARD",
+  2417008758: "IFCELECTRICDISTRIBUTIONBOARDTYPE",
+  3310460725: "IFCELECTRICFLOWSTORAGEDEVICE",
+  3277789161: "IFCELECTRICFLOWSTORAGEDEVICETYPE",
+  264262732: "IFCELECTRICGENERATOR",
+  1534661035: "IFCELECTRICGENERATORTYPE",
+  402227799: "IFCELECTRICMOTOR",
+  1217240411: "IFCELECTRICMOTORTYPE",
+  1003880860: "IFCELECTRICTIMECONTROL",
+  712377611: "IFCELECTRICTIMECONTROLTYPE",
+  1758889154: "IFCELEMENT",
+  4123344466: "IFCELEMENTASSEMBLY",
+  2397081782: "IFCELEMENTASSEMBLYTYPE",
+  1623761950: "IFCELEMENTCOMPONENT",
+  2590856083: "IFCELEMENTCOMPONENTTYPE",
+  1883228015: "IFCELEMENTQUANTITY",
+  339256511: "IFCELEMENTTYPE",
+  2777663545: "IFCELEMENTARYSURFACE",
+  1704287377: "IFCELLIPSE",
+  2835456948: "IFCELLIPSEPROFILEDEF",
+  1658829314: "IFCENERGYCONVERSIONDEVICE",
+  2107101300: "IFCENERGYCONVERSIONDEVICETYPE",
+  2814081492: "IFCENGINE",
+  132023988: "IFCENGINETYPE",
+  3747195512: "IFCEVAPORATIVECOOLER",
+  3174744832: "IFCEVAPORATIVECOOLERTYPE",
+  484807127: "IFCEVAPORATOR",
+  3390157468: "IFCEVAPORATORTYPE",
+  4148101412: "IFCEVENT",
+  211053100: "IFCEVENTTIME",
+  4024345920: "IFCEVENTTYPE",
+  297599258: "IFCEXTENDEDPROPERTIES",
+  4294318154: "IFCEXTERNALINFORMATION",
+  3200245327: "IFCEXTERNALREFERENCE",
+  1437805879: "IFCEXTERNALREFERENCERELATIONSHIP",
+  1209101575: "IFCEXTERNALSPATIALELEMENT",
+  2853485674: "IFCEXTERNALSPATIALSTRUCTUREELEMENT",
+  2242383968: "IFCEXTERNALLYDEFINEDHATCHSTYLE",
+  1040185647: "IFCEXTERNALLYDEFINEDSURFACESTYLE",
+  3548104201: "IFCEXTERNALLYDEFINEDTEXTFONT",
+  477187591: "IFCEXTRUDEDAREASOLID",
+  2804161546: "IFCEXTRUDEDAREASOLIDTAPERED",
+  2556980723: "IFCFACE",
+  2047409740: "IFCFACEBASEDSURFACEMODEL",
+  1809719519: "IFCFACEBOUND",
+  803316827: "IFCFACEOUTERBOUND",
+  3008276851: "IFCFACESURFACE",
+  807026263: "IFCFACETEDBREP",
+  3737207727: "IFCFACETEDBREPWITHVOIDS",
+  24185140: "IFCFACILITY",
+  1310830890: "IFCFACILITYPART",
+  4219587988: "IFCFAILURECONNECTIONCONDITION",
+  3415622556: "IFCFAN",
+  346874300: "IFCFANTYPE",
+  647756555: "IFCFASTENER",
+  2489546625: "IFCFASTENERTYPE",
+  2827207264: "IFCFEATUREELEMENT",
+  2143335405: "IFCFEATUREELEMENTADDITION",
+  1287392070: "IFCFEATUREELEMENTSUBTRACTION",
+  738692330: "IFCFILLAREASTYLE",
+  374418227: "IFCFILLAREASTYLEHATCHING",
+  315944413: "IFCFILLAREASTYLETILES",
+  819412036: "IFCFILTER",
+  1810631287: "IFCFILTERTYPE",
+  1426591983: "IFCFIRESUPPRESSIONTERMINAL",
+  4222183408: "IFCFIRESUPPRESSIONTERMINALTYPE",
+  2652556860: "IFCFIXEDREFERENCESWEPTAREASOLID",
+  2058353004: "IFCFLOWCONTROLLER",
+  3907093117: "IFCFLOWCONTROLLERTYPE",
+  4278956645: "IFCFLOWFITTING",
+  3198132628: "IFCFLOWFITTINGTYPE",
+  182646315: "IFCFLOWINSTRUMENT",
+  4037862832: "IFCFLOWINSTRUMENTTYPE",
+  2188021234: "IFCFLOWMETER",
+  3815607619: "IFCFLOWMETERTYPE",
+  3132237377: "IFCFLOWMOVINGDEVICE",
+  1482959167: "IFCFLOWMOVINGDEVICETYPE",
+  987401354: "IFCFLOWSEGMENT",
+  1834744321: "IFCFLOWSEGMENTTYPE",
+  707683696: "IFCFLOWSTORAGEDEVICE",
+  1339347760: "IFCFLOWSTORAGEDEVICETYPE",
+  2223149337: "IFCFLOWTERMINAL",
+  2297155007: "IFCFLOWTERMINALTYPE",
+  3508470533: "IFCFLOWTREATMENTDEVICE",
+  3009222698: "IFCFLOWTREATMENTDEVICETYPE",
+  900683007: "IFCFOOTING",
+  1893162501: "IFCFOOTINGTYPE",
+  263784265: "IFCFURNISHINGELEMENT",
+  4238390223: "IFCFURNISHINGELEMENTTYPE",
+  1509553395: "IFCFURNITURE",
+  1268542332: "IFCFURNITURETYPE",
+  3493046030: "IFCGEOGRAPHICELEMENT",
+  4095422895: "IFCGEOGRAPHICELEMENTTYPE",
+  987898635: "IFCGEOMETRICCURVESET",
+  3448662350: "IFCGEOMETRICREPRESENTATIONCONTEXT",
+  2453401579: "IFCGEOMETRICREPRESENTATIONITEM",
+  4142052618: "IFCGEOMETRICREPRESENTATIONSUBCONTEXT",
+  3590301190: "IFCGEOMETRICSET",
+  3009204131: "IFCGRID",
+  852622518: "IFCGRIDAXIS",
+  178086475: "IFCGRIDPLACEMENT",
+  2706460486: "IFCGROUP",
+  812098782: "IFCHALFSPACESOLID",
+  3319311131: "IFCHEATEXCHANGER",
+  1251058090: "IFCHEATEXCHANGERTYPE",
+  2068733104: "IFCHUMIDIFIER",
+  1806887404: "IFCHUMIDIFIERTYPE",
+  1484403080: "IFCISHAPEPROFILEDEF",
+  3905492369: "IFCIMAGETEXTURE",
+  3570813810: "IFCINDEXEDCOLOURMAP",
+  2571569899: "IFCINDEXEDPOLYCURVE",
+  178912537: "IFCINDEXEDPOLYGONALFACE",
+  2294589976: "IFCINDEXEDPOLYGONALFACEWITHVOIDS",
+  1437953363: "IFCINDEXEDTEXTUREMAP",
+  2133299955: "IFCINDEXEDTRIANGLETEXTUREMAP",
+  4175244083: "IFCINTERCEPTOR",
+  3946677679: "IFCINTERCEPTORTYPE",
+  3113134337: "IFCINTERSECTIONCURVE",
+  2391368822: "IFCINVENTORY",
+  3741457305: "IFCIRREGULARTIMESERIES",
+  3020489413: "IFCIRREGULARTIMESERIESVALUE",
+  2176052936: "IFCJUNCTIONBOX",
+  4288270099: "IFCJUNCTIONBOXTYPE",
+  572779678: "IFCLSHAPEPROFILEDEF",
+  3827777499: "IFCLABORRESOURCE",
+  428585644: "IFCLABORRESOURCETYPE",
+  1585845231: "IFCLAGTIME",
+  76236018: "IFCLAMP",
+  1051575348: "IFCLAMPTYPE",
+  2655187982: "IFCLIBRARYINFORMATION",
+  3452421091: "IFCLIBRARYREFERENCE",
+  4162380809: "IFCLIGHTDISTRIBUTIONDATA",
+  629592764: "IFCLIGHTFIXTURE",
+  1161773419: "IFCLIGHTFIXTURETYPE",
+  1566485204: "IFCLIGHTINTENSITYDISTRIBUTION",
+  1402838566: "IFCLIGHTSOURCE",
+  125510826: "IFCLIGHTSOURCEAMBIENT",
+  2604431987: "IFCLIGHTSOURCEDIRECTIONAL",
+  4266656042: "IFCLIGHTSOURCEGONIOMETRIC",
+  1520743889: "IFCLIGHTSOURCEPOSITIONAL",
+  3422422726: "IFCLIGHTSOURCESPOT",
+  1281925730: "IFCLINE",
+  3092502836: "IFCLINESEGMENT2D",
+  388784114: "IFCLINEARPLACEMENT",
+  1154579445: "IFCLINEARPOSITIONINGELEMENT",
+  2624227202: "IFCLOCALPLACEMENT",
+  1008929658: "IFCLOOP",
+  1425443689: "IFCMANIFOLDSOLIDBREP",
+  3057273783: "IFCMAPCONVERSION",
+  2347385850: "IFCMAPPEDITEM",
+  1838606355: "IFCMATERIAL",
+  1847130766: "IFCMATERIALCLASSIFICATIONRELATIONSHIP",
+  3708119000: "IFCMATERIALCONSTITUENT",
+  2852063980: "IFCMATERIALCONSTITUENTSET",
+  760658860: "IFCMATERIALDEFINITION",
+  2022407955: "IFCMATERIALDEFINITIONREPRESENTATION",
+  248100487: "IFCMATERIALLAYER",
+  3303938423: "IFCMATERIALLAYERSET",
+  1303795690: "IFCMATERIALLAYERSETUSAGE",
+  1847252529: "IFCMATERIALLAYERWITHOFFSETS",
+  2199411900: "IFCMATERIALLIST",
+  2235152071: "IFCMATERIALPROFILE",
+  164193824: "IFCMATERIALPROFILESET",
+  3079605661: "IFCMATERIALPROFILESETUSAGE",
+  3404854881: "IFCMATERIALPROFILESETUSAGETAPERING",
+  552965576: "IFCMATERIALPROFILEWITHOFFSETS",
+  3265635763: "IFCMATERIALPROPERTIES",
+  853536259: "IFCMATERIALRELATIONSHIP",
+  1507914824: "IFCMATERIALUSAGEDEFINITION",
+  2597039031: "IFCMEASUREWITHUNIT",
+  377706215: "IFCMECHANICALFASTENER",
+  2108223431: "IFCMECHANICALFASTENERTYPE",
+  1437502449: "IFCMEDICALDEVICE",
+  1114901282: "IFCMEDICALDEVICETYPE",
+  1073191201: "IFCMEMBER",
+  1911478936: "IFCMEMBERSTANDARDCASE",
+  3181161470: "IFCMEMBERTYPE",
+  3368373690: "IFCMETRIC",
+  2998442950: "IFCMIRROREDPROFILEDEF",
+  2706619895: "IFCMONETARYUNIT",
+  2474470126: "IFCMOTORCONNECTION",
+  977012517: "IFCMOTORCONNECTIONTYPE",
+  1918398963: "IFCNAMEDUNIT",
+  3888040117: "IFCOBJECT",
+  219451334: "IFCOBJECTDEFINITION",
+  3701648758: "IFCOBJECTPLACEMENT",
+  2251480897: "IFCOBJECTIVE",
+  4143007308: "IFCOCCUPANT",
+  590820931: "IFCOFFSETCURVE",
+  3388369263: "IFCOFFSETCURVE2D",
+  3505215534: "IFCOFFSETCURVE3D",
+  2485787929: "IFCOFFSETCURVEBYDISTANCES",
+  2665983363: "IFCOPENSHELL",
+  3588315303: "IFCOPENINGELEMENT",
+  3079942009: "IFCOPENINGSTANDARDCASE",
+  4251960020: "IFCORGANIZATION",
+  1411181986: "IFCORGANIZATIONRELATIONSHIP",
+  643959842: "IFCORIENTATIONEXPRESSION",
+  1029017970: "IFCORIENTEDEDGE",
+  144952367: "IFCOUTERBOUNDARYCURVE",
+  3694346114: "IFCOUTLET",
+  2837617999: "IFCOUTLETTYPE",
+  1207048766: "IFCOWNERHISTORY",
+  2529465313: "IFCPARAMETERIZEDPROFILEDEF",
+  2519244187: "IFCPATH",
+  1682466193: "IFCPCURVE",
+  2382730787: "IFCPERFORMANCEHISTORY",
+  3566463478: "IFCPERMEABLECOVERINGPROPERTIES",
+  3327091369: "IFCPERMIT",
+  2077209135: "IFCPERSON",
+  101040310: "IFCPERSONANDORGANIZATION",
+  3021840470: "IFCPHYSICALCOMPLEXQUANTITY",
+  2483315170: "IFCPHYSICALQUANTITY",
+  2226359599: "IFCPHYSICALSIMPLEQUANTITY",
+  1687234759: "IFCPILE",
+  1158309216: "IFCPILETYPE",
+  310824031: "IFCPIPEFITTING",
+  804291784: "IFCPIPEFITTINGTYPE",
+  3612865200: "IFCPIPESEGMENT",
+  4231323485: "IFCPIPESEGMENTTYPE",
+  597895409: "IFCPIXELTEXTURE",
+  2004835150: "IFCPLACEMENT",
+  603570806: "IFCPLANARBOX",
+  1663979128: "IFCPLANAREXTENT",
+  220341763: "IFCPLANE",
+  3171933400: "IFCPLATE",
+  1156407060: "IFCPLATESTANDARDCASE",
+  4017108033: "IFCPLATETYPE",
+  2067069095: "IFCPOINT",
+  4022376103: "IFCPOINTONCURVE",
+  1423911732: "IFCPOINTONSURFACE",
+  2924175390: "IFCPOLYLOOP",
+  2775532180: "IFCPOLYGONALBOUNDEDHALFSPACE",
+  2839578677: "IFCPOLYGONALFACESET",
+  3724593414: "IFCPOLYLINE",
+  3740093272: "IFCPORT",
+  1946335990: "IFCPOSITIONINGELEMENT",
+  3355820592: "IFCPOSTALADDRESS",
+  759155922: "IFCPREDEFINEDCOLOUR",
+  2559016684: "IFCPREDEFINEDCURVEFONT",
+  3727388367: "IFCPREDEFINEDITEM",
+  3778827333: "IFCPREDEFINEDPROPERTIES",
+  3967405729: "IFCPREDEFINEDPROPERTYSET",
+  1775413392: "IFCPREDEFINEDTEXTFONT",
+  677532197: "IFCPRESENTATIONITEM",
+  2022622350: "IFCPRESENTATIONLAYERASSIGNMENT",
+  1304840413: "IFCPRESENTATIONLAYERWITHSTYLE",
+  3119450353: "IFCPRESENTATIONSTYLE",
+  2417041796: "IFCPRESENTATIONSTYLEASSIGNMENT",
+  2744685151: "IFCPROCEDURE",
+  569719735: "IFCPROCEDURETYPE",
+  2945172077: "IFCPROCESS",
+  4208778838: "IFCPRODUCT",
+  673634403: "IFCPRODUCTDEFINITIONSHAPE",
+  2095639259: "IFCPRODUCTREPRESENTATION",
+  3958567839: "IFCPROFILEDEF",
+  2802850158: "IFCPROFILEPROPERTIES",
+  103090709: "IFCPROJECT",
+  653396225: "IFCPROJECTLIBRARY",
+  2904328755: "IFCPROJECTORDER",
+  3843373140: "IFCPROJECTEDCRS",
+  3651124850: "IFCPROJECTIONELEMENT",
+  2598011224: "IFCPROPERTY",
+  986844984: "IFCPROPERTYABSTRACTION",
+  871118103: "IFCPROPERTYBOUNDEDVALUE",
+  1680319473: "IFCPROPERTYDEFINITION",
+  148025276: "IFCPROPERTYDEPENDENCYRELATIONSHIP",
+  4166981789: "IFCPROPERTYENUMERATEDVALUE",
+  3710013099: "IFCPROPERTYENUMERATION",
+  2752243245: "IFCPROPERTYLISTVALUE",
+  941946838: "IFCPROPERTYREFERENCEVALUE",
+  1451395588: "IFCPROPERTYSET",
+  3357820518: "IFCPROPERTYSETDEFINITION",
+  492091185: "IFCPROPERTYSETTEMPLATE",
+  3650150729: "IFCPROPERTYSINGLEVALUE",
+  110355661: "IFCPROPERTYTABLEVALUE",
+  3521284610: "IFCPROPERTYTEMPLATE",
+  1482703590: "IFCPROPERTYTEMPLATEDEFINITION",
+  738039164: "IFCPROTECTIVEDEVICE",
+  2295281155: "IFCPROTECTIVEDEVICETRIPPINGUNIT",
+  655969474: "IFCPROTECTIVEDEVICETRIPPINGUNITTYPE",
+  1842657554: "IFCPROTECTIVEDEVICETYPE",
+  3219374653: "IFCPROXY",
+  90941305: "IFCPUMP",
+  2250791053: "IFCPUMPTYPE",
+  2044713172: "IFCQUANTITYAREA",
+  2093928680: "IFCQUANTITYCOUNT",
+  931644368: "IFCQUANTITYLENGTH",
+  2090586900: "IFCQUANTITYSET",
+  3252649465: "IFCQUANTITYTIME",
+  2405470396: "IFCQUANTITYVOLUME",
+  825690147: "IFCQUANTITYWEIGHT",
+  2262370178: "IFCRAILING",
+  2893384427: "IFCRAILINGTYPE",
+  3024970846: "IFCRAMP",
+  3283111854: "IFCRAMPFLIGHT",
+  2324767716: "IFCRAMPFLIGHTTYPE",
+  1469900589: "IFCRAMPTYPE",
+  1232101972: "IFCRATIONALBSPLINECURVEWITHKNOTS",
+  683857671: "IFCRATIONALBSPLINESURFACEWITHKNOTS",
+  2770003689: "IFCRECTANGLEHOLLOWPROFILEDEF",
+  3615266464: "IFCRECTANGLEPROFILEDEF",
+  2798486643: "IFCRECTANGULARPYRAMID",
+  3454111270: "IFCRECTANGULARTRIMMEDSURFACE",
+  3915482550: "IFCRECURRENCEPATTERN",
+  2433181523: "IFCREFERENCE",
+  4021432810: "IFCREFERENT",
+  3413951693: "IFCREGULARTIMESERIES",
+  1580146022: "IFCREINFORCEMENTBARPROPERTIES",
+  3765753017: "IFCREINFORCEMENTDEFINITIONPROPERTIES",
+  979691226: "IFCREINFORCINGBAR",
+  2572171363: "IFCREINFORCINGBARTYPE",
+  3027567501: "IFCREINFORCINGELEMENT",
+  964333572: "IFCREINFORCINGELEMENTTYPE",
+  2320036040: "IFCREINFORCINGMESH",
+  2310774935: "IFCREINFORCINGMESHTYPE",
+  160246688: "IFCRELAGGREGATES",
+  3939117080: "IFCRELASSIGNS",
+  1683148259: "IFCRELASSIGNSTOACTOR",
+  2495723537: "IFCRELASSIGNSTOCONTROL",
+  1307041759: "IFCRELASSIGNSTOGROUP",
+  1027710054: "IFCRELASSIGNSTOGROUPBYFACTOR",
+  4278684876: "IFCRELASSIGNSTOPROCESS",
+  2857406711: "IFCRELASSIGNSTOPRODUCT",
+  205026976: "IFCRELASSIGNSTORESOURCE",
+  1865459582: "IFCRELASSOCIATES",
+  4095574036: "IFCRELASSOCIATESAPPROVAL",
+  919958153: "IFCRELASSOCIATESCLASSIFICATION",
+  2728634034: "IFCRELASSOCIATESCONSTRAINT",
+  982818633: "IFCRELASSOCIATESDOCUMENT",
+  3840914261: "IFCRELASSOCIATESLIBRARY",
+  2655215786: "IFCRELASSOCIATESMATERIAL",
+  826625072: "IFCRELCONNECTS",
+  1204542856: "IFCRELCONNECTSELEMENTS",
+  3945020480: "IFCRELCONNECTSPATHELEMENTS",
+  4201705270: "IFCRELCONNECTSPORTTOELEMENT",
+  3190031847: "IFCRELCONNECTSPORTS",
+  2127690289: "IFCRELCONNECTSSTRUCTURALACTIVITY",
+  1638771189: "IFCRELCONNECTSSTRUCTURALMEMBER",
+  504942748: "IFCRELCONNECTSWITHECCENTRICITY",
+  3678494232: "IFCRELCONNECTSWITHREALIZINGELEMENTS",
+  3242617779: "IFCRELCONTAINEDINSPATIALSTRUCTURE",
+  886880790: "IFCRELCOVERSBLDGELEMENTS",
+  2802773753: "IFCRELCOVERSSPACES",
+  2565941209: "IFCRELDECLARES",
+  2551354335: "IFCRELDECOMPOSES",
+  693640335: "IFCRELDEFINES",
+  1462361463: "IFCRELDEFINESBYOBJECT",
+  4186316022: "IFCRELDEFINESBYPROPERTIES",
+  307848117: "IFCRELDEFINESBYTEMPLATE",
+  781010003: "IFCRELDEFINESBYTYPE",
+  3940055652: "IFCRELFILLSELEMENT",
+  279856033: "IFCRELFLOWCONTROLELEMENTS",
+  427948657: "IFCRELINTERFERESELEMENTS",
+  3268803585: "IFCRELNESTS",
+  1441486842: "IFCRELPOSITIONS",
+  750771296: "IFCRELPROJECTSELEMENT",
+  1245217292: "IFCRELREFERENCEDINSPATIALSTRUCTURE",
+  4122056220: "IFCRELSEQUENCE",
+  366585022: "IFCRELSERVICESBUILDINGS",
+  3451746338: "IFCRELSPACEBOUNDARY",
+  3523091289: "IFCRELSPACEBOUNDARY1STLEVEL",
+  1521410863: "IFCRELSPACEBOUNDARY2NDLEVEL",
+  1401173127: "IFCRELVOIDSELEMENT",
+  478536968: "IFCRELATIONSHIP",
+  816062949: "IFCREPARAMETRISEDCOMPOSITECURVESEGMENT",
+  1076942058: "IFCREPRESENTATION",
+  3377609919: "IFCREPRESENTATIONCONTEXT",
+  3008791417: "IFCREPRESENTATIONITEM",
+  1660063152: "IFCREPRESENTATIONMAP",
+  2914609552: "IFCRESOURCE",
+  2943643501: "IFCRESOURCEAPPROVALRELATIONSHIP",
+  1608871552: "IFCRESOURCECONSTRAINTRELATIONSHIP",
+  2439245199: "IFCRESOURCELEVELRELATIONSHIP",
+  1042787934: "IFCRESOURCETIME",
+  1856042241: "IFCREVOLVEDAREASOLID",
+  3243963512: "IFCREVOLVEDAREASOLIDTAPERED",
+  4158566097: "IFCRIGHTCIRCULARCONE",
+  3626867408: "IFCRIGHTCIRCULARCYLINDER",
+  2016517767: "IFCROOF",
+  2781568857: "IFCROOFTYPE",
+  2341007311: "IFCROOT",
+  2778083089: "IFCROUNDEDRECTANGLEPROFILEDEF",
+  448429030: "IFCSIUNIT",
+  3053780830: "IFCSANITARYTERMINAL",
+  1768891740: "IFCSANITARYTERMINALTYPE",
+  1054537805: "IFCSCHEDULINGTIME",
+  2157484638: "IFCSEAMCURVE",
+  2042790032: "IFCSECTIONPROPERTIES",
+  4165799628: "IFCSECTIONREINFORCEMENTPROPERTIES",
+  1862484736: "IFCSECTIONEDSOLID",
+  1290935644: "IFCSECTIONEDSOLIDHORIZONTAL",
+  1509187699: "IFCSECTIONEDSPINE",
+  4086658281: "IFCSENSOR",
+  1783015770: "IFCSENSORTYPE",
+  1329646415: "IFCSHADINGDEVICE",
+  4074543187: "IFCSHADINGDEVICETYPE",
+  867548509: "IFCSHAPEASPECT",
+  3982875396: "IFCSHAPEMODEL",
+  4240577450: "IFCSHAPEREPRESENTATION",
+  4124623270: "IFCSHELLBASEDSURFACEMODEL",
+  3692461612: "IFCSIMPLEPROPERTY",
+  3663146110: "IFCSIMPLEPROPERTYTEMPLATE",
+  4097777520: "IFCSITE",
+  1529196076: "IFCSLAB",
+  3127900445: "IFCSLABELEMENTEDCASE",
+  3027962421: "IFCSLABSTANDARDCASE",
+  2533589738: "IFCSLABTYPE",
+  2609359061: "IFCSLIPPAGECONNECTIONCONDITION",
+  3420628829: "IFCSOLARDEVICE",
+  1072016465: "IFCSOLARDEVICETYPE",
+  723233188: "IFCSOLIDMODEL",
+  3856911033: "IFCSPACE",
+  1999602285: "IFCSPACEHEATER",
+  1305183839: "IFCSPACEHEATERTYPE",
+  3812236995: "IFCSPACETYPE",
+  1412071761: "IFCSPATIALELEMENT",
+  710998568: "IFCSPATIALELEMENTTYPE",
+  2706606064: "IFCSPATIALSTRUCTUREELEMENT",
+  3893378262: "IFCSPATIALSTRUCTUREELEMENTTYPE",
+  463610769: "IFCSPATIALZONE",
+  2481509218: "IFCSPATIALZONETYPE",
+  451544542: "IFCSPHERE",
+  4015995234: "IFCSPHERICALSURFACE",
+  1404847402: "IFCSTACKTERMINAL",
+  3112655638: "IFCSTACKTERMINALTYPE",
+  331165859: "IFCSTAIR",
+  4252922144: "IFCSTAIRFLIGHT",
+  1039846685: "IFCSTAIRFLIGHTTYPE",
+  338393293: "IFCSTAIRTYPE",
+  682877961: "IFCSTRUCTURALACTION",
+  3544373492: "IFCSTRUCTURALACTIVITY",
+  2515109513: "IFCSTRUCTURALANALYSISMODEL",
+  1179482911: "IFCSTRUCTURALCONNECTION",
+  2273995522: "IFCSTRUCTURALCONNECTIONCONDITION",
+  1004757350: "IFCSTRUCTURALCURVEACTION",
+  4243806635: "IFCSTRUCTURALCURVECONNECTION",
+  214636428: "IFCSTRUCTURALCURVEMEMBER",
+  2445595289: "IFCSTRUCTURALCURVEMEMBERVARYING",
+  2757150158: "IFCSTRUCTURALCURVEREACTION",
+  3136571912: "IFCSTRUCTURALITEM",
+  1807405624: "IFCSTRUCTURALLINEARACTION",
+  2162789131: "IFCSTRUCTURALLOAD",
+  385403989: "IFCSTRUCTURALLOADCASE",
+  3478079324: "IFCSTRUCTURALLOADCONFIGURATION",
+  1252848954: "IFCSTRUCTURALLOADGROUP",
+  1595516126: "IFCSTRUCTURALLOADLINEARFORCE",
+  609421318: "IFCSTRUCTURALLOADORRESULT",
+  2668620305: "IFCSTRUCTURALLOADPLANARFORCE",
+  2473145415: "IFCSTRUCTURALLOADSINGLEDISPLACEMENT",
+  1973038258: "IFCSTRUCTURALLOADSINGLEDISPLACEMENTDISTORTION",
+  1597423693: "IFCSTRUCTURALLOADSINGLEFORCE",
+  1190533807: "IFCSTRUCTURALLOADSINGLEFORCEWARPING",
+  2525727697: "IFCSTRUCTURALLOADSTATIC",
+  3408363356: "IFCSTRUCTURALLOADTEMPERATURE",
+  530289379: "IFCSTRUCTURALMEMBER",
+  1621171031: "IFCSTRUCTURALPLANARACTION",
+  2082059205: "IFCSTRUCTURALPOINTACTION",
+  734778138: "IFCSTRUCTURALPOINTCONNECTION",
+  1235345126: "IFCSTRUCTURALPOINTREACTION",
+  3689010777: "IFCSTRUCTURALREACTION",
+  2986769608: "IFCSTRUCTURALRESULTGROUP",
+  3657597509: "IFCSTRUCTURALSURFACEACTION",
+  1975003073: "IFCSTRUCTURALSURFACECONNECTION",
+  3979015343: "IFCSTRUCTURALSURFACEMEMBER",
+  2218152070: "IFCSTRUCTURALSURFACEMEMBERVARYING",
+  603775116: "IFCSTRUCTURALSURFACEREACTION",
+  2830218821: "IFCSTYLEMODEL",
+  3958052878: "IFCSTYLEDITEM",
+  3049322572: "IFCSTYLEDREPRESENTATION",
+  148013059: "IFCSUBCONTRACTRESOURCE",
+  4095615324: "IFCSUBCONTRACTRESOURCETYPE",
+  2233826070: "IFCSUBEDGE",
+  2513912981: "IFCSURFACE",
+  699246055: "IFCSURFACECURVE",
+  2028607225: "IFCSURFACECURVESWEPTAREASOLID",
+  3101698114: "IFCSURFACEFEATURE",
+  2809605785: "IFCSURFACEOFLINEAREXTRUSION",
+  4124788165: "IFCSURFACEOFREVOLUTION",
+  2934153892: "IFCSURFACEREINFORCEMENTAREA",
+  1300840506: "IFCSURFACESTYLE",
+  3303107099: "IFCSURFACESTYLELIGHTING",
+  1607154358: "IFCSURFACESTYLEREFRACTION",
+  1878645084: "IFCSURFACESTYLERENDERING",
+  846575682: "IFCSURFACESTYLESHADING",
+  1351298697: "IFCSURFACESTYLEWITHTEXTURES",
+  626085974: "IFCSURFACETEXTURE",
+  2247615214: "IFCSWEPTAREASOLID",
+  1260650574: "IFCSWEPTDISKSOLID",
+  1096409881: "IFCSWEPTDISKSOLIDPOLYGONAL",
+  230924584: "IFCSWEPTSURFACE",
+  1162798199: "IFCSWITCHINGDEVICE",
+  2315554128: "IFCSWITCHINGDEVICETYPE",
+  2254336722: "IFCSYSTEM",
+  413509423: "IFCSYSTEMFURNITUREELEMENT",
+  1580310250: "IFCSYSTEMFURNITUREELEMENTTYPE",
+  3071757647: "IFCTSHAPEPROFILEDEF",
+  985171141: "IFCTABLE",
+  2043862942: "IFCTABLECOLUMN",
+  531007025: "IFCTABLEROW",
+  812556717: "IFCTANK",
+  5716631: "IFCTANKTYPE",
+  3473067441: "IFCTASK",
+  1549132990: "IFCTASKTIME",
+  2771591690: "IFCTASKTIMERECURRING",
+  3206491090: "IFCTASKTYPE",
+  912023232: "IFCTELECOMADDRESS",
+  3824725483: "IFCTENDON",
+  2347447852: "IFCTENDONANCHOR",
+  3081323446: "IFCTENDONANCHORTYPE",
+  3663046924: "IFCTENDONCONDUIT",
+  2281632017: "IFCTENDONCONDUITTYPE",
+  2415094496: "IFCTENDONTYPE",
+  2387106220: "IFCTESSELLATEDFACESET",
+  901063453: "IFCTESSELLATEDITEM",
+  4282788508: "IFCTEXTLITERAL",
+  3124975700: "IFCTEXTLITERALWITHEXTENT",
+  1447204868: "IFCTEXTSTYLE",
+  1983826977: "IFCTEXTSTYLEFONTMODEL",
+  2636378356: "IFCTEXTSTYLEFORDEFINEDFONT",
+  1640371178: "IFCTEXTSTYLETEXTMODEL",
+  280115917: "IFCTEXTURECOORDINATE",
+  1742049831: "IFCTEXTURECOORDINATEGENERATOR",
+  2552916305: "IFCTEXTUREMAP",
+  1210645708: "IFCTEXTUREVERTEX",
+  3611470254: "IFCTEXTUREVERTEXLIST",
+  1199560280: "IFCTIMEPERIOD",
+  3101149627: "IFCTIMESERIES",
+  581633288: "IFCTIMESERIESVALUE",
+  1377556343: "IFCTOPOLOGICALREPRESENTATIONITEM",
+  1735638870: "IFCTOPOLOGYREPRESENTATION",
+  1935646853: "IFCTOROIDALSURFACE",
+  3825984169: "IFCTRANSFORMER",
+  1692211062: "IFCTRANSFORMERTYPE",
+  2595432518: "IFCTRANSITIONCURVESEGMENT2D",
+  1620046519: "IFCTRANSPORTELEMENT",
+  2097647324: "IFCTRANSPORTELEMENTTYPE",
+  2715220739: "IFCTRAPEZIUMPROFILEDEF",
+  2916149573: "IFCTRIANGULATEDFACESET",
+  1229763772: "IFCTRIANGULATEDIRREGULARNETWORK",
+  3593883385: "IFCTRIMMEDCURVE",
+  3026737570: "IFCTUBEBUNDLE",
+  1600972822: "IFCTUBEBUNDLETYPE",
+  1628702193: "IFCTYPEOBJECT",
+  3736923433: "IFCTYPEPROCESS",
+  2347495698: "IFCTYPEPRODUCT",
+  3698973494: "IFCTYPERESOURCE",
+  427810014: "IFCUSHAPEPROFILEDEF",
+  180925521: "IFCUNITASSIGNMENT",
+  630975310: "IFCUNITARYCONTROLELEMENT",
+  3179687236: "IFCUNITARYCONTROLELEMENTTYPE",
+  4292641817: "IFCUNITARYEQUIPMENT",
+  1911125066: "IFCUNITARYEQUIPMENTTYPE",
+  4207607924: "IFCVALVE",
+  728799441: "IFCVALVETYPE",
+  1417489154: "IFCVECTOR",
+  2799835756: "IFCVERTEX",
+  2759199220: "IFCVERTEXLOOP",
+  1907098498: "IFCVERTEXPOINT",
+  1530820697: "IFCVIBRATIONDAMPER",
+  3956297820: "IFCVIBRATIONDAMPERTYPE",
+  2391383451: "IFCVIBRATIONISOLATOR",
+  3313531582: "IFCVIBRATIONISOLATORTYPE",
+  2769231204: "IFCVIRTUALELEMENT",
+  891718957: "IFCVIRTUALGRIDINTERSECTION",
+  926996030: "IFCVOIDINGFEATURE",
+  2391406946: "IFCWALL",
+  4156078855: "IFCWALLELEMENTEDCASE",
+  3512223829: "IFCWALLSTANDARDCASE",
+  1898987631: "IFCWALLTYPE",
+  4237592921: "IFCWASTETERMINAL",
+  1133259667: "IFCWASTETERMINALTYPE",
+  3304561284: "IFCWINDOW",
+  336235671: "IFCWINDOWLININGPROPERTIES",
+  512836454: "IFCWINDOWPANELPROPERTIES",
+  486154966: "IFCWINDOWSTANDARDCASE",
+  1299126871: "IFCWINDOWSTYLE",
+  4009809668: "IFCWINDOWTYPE",
+  4088093105: "IFCWORKCALENDAR",
+  1028945134: "IFCWORKCONTROL",
+  4218914973: "IFCWORKPLAN",
+  3342526732: "IFCWORKSCHEDULE",
+  1236880293: "IFCWORKTIME",
+  2543172580: "IFCZSHAPEPROFILEDEF",
+  1033361043: "IFCZONE",
 };
 
 class PropertyManager {
@@ -67625,10 +69242,140 @@ class PropertyManager {
   }
 
   getItemProperties(modelID, id, recursive = false) {
-    return this.state.api.GetLine(modelID, id, recursive);
+    return this.state.useJSON ?
+      {
+        ...this.state.models[modelID].jsonData[id]
+      } :
+      this.state.api.GetLine(modelID, id, recursive);
   }
 
   getAllItemsOfType(modelID, type, verbose) {
+    return this.state.useJSON ?
+      this.getAllItemsOfTypeJSON(modelID, type, verbose) :
+      this.getAllItemsOfTypeWebIfcAPI(modelID, type, verbose);
+  }
+
+  getPropertySets(modelID, elementID, recursive = false) {
+    return this.state.useJSON ?
+      this.getPropertyJSON(modelID, elementID, recursive, PropsNames.psets) :
+      this.getPropertyWebIfcAPI(modelID, elementID, recursive, PropsNames.psets);
+  }
+
+  getTypeProperties(modelID, elementID, recursive = false) {
+    return this.state.useJSON ?
+      this.getPropertyJSON(modelID, elementID, recursive, PropsNames.type) :
+      this.getPropertyWebIfcAPI(modelID, elementID, recursive, PropsNames.type);
+  }
+
+  getMaterialsProperties(modelID, elementID, recursive = false) {
+    return this.state.useJSON ?
+      this.getPropertyJSON(modelID, elementID, recursive, PropsNames.materials) :
+      this.getPropertyWebIfcAPI(modelID, elementID, recursive, PropsNames.materials);
+  }
+
+  getSpatialStructure(modelID, includeProperties) {
+    if (!this.state.useJSON && includeProperties) {
+      console.warn("Including properties in getSpatialStructure with the JSON workflow disabled can lead to poor performance.");
+    }
+    return this.state.useJSON ?
+      this.getSpatialStructureJSON(modelID, includeProperties) :
+      this.getSpatialStructureWebIfcAPI(modelID, includeProperties);
+  }
+
+  getSpatialStructureJSON(modelID, includeProperties) {
+    const chunks = this.getSpatialTreeChunks(modelID);
+    const projectID = this.getAllItemsOfTypeJSON(modelID, IFCPROJECT, false)[0];
+    const project = this.newIfcProject(projectID);
+    this.getSpatialNode(modelID, project, chunks, includeProperties);
+    return {
+      ...project
+    };
+  }
+
+  getSpatialStructureWebIfcAPI(modelID, includeProperties) {
+    const chunks = this.getSpatialTreeChunks(modelID);
+    const projectID = this.state.api.GetLineIDsWithType(modelID, IFCPROJECT).get(0);
+    const project = this.newIfcProject(projectID);
+    this.getSpatialNode(modelID, project, chunks, includeProperties);
+    return project;
+  }
+
+  getAllItemsOfTypeJSON(modelID, type, verbose) {
+    const data = this.state.models[modelID].jsonData;
+    const typeName = IfcTypesMap[type];
+    if (!typeName) {
+      throw new Error(`Type not found: ${type}`);
+    }
+    return this.filterJSONItemsByType(data, typeName, verbose);
+  }
+
+  filterJSONItemsByType(data, typeName, verbose) {
+    const result = [];
+    Object.keys(data).forEach(key => {
+      const numKey = parseInt(key);
+      if (data[numKey].type.toUpperCase() === typeName) {
+        result.push(verbose ? {
+          ...data[numKey]
+        } : numKey);
+      }
+    });
+    return result;
+  }
+
+  getItemsByIDJSON(modelID, ids) {
+    const data = this.state.models[modelID].jsonData;
+    const result = [];
+    ids.forEach(id => result.push({
+      ...data[id]
+    }));
+    return result;
+  }
+
+  getPropertyJSON(modelID, elementID, recursive = false, propName) {
+    const resultIDs = this.getAllRelatedItemsOfTypeJSON(modelID, elementID, propName);
+    const result = this.getItemsByIDJSON(modelID, resultIDs);
+    if (recursive) {
+      result.forEach(result => this.getJSONReferencesRecursively(modelID, result));
+    }
+    return result;
+  }
+
+  getJSONReferencesRecursively(modelID, jsonObject) {
+    if (jsonObject == undefined)
+      return;
+    const keys = Object.keys(jsonObject);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      this.getJSONItem(modelID, jsonObject, key);
+    }
+  }
+
+  getJSONItem(modelID, jsonObject, key) {
+    if (Array.isArray(jsonObject[key])) {
+      return this.getMultipleJSONItems(modelID, jsonObject, key);
+    }
+    if (jsonObject[key] && jsonObject[key].type === 5) {
+      jsonObject[key] = this.getItemsByIDJSON(modelID, [jsonObject[key].value])[0];
+      this.getJSONReferencesRecursively(modelID, jsonObject[key]);
+    }
+  }
+
+  getMultipleJSONItems(modelID, jsonObject, key) {
+    jsonObject[key] = jsonObject[key].map((item) => {
+      if (item.type === 5) {
+        item = this.getItemsByIDJSON(modelID, [item.value])[0];
+        this.getJSONReferencesRecursively(modelID, item);
+      }
+      return item;
+    });
+  }
+
+  getPropertyWebIfcAPI(modelID, elementID, recursive = false, propName) {
+    const propSetIds = this.getAllRelatedItemsOfTypeWebIfcAPI(modelID, elementID, propName);
+    return propSetIds.map((id) => this.state.api.GetLine(modelID, id, recursive));
+  }
+
+  getAllItemsOfTypeWebIfcAPI(modelID, type, verbose) {
     const items = [];
     const lines = this.state.api.GetLineIDsWithType(modelID, type);
     for (let i = 0; i < lines.size(); i++)
@@ -67636,24 +69383,6 @@ class PropertyManager {
     if (verbose)
       return items.map((id) => this.state.api.GetLine(modelID, id));
     return items;
-  }
-
-  getPropertySets(modelID, elementID, recursive = false) {
-    const propSetIds = this.getAllRelatedItemsOfType(modelID, elementID, PropsNames.psets);
-    return propSetIds.map((id) => this.state.api.GetLine(modelID, id, recursive));
-  }
-
-  getTypeProperties(modelID, elementID, recursive = false) {
-    const typeId = this.getAllRelatedItemsOfType(modelID, elementID, PropsNames.type);
-    return typeId.map((id) => this.state.api.GetLine(modelID, id, recursive));
-  }
-
-  getSpatialStructure(modelID) {
-    const chunks = this.getSpatialTreeChunks(modelID);
-    const projectID = this.state.api.GetLineIDsWithType(modelID, IFCPROJECT).get(0);
-    const project = this.newIfcProject(projectID);
-    this.getSpatialNode(modelID, project, chunks);
-    return project;
   }
 
   newIfcProject(id) {
@@ -67666,53 +69395,93 @@ class PropertyManager {
 
   getSpatialTreeChunks(modelID) {
     const treeChunks = {};
-    this.getChunks(modelID, treeChunks, PropsNames.aggregates);
-    this.getChunks(modelID, treeChunks, PropsNames.spatial);
+    const json = this.state.useJSON;
+    if (json) {
+      this.getChunksJSON(modelID, treeChunks, PropsNames.aggregates);
+      this.getChunksJSON(modelID, treeChunks, PropsNames.spatial);
+    } else {
+      this.getChunksWebIfcAPI(modelID, treeChunks, PropsNames.aggregates);
+      this.getChunksWebIfcAPI(modelID, treeChunks, PropsNames.spatial);
+    }
     return treeChunks;
   }
 
-  getChunks(modelID, chunks, propNames) {
+  getChunksJSON(modelID, chunks, propNames) {
+    const relation = this.getAllItemsOfTypeJSON(modelID, propNames.name, true);
+    relation.forEach(rel => {
+      this.saveChunk(chunks, propNames, rel);
+    });
+  }
+
+  getChunksWebIfcAPI(modelID, chunks, propNames) {
     const relation = this.state.api.GetLineIDsWithType(modelID, propNames.name);
     for (let i = 0; i < relation.size(); i++) {
       const rel = this.state.api.GetLine(modelID, relation.get(i), false);
-      const relating = rel[propNames.relating].value;
-      const related = rel[propNames.related].map((r) => r.value);
-      if (chunks[relating] == undefined) {
-        chunks[relating] = related;
-      } else {
-        chunks[relating] = chunks[relating].concat(related);
-      }
+      this.saveChunk(chunks, propNames, rel);
     }
   }
 
-  getSpatialNode(modelID, node, treeChunks) {
-    this.getChildren(modelID, node, treeChunks, PropsNames.aggregates);
-    this.getChildren(modelID, node, treeChunks, PropsNames.spatial);
+  saveChunk(chunks, propNames, rel) {
+    const relating = rel[propNames.relating].value;
+    const related = rel[propNames.related].map((r) => r.value);
+    if (chunks[relating] == undefined) {
+      chunks[relating] = related;
+    } else {
+      chunks[relating] = chunks[relating].concat(related);
+    }
   }
 
-  getChildren(modelID, node, treeChunks, propNames) {
+  getSpatialNode(modelID, node, treeChunks, includeProperties) {
+    this.getChildren(modelID, node, treeChunks, PropsNames.aggregates, includeProperties);
+    this.getChildren(modelID, node, treeChunks, PropsNames.spatial, includeProperties);
+  }
+
+  getChildren(modelID, node, treeChunks, propNames, includeProperties) {
     const children = treeChunks[node.expressID];
-    if (children == undefined || children == null)
+    if (children == undefined)
       return;
     const prop = propNames.key;
     node[prop] = children.map((child) => {
-      const node = this.newNode(modelID, child);
-      this.getSpatialNode(modelID, node, treeChunks);
+      let node = this.newNode(modelID, child);
+      if (includeProperties) {
+        const properties = this.getItemProperties(modelID, node.expressID);
+        node = {
+          ...node, ...properties
+        };
+      }
+      this.getSpatialNode(modelID, node, treeChunks, includeProperties);
       return node;
     });
   }
 
   newNode(modelID, id) {
-    const typeID = this.state.models[modelID].types[id].toString();
-    const typeName = IfcElements[typeID];
+    const typeName = this.getNodeType(modelID, id);
     return {
       expressID: id,
       type: typeName,
-      children: [],
+      children: []
     };
   }
 
-  getAllRelatedItemsOfType(modelID, id, propNames) {
+  getNodeType(modelID, id) {
+    if (this.state.useJSON)
+      return this.state.models[modelID].jsonData[id].type;
+    const typeID = this.state.models[modelID].types[id];
+    return IfcElements[typeID];
+  }
+
+  getAllRelatedItemsOfTypeJSON(modelID, id, propNames) {
+    const lines = this.getAllItemsOfTypeJSON(modelID, propNames.name, true);
+    const IDs = [];
+    lines.forEach(line => {
+      const isRelated = this.isRelated(id, line, propNames);
+      if (isRelated)
+        this.getRelated(line, propNames, IDs);
+    });
+    return IDs;
+  }
+
+  getAllRelatedItemsOfTypeWebIfcAPI(modelID, id, propNames) {
     const lines = this.state.api.GetLineIDsWithType(modelID, propNames.name);
     const IDs = [];
     for (let i = 0; i < lines.size(); i++) {
@@ -67770,67 +69539,181 @@ class TypeManager {
 
 }
 
-let modelIdCounter = 0;
+class BvhManager {
 
-class IFCModel extends Group {
-
-  constructor(mesh, ifc) {
-    super();
-    this.mesh = mesh;
-    this.ifc = ifc;
-    this.modelID = modelIdCounter++;
+  initializeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast) {
+    this.computeBoundsTree = computeBoundsTree;
+    this.disposeBoundsTree = disposeBoundsTree;
+    this.acceleratedRaycast = acceleratedRaycast;
+    this.setupThreeMeshBVH();
   }
 
-  setWasmPath(path) {
-    this.ifc.setWasmPath(path);
+  applyThreeMeshBVH(geometry) {
+    if (this.computeBoundsTree)
+      geometry.computeBoundsTree();
   }
 
-  close(scene) {
-    this.ifc.close(this.modelID, scene);
+  setupThreeMeshBVH() {
+    if (!this.computeBoundsTree || !this.disposeBoundsTree || !this.acceleratedRaycast)
+      return;
+    BufferGeometry.prototype.computeBoundsTree = this.computeBoundsTree;
+    BufferGeometry.prototype.disposeBoundsTree = this.disposeBoundsTree;
+    Mesh.prototype.raycast = this.acceleratedRaycast;
   }
 
-  getExpressId(geometry, faceIndex) {
-    return this.ifc.getExpressId(geometry, faceIndex);
+}
+
+class ItemsHider {
+
+  constructor(state) {
+    this.modelCoordinates = {};
+    this.expressIDCoordinatesMap = {};
+    this.state = state;
   }
 
-  getAllItemsOfType(type, verbose) {
-    return this.ifc.getAllItemsOfType(this.modelID, type, verbose);
+  ;
+
+  dispose() {
+    this.modelCoordinates = {};
+    this.expressIDCoordinatesMap = {};
   }
 
-  getItemProperties(id, recursive = false) {
-    return this.ifc.getItemProperties(this.modelID, id, recursive);
+  processCoordinates(modelID) {
+    const attributes = this.getAttributes(modelID);
+    const ids = Array. from (attributes.expressID.array);
+    this.expressIDCoordinatesMap[modelID] = {};
+    for (let i = 0; i < ids.length; i++) {
+      if (!this.expressIDCoordinatesMap[modelID][ids[i]]) {
+        this.expressIDCoordinatesMap[modelID][ids[i]] = [];
+      }
+      const current = this.expressIDCoordinatesMap[modelID];
+      current[ids[i]].push(3 * i);
+    }
+    this.initializeCoordinates(modelID);
   }
 
-  getPropertySets(id, recursive = false) {
-    return this.ifc.getPropertySets(this.modelID, id, recursive);
+  hideItems(modelID, ids) {
+    this.editCoordinates(modelID, ids, true);
   }
 
-  getTypeProperties(id, recursive = false) {
-    return this.ifc.getTypeProperties(this.modelID, id, recursive);
+  showItems(modelID, ids) {
+    this.editCoordinates(modelID, ids, false);
   }
 
-  getIfcType(id) {
-    return this.ifc.getIfcType(this.modelID, id);
+  editCoordinates(modelID, ids, hide) {
+    const current = this.expressIDCoordinatesMap[modelID];
+    const indices = [];
+    ids.forEach((id) => {
+      if (current[id]) {
+        for (let i = 0; i < current[id].length; i++) {
+          indices.push(current[id][i]);
+        }
+      }
+    });
+    const coords = this.getCoordinates(modelID);
+    const initial = this.modelCoordinates[modelID];
+    if (hide)
+      indices.forEach(i => coords.set([0, 0, 0], i));
+    else
+      indices.forEach(i => coords.set([initial[i], initial[i + 1], initial[i + 2]], i));
+    this.getAttributes(modelID).position.needsUpdate = true;
   }
 
-  getSpatialStructure() {
-    return this.ifc.getSpatialStructure(this.modelID);
+  showAllItems(modelID) {
+    if (this.modelCoordinates[modelID]) {
+      this.resetCoordinates(modelID);
+      this.getAttributes(modelID).position.needsUpdate = true;
+    }
   }
 
-  getSubset(material) {
-    return this.ifc.getSubset(this.modelID, material);
+  hideAllItems(modelID) {
+    this.getCoordinates(modelID).fill(0);
+    this.getAttributes(modelID).position.needsUpdate = true;
   }
 
-  removeSubset(scene, material) {
-    this.ifc.removeSubset(this.modelID, scene, material);
+  initializeCoordinates(modelID) {
+    const coordinates = this.getCoordinates(modelID);
+    if (!this.modelCoordinates[modelID]) {
+      this.modelCoordinates[modelID] = new Float32Array(coordinates);
+    }
   }
 
-  createSubset(config) {
-    const modelConfig = {
-      ...config,
-      modelID: this.modelID
-    };
-    return this.ifc.createSubset(modelConfig);
+  resetCoordinates(modelID) {
+    const initial = this.modelCoordinates[modelID];
+    this.getCoordinates(modelID).set(initial);
+  }
+
+  getCoordinates(modelID) {
+    return this.getAttributes(modelID).position.array;
+  }
+
+  getAttributes(modelID) {
+    return this.state.models[modelID].mesh.geometry.attributes;
+  }
+
+}
+
+class MemoryCleaner {
+
+  constructor(state) {
+    this.state = state;
+  }
+
+  ;
+
+  releaseAllModels() {
+    const models = Object.values(this.state.models);
+    models.forEach(model => {
+      this.releaseMeshModelMemory(model);
+      this.releaseJSONMemory(model);
+      this.releaseGeometryByMaterials(model);
+      model.types = null;
+    });
+  }
+
+  releaseGeometryByMaterials(model) {
+    const keys = Object.keys(model.items);
+    keys.forEach(key => {
+      const geomsByMat = model.items[key];
+      geomsByMat.material.dispose();
+      geomsByMat.material = null;
+      Object.values(geomsByMat.geometries).forEach(geom => geom.dispose());
+      geomsByMat.geometries = null;
+    });
+    model.items = null;
+  }
+
+  releaseJSONMemory(model) {
+    const keys = Object.keys(model.jsonData);
+    keys.forEach((key) => delete model.jsonData[parseInt(key)]
+    );
+    model.jsonData = null;
+  }
+
+  releaseMeshModelMemory(model) {
+    this.releaseMeshMemory(model.mesh);
+    model.mesh = null;
+  }
+
+  releaseMeshMemory(mesh) {
+    if (mesh.geometry) {
+      mesh.geometry.dispose();
+    }
+    if (mesh.parent) {
+      mesh.parent.remove(mesh);
+    }
+    if (mesh.material) {
+      Array.isArray(mesh.material) ?
+        mesh.material.forEach(mat => mat.dispose()) :
+        mesh.material.dispose();
+    }
+    if (mesh.children.length > 0) {
+      mesh.children.forEach(child => {
+        if (child.type === "Mesh")
+          this.releaseMeshMemory(child);
+        mesh.remove(child);
+      });
+    }
   }
 
 }
@@ -67840,26 +69723,57 @@ class IFCManager {
   constructor() {
     this.state = {
       models: [],
-      api: new IfcAPI()
+      api: new IfcAPI(),
+      useJSON: false
     };
-    this.parser = new IFCParser(this.state);
-    this.subsets = new SubsetManager(this.state);
+    this.BVH = new BvhManager();
+    this.parser = new IFCParser(this.state, this.BVH);
+    this.subsets = new SubsetManager(this.state, this.BVH);
     this.properties = new PropertyManager(this.state);
     this.types = new TypeManager(this.state);
+    this.hider = new ItemsHider(this.state);
+    this.cleaner = new MemoryCleaner(this.state);
   }
 
   async parse(buffer) {
-    const mesh = await this.parser.parse(buffer);
-    this.types.getAllTypes();
-    return new IFCModel(mesh, this);
+    const model = await this.parser.parse(buffer);
+    model.setIFCManager(this);
+    this.state.useJSON ? this.disposeMemory() : this.types.getAllTypes();
+    this.hider.processCoordinates(model.modelID);
+    return model;
+  }
+
+  getAndClearErrors(modelID) {
+    return this.parser.getAndClearErrors(modelID);
   }
 
   setWasmPath(path) {
     this.state.api.SetWasmPath(path);
   }
 
+  applyWebIfcConfig(settings) {
+    this.state.webIfcSettings = settings;
+  }
+
+  useJSONData(useJSON = true) {
+    this.state.useJSON = useJSON;
+    this.disposeMemory();
+  }
+
+  addModelJSONData(modelID, data) {
+    const model = this.state.models[modelID];
+    if (model) {
+      model.jsonData = data;
+    }
+  }
+
+  disposeMemory() {
+    this.state.api = null;
+    this.state.api = new IfcAPI();
+  }
+
   setupThreeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast) {
-    this.parser.initializeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast);
+    this.BVH.initializeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast);
   }
 
   close(modelID, scene) {
@@ -67889,25 +69803,58 @@ class IFCManager {
     return this.properties.getTypeProperties(modelID, id, recursive);
   }
 
-  getIfcType(modelID, id) {
-    const typeID = this.state.models[modelID].types[id];
-    return IfcElements[typeID.toString()];
+  getMaterialsProperties(modelID, id, recursive = false) {
+    return this.properties.getMaterialsProperties(modelID, id, recursive);
   }
 
-  getSpatialStructure(modelID) {
-    return this.properties.getSpatialStructure(modelID);
+  getIfcType(modelID, id) {
+    const typeID = this.state.models[modelID].types[id];
+    return IfcElements[typeID];
+  }
+
+  getSpatialStructure(modelID, includeProperties) {
+    return this.properties.getSpatialStructure(modelID, includeProperties);
   }
 
   getSubset(modelID, material) {
     return this.subsets.getSubset(modelID, material);
   }
 
-  removeSubset(modelID, scene, material) {
-    this.subsets.removeSubset(modelID, scene, material);
+  removeSubset(modelID, parent, material) {
+    this.subsets.removeSubset(modelID, parent, material);
   }
 
   createSubset(config) {
     return this.subsets.createSubset(config);
+  }
+
+  hideItems(modelID, ids) {
+    this.hider.hideItems(modelID, ids);
+  }
+
+  hideAllItems(modelID) {
+    this.hider.hideAllItems(modelID);
+  }
+
+  showItems(modelID, ids) {
+    this.hider.showItems(modelID, ids);
+  }
+
+  showAllItems(modelID) {
+    this.hider.showAllItems(modelID);
+  }
+
+  get ifcAPI() {
+    return this.state.api;
+  }
+
+  releaseAllMemory() {
+    this.subsets.dispose();
+    this.hider.dispose();
+    this.cleaner.releaseAllModels();
+    this.state.api = null;
+    this.state.models = null;
+    this.state = null;
   }
 
 }
