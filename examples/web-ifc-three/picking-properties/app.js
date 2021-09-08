@@ -130,7 +130,8 @@ function pick(event) {
         const geometry = found.object.geometry;
         const ifc = ifcLoader.ifcManager;
         const id = ifc.getExpressId(geometry, index);
-        const props = ifc.getItemProperties(0, id);
+        const modelID = found.object.modelID;
+        const props = ifc.getItemProperties(modelID, id);
         output.innerHTML = JSON.stringify(props, null, 2);
     }
 }
