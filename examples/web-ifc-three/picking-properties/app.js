@@ -131,7 +131,7 @@ function pick(event) {
         const ifc = ifcLoader.ifcManager;
         const id = ifc.getExpressId(geometry, index);
         const props = ifc.getItemProperties(0, id);
-        output.innerHTML = JSON.stringify(props, undefined, 2);
+        output.innerHTML = JSON.stringify(props, null, 2);
     }
 }
 
