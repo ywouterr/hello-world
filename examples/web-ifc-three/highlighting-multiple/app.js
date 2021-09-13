@@ -142,7 +142,7 @@ const ifc = ifcLoader.ifcManager;
 const highlightModel = { id: - 1};
 const selectModel = { id: - 1};
 
-function highlight(event, material, model) {
+function highlight(event, material, model, multiple = true) {
     const found = cast(event)[0];
     if (found) {
 
@@ -160,7 +160,7 @@ function highlight(event, material, model) {
             ids: [id],
             material: material,
             scene: scene,
-            removePrevious: true
+            removePrevious: multiple
         })
     } else {
         // Remove previous highlight
@@ -171,4 +171,3 @@ function highlight(event, material, model) {
 window.onmousemove = (event) => highlight(event, preselectMat, highlightModel);
 
 window.ondblclick = (event) => highlight(event, selectMat, selectModel);
-

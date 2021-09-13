@@ -68435,15 +68435,15 @@ class SubsetManager {
 
   addToPreviousSelection(config) {
     const previous = this.selected[this.matID(config)];
-    const filtered = this.filter(config);
+    const filtered = this.filter(config, new Set(config.ids));
     const geometries = Object.values(filtered).map((i) => Object.values(i.geometries)).flat();
     const previousGeom = previous.mesh.geometry;
     previous.mesh.geometry = merge([previousGeom, ...geometries]);
     config.ids.forEach((id) => previous.ids.add(id));
   }
 
-  filter(config) {
-    const ids = this.selected[this.matID(config)].ids;
+  filter(config, itemsID) {
+    const ids = itemsID || this.selected[this.matID(config)].ids;
     const items = this.state.models[config.modelID].items;
     const filtered = {};
     for (let matID in items) {
@@ -73448,7 +73448,7 @@ const ifc = ifcLoader.ifcManager;
 const highlightModel = { id: - 1};
 const selectModel = { id: - 1};
 
-function highlight(event, material, model) {
+function highlight(event, material, model, multiple = true) {
     const found = cast(event)[0];
     if (found) {
 
@@ -73466,7 +73466,7 @@ function highlight(event, material, model) {
             ids: [id],
             material: material,
             scene: scene,
-            removePrevious: true
+            removePrevious: multiple
         });
     } else {
         // Remove previous highlight
