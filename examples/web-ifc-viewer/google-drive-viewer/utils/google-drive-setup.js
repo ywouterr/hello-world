@@ -7,15 +7,13 @@ let CLIENT_ID = '';
 let API_KEY = '';
 
 async function getCredentials() {
-    // For local we use a json that contains the keys
-    // const file = await fetch('keys.json');
-    // if (!file.ok) throw new Error('Credentials not found! Have you created your own credentials?');
-    // const json = await file.json();
-    // if (typeof json !== 'object') throw new Error('Credentials could not be parsed');
-    // CLIENT_ID = json.CLIENT_ID;
-    // API_KEY = json.API_KEY;
-    CLIENT_ID = process.env.CLIENT_ID;
-    API_KEY = process.env.API_KEY;
+    // For local only; to have this online, we need a backend that manages the keys as secrets
+    const file = await fetch('keys.json');
+    if (!file.ok) throw new Error('Credentials not found! Have you created your own credentials?');
+    const json = await file.json();
+    if (typeof json !== 'object') throw new Error('Credentials could not be parsed');
+    CLIENT_ID = json.CLIENT_ID;
+    API_KEY = json.API_KEY;
 }
 
 // Array of API discovery doc URLs for APIs used by the quickstart
