@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+    <link rel="icon" type="image/png" href="./favicon.ico"/>
+    <link rel="preconnect" href="https://fonts.gstatic.com"/>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet"/>
+    <link rel="stylesheet" type="text/css" href="./styles.css"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>IFC.js</title>
+</head>
+<body>
+<div class="navbar">
+    <p class="title">IFC.js | Google Drive plugin</p>
+</div>
+<div class="app-body">
+    <div class="app-tools">
+        <div class="google-button-container">
+            <div class="google-button" id="authorize_button">
+                <div class="google-button-content">
+                    <img class="google-button-logo" src="resources/logo.png" alt="ifc.js logo">
+                    <p class="google-button-text" id="authorize_button-text">Log in</p>
+                </div>
+            </div>
+        </div>
+        <div class="secondary-button" id="tutorial"><a target="_blank" href="https://ifcjs.github.io/info/">Tutorial</a></div>
+        <div class="secondary-button" id="documentation"><a target="_blank" href="https://ifcjs.github.io/info/">Documentation</a></div>
+        <div class="secondary-button" id="project"><a target="_blank" href="https://ifcjs.github.io/info/docs/introduction">This project</a></div>
+        <div class="secondary-button" id="community"><a target="_blank" href="https://discord.com/invite/g7Uzn2KSwB">Community</a></div>
+        <div class="separator"></div>
+        <p class="file-name" id="file-name">Name: -</p>
+    </div>
+    <div id="viewer-container"></div>
+    <script src="utils/google-drive-setup.js"></script>
+    <script async defer src="https://apis.google.com/js/api.js"
+            onload="this.onload=function(){};handleClientLoad()"
+            onreadystatechange="if (this.readyState === 'complete') this.onload()">
+    </script>
+    <script type="module" src="./build/main.js"></script>
+</div>
+</body>
+</html>

@@ -10,6 +10,7 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@rollup/plugin-commonjs": "^20.0.0",
     "@rollup/plugin-node-resolve": "^13.0.2",
     "rollup": "^2.45.2"
   },
@@ -17,6 +18,7 @@
     "three": "^0.132.2",
     "three-mesh-bvh": "^0.4.1",
     "web-ifc": "^0.0.24",
-    "web-ifc-three": "^0.0.61"
+    "web-ifc-three": "^0.0.61",
+    "web-ifc-viewer": "^1.0.73"
   }
 }

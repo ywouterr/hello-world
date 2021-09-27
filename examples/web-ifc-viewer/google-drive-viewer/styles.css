@@ -1,0 +1,146 @@
+* {
+    padding: 0;
+    margin: 0;
+    box-sizing: border-box;
+    font-family: 'Roboto', sans-serif;
+}
+
+html, body {
+    overflow: hidden;
+}
+
+a {
+    color: #888888;
+    text-decoration: none;
+}
+
+a:hover {
+    cursor: pointer;
+    color: #444444;
+}
+
+.hidden {
+    visibility: hidden;
+}
+
+.navbar {
+    height: 4rem;
+    width: 100vw;
+    border-bottom: solid 1px #cccccc;
+    display: flex;
+    align-content: center;
+}
+
+.title {
+    font-size: 1.5rem;
+    font-weight: 100;
+    margin: auto 2rem;
+}
+
+.file-name {
+    color: #888888;
+    font-size: 0.8rem;
+    font-weight: 100;
+    margin: 2rem;
+}
+
+.app-body {
+    display: flex;
+    flex-direction: row;
+}
+
+.secondary-button {
+    text-align: left;
+    margin: 1.5rem 3rem;
+}
+
+.separator {
+    width: 80%;
+    margin: 2rem;
+    border-bottom: solid 1px #cccccc;
+}
+
+.google-button-container {
+    margin: 2rem;
+    z-index: 2;
+}
+
+.google-button {
+    width: 8rem;
+    padding: 0.5rem;
+    background-color: white;
+    border: none;
+    box-shadow: 0 1px 3px 1px #cccccc;
+    border-radius: 2rem;
+    transition: all 0.15s ease-in-out;
+}
+
+.google-button:hover {
+    background-color: #f7f7f7;
+    box-shadow: 0 1px 10px 3px #cccccc;
+    cursor: pointer;
+}
+
+.google-button-content {
+    display: flex;
+    flex-direction: row;
+    align-content: center;
+}
+
+.google-button-text {
+    margin: auto;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #555555;
+    pointer-events: none;
+}
+
+#viewer-container {
+    position: relative;
+    width: 80vw;
+    height: 85vh;
+    overflow: hidden;
+    border: solid 1px #bbbbbb;
+    margin: 2rem;
+    border-radius: 0.5rem;
+}
+
+.google-button-logo {
+    max-width: 1.7rem;
+    margin-left: 0.2rem;
+    animation: logo-spin 8s infinite 0s cubic-bezier(0.38, 0.01, 0, 0.99);
+}
+
+@keyframes logo-spin {
+    0% {
+        transform: rotate(0);
+    }
+    25% {
+        transform: rotate(90deg);
+    }
+    50% {
+        transform: rotate(180deg);
+    }
+    75% {
+        transform: rotate(270deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+.ifcjs-dimension-preview {
+    width: 2rem;
+    height: 2rem;
+    background-color: rebeccapurple;
+    border-radius: 1rem;
+    opacity: 0.5;
+}
+
+.ifcjs-dimension-label {
+    background-color: black;
+    color: white;
+    padding: 0.2rem;
+    border-radius: 0.2rem;
+}
+
