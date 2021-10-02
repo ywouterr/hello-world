@@ -78,6 +78,24 @@ window.addEventListener("resize", () => {
 const ifcLoader = new IFCLoader();
 
 setTimeout(() => {
-  ifcLoader.load("01.ifc", (ifcModel) => scene.add(ifcModel));
+
+
+  const rawFile = new XMLHttpRequest();
+  rawFile.open("GET", "01.ifc", false);
+  rawFile.onreadystatechange = function ()
+  {
+    if(rawFile.readyState === 4)
+    {
+      if(rawFile.status === 200 )
+      {
+        const allText = rawFile.responseText;
+        alert(allText);
+      }
+    }
+  }
+  rawFile.send(null);
+
+
+  // ifcLoader.load("01.ifc", (ifcModel) => scene.add(ifcModel));
 }, 3000);
 
