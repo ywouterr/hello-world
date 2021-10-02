@@ -4,13 +4,13 @@ const fs = require("fs");
 
 const ifcapi = new WebIFC.IfcAPI();
 
-LoadFile("../../../../IFC/02.ifc");
+LoadFile("../../../../IFC/7/Tungasletta10_R01.ifc");
 
 async function LoadFile(filename)
 {
     const modelID = await OpenIfc(filename);
     const allItems = GetAllItems(modelID);
-    fs.writeFileSync('test.json', JSON.stringify(allItems));
+    fs.writeFileSync('../../../../IFC/7/Tungasletta10_R01.json', JSON.stringify(allItems));
     ifcapi.CloseModel(modelID);
 }
 
