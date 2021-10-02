@@ -1,0 +1,46 @@
+{
+    "name": "Drive-CDE",
+    "description": "Building a Chrome Extension MV3",
+    "version": "0.1.0",
+    "manifest_version": 3,
+    "key": "************************YOUR_GOOGLE_KEY_HERE************************************************",
+    "oauth2": {
+        "client_id": "********************************YOUR_GOOGLE_CLIENT_ID_HERE********************************",
+        "scopes":["https://www.googleapis.com/auth/drive"]
+    },
+    "icons": {
+        "16": "./images/icon-16x16.png",
+        "32": "./images/icon-32x32.png",
+        "48": "./images/icon-48x48.png",
+        "128": "./images/icon-128x128.png"
+    },
+    "background": {
+        "service_worker": "./background.js"
+    },
+    "action": {
+        "default_popup": "./popup.html",
+        "default_icons": {
+            "16": "./images/icon-16x16.png",
+            "32": "./images/icon-32x32.png",
+            "48": "./images/icon-48x48.png",
+            "128": "./images/icon-128x128.png"
+        }
+    },
+    "options_page": "./options.html",
+    "permissions": [
+        "identity",
+        "activeTab",
+        "tabs",
+        "storage",
+        "scripting"
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [ "images/logo.png" ],
+            "matches": ["<all_urls>"]
+        }
+    ],
+    "host_permissions": [
+        "https://drive.google.com/*"
+    ]
+}
