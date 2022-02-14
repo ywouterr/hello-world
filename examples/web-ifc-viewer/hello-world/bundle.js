@@ -103956,17 +103956,23 @@ class IfcViewerAPI {
     }
 }
 
-const container = document.getElementById('viewer-container');
+const container = document.getElementById('ifcjs-canvas');
 const viewer = new IfcViewerAPI({ container });
-viewer.grid.setGrid();
-viewer.axes.setAxes();
+viewer.addGrid();
+viewer.addAxes();
 
 viewer.IFC.setWasmPath("../../../");
 
-document.getElementById("file-input");
+const input = document.getElementById("file-input");
 
-async function loadIFC() {
-  await viewer.IFC.loadIfcUrl("../../../IFC/01.ifc");
-}
+input.addEventListener("change",
 
-loadIFC();
+  async (changed) => {
+
+    const file = changed.target.files[0];
+    const ifcURL = URL.createObjectURL(file);
+    viewer.IFC.loadIfcUrl(ifcURL);
+  },
+
+  false
+);

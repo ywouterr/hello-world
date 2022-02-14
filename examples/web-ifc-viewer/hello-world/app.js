@@ -9,10 +9,14 @@ viewer.IFC.setWasmPath("../../../");
 
 const input = document.getElementById("file-input");
 
-async function loadIFC() {
-  await viewer.IFC.loadIfcUrl("../../../IFC/01.ifc");
-}
+input.addEventListener("change",
 
-loadIFC();
+  async (changed) => {
 
+    const file = changed.target.files[0];
+    const ifcURL = URL.createObjectURL(file);
+    viewer.IFC.loadIfcUrl(ifcURL);
+  },
 
+  false
+);

@@ -1,10 +1,15 @@
-// const { exec } = require('child_process');
 const fs = require('fs');
 const util = require('util');
 const exec = util.promisify(require('child_process').exec);
 
+// Bundler specific constants
 const BUNDLERCONFIGNAME = 'rollup.config.js';
 const BUNDLERCOMMAND = 'rollup --config ';
+
+// Gets path to recursively bundle
+let BASEPATH = './examples';
+const arg = process.argv[2];
+if(arg) BASEPATH += "/" + arg;
 
 // Gets all directories contained in the current directory
 const { promises: { readdir } } = fs;
@@ -17,16 +22,11 @@ const getDirectories = async source =>
 async function bundlePath(path) {
 	try {
 		const { stdout, stderr } = await exec(BUNDLERCOMMAND + path);
-		console.log('stdout:', stdout);
-		console.log('stderr:', stderr);
+		if(stdout) console.log(stdout);
+		if(stderr) console.log(stderr);
 	} catch (e) {
 		console.error(e); // should contain code (exit code) and signal (that caused the termination).
 	}
-	// exec(BUNDLERCOMMAND + path, (error, stdout, stderr) => {
-	// 	if (error) return console.log(`error: ${error.message}`);
-	// 	if (stderr) return console.log(`stderr: ${stderr}`);
-	// 	console.log(`stdout: ${stdout}`);
-	// });
 }
 
 // Bundles the specified dir if it there is a bundler config recursively
@@ -50,6 +50,4 @@ async function traverseAndBundle(path) {
 	}
 }
 
-traverseAndBundle('./examples');
-
-// bundlePath("./examples/web-ifc-viewer/visibility/rollup.config.js");
+traverseAndBundle(BASEPATH);

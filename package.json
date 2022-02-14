@@ -4,7 +4,7 @@
   "description": "-",
   "main": "app.js",
   "scripts": {
-    "build": "rollup -c scenes/helloworld/rollup.config.js",
+    "build": "node example-builder.js",
     "watch": "rollup -w -c scenes/helloworld/rollup.config.js"
   },
   "author": "",

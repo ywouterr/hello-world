@@ -16,3 +16,8 @@ html, body {
     width: 100%;
     height: 100%;
 }
+
+#file-input{
+    z-index: 1;
+    position: absolute;
+}

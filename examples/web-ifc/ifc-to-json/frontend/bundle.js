@@ -346,7 +346,7 @@ var require_web_ifc_mt = __commonJS({
         }
         moduleOverrides = null;
         if (Module["arguments"])
-          ;
+          Module["arguments"];
         if (Module["thisProgram"])
           thisProgram = Module["thisProgram"];
         if (Module["quit"])
@@ -6246,7 +6246,7 @@ var require_web_ifc = __commonJS({
         }
         moduleOverrides = null;
         if (Module["arguments"])
-          ;
+          Module["arguments"];
         if (Module["thisProgram"])
           thisProgram = Module["thisProgram"];
         if (Module["quit"])
