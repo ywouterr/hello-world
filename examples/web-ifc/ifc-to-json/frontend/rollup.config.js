@@ -1,11 +1,11 @@
 import resolve from '@rollup/plugin-node-resolve';
 
 export default {
-  input: 'app.js',
+  input: './examples/web-ifc/ifc-to-json/frontend/app.js',
   output: [
     {
       format: 'esm',
-      file: 'bundle.js'
+      file: './examples/web-ifc/ifc-to-json/frontend/bundle.js'
     },
   ],
   plugins: [
