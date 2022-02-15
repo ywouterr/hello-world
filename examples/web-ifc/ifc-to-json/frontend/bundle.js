@@ -43010,7 +43010,8 @@ input.addEventListener(
 
 async function LoadFile(ifcAsText) {
     leftContainer.innerHTML = ifcAsText.replace(/(?:\r\n|\r|\n)/g, '<br>');
-    const modelID = await OpenIfc(ifcAsText);
+    const uint8array = new TextEncoder().encode(ifcAsText);
+    const modelID = await OpenIfc(uint8array);
     const allItems = GetAllItems(modelID);
     const result = JSON.stringify(allItems, undefined, 2);
     json.textContent  = result;
