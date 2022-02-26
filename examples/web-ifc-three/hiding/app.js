@@ -5,9 +5,6 @@ import {
     GridHelper,
     PerspectiveCamera,
     Scene,
-    MeshLambertMaterial,
-    Raycaster,
-    Vector2,
     WebGLRenderer,
 } from "three";
 import {OrbitControls} from "three/examples/jsm/controls/OrbitControls";
@@ -17,6 +14,15 @@ import {
     computeBoundsTree,
     disposeBoundsTree
 } from 'three-mesh-bvh';
+import {
+    IFCWALLSTANDARDCASE,
+    IFCSLAB,
+    IFCDOOR,
+    IFCWINDOW,
+    IFCFURNISHINGELEMENT,
+    IFCMEMBER,
+    IFCPLATE
+} from 'web-ifc';
 
 //Creates the Three.js scene
 const scene = new Scene();
@@ -86,9 +92,9 @@ window.addEventListener("resize", () => {
 const ifcModels = [];
 const ifcLoader = new IFCLoader();
 ifcLoader.ifcManager.setWasmPath("../../../");
-ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
+ifcLoader.load("../../../IFC/01.ifc", async (ifcModel) => {
     ifcModels.push(ifcModel);
-    scene.add(ifcModel)
+    await setupAllCategories();
 });
 
 
@@ -98,67 +104,70 @@ ifcLoader.ifcManager.setupThreeMeshBVH(
     disposeBoundsTree,
     acceleratedRaycast);
 
-const raycaster = new Raycaster();
-raycaster.firstHitOnly = true;
-const mouse = new Vector2();
+// List of categories names
+const categories = {
+    IFCWALLSTANDARDCASE,
+    IFCSLAB,
+    IFCFURNISHINGELEMENT,
+    IFCDOOR,
+    IFCWINDOW,
+    IFCPLATE,
+    IFCMEMBER
+};
 
-function cast(event) {
+// Stores the created subsets
+const subsets = {};
 
-    // Computes the position of the mouse on the screen
-    const bounds = threeCanvas.getBoundingClientRect();
-
-    const x1 = event.clientX - bounds.left;
-    const x2 = bounds.right - bounds.left;
-    mouse.x = (x1 / x2) * 2 - 1;
-
-    const y1 = event.clientY - bounds.top;
-    const y2 = bounds.bottom - bounds.top;
-    mouse.y = -(y1 / y2) * 2 + 1;
-
-    // Places it on the camera pointing to the mouse
-    raycaster.setFromCamera(mouse, camera);
-
-    // Casts a ray
-    return raycaster.intersectObjects(ifcModels);
+// Gets all the items of a category
+async function getAll(category) {
+    return ifcLoader.ifcManager.getAllItemsOfType(0, category, false);
 }
 
-// Creates subset material
-const mat = new MeshLambertMaterial({
-    transparent: true,
-    opacity: 0.6,
-    color: 0xff88ff,
-    depthTest: false
-})
-
-const ifc = ifcLoader.ifcManager;
-// Reference to the previous selection
-let highlightModel = { id: - 1};
-
-function highlight(event, material, model) {
-    const found = cast(event)[0];
-    if (found) {
-
-        // Gets model ID
-        model.id = found.object.modelID;
-
-        // Gets Express ID
-        const index = found.faceIndex;
-        const geometry = found.object.geometry;
-        const id = ifc.getExpressId(geometry, index);
-
-        // Creates subset
-        ifcLoader.ifcManager.createSubset({
-            modelID: model.id,
-            ids: [id],
-            material: material,
-            scene: scene,
-            removePrevious: true
-        })
-    } else {
-        // Remove previous highlight
-        ifc.removeSubset(model.id, scene, material);
-    }
+// Creates a new subset containing all elements of a category
+async function newSubsetOfType(category) {
+    const ids = await getAll(category);
+    return ifcLoader.ifcManager.createSubset({
+        modelID: 0,
+        scene,
+        ids,
+        removePrevious: true,
+        customID: category.toString()
+    })
 }
 
-window.onmousemove = (event) => highlight(event, mat, highlightModel);
+// Gets the name of a category
+function getName(category) {
+    const names = Object.keys(categories);
+    return names.find(name => categories[name] === category);
+}
+
+// Sets up the checkbox event to hide / show elements
+function setupCheckBox(category) {
+    const name = getName(category);
+    const checkBox = document.getElementById(name);
+    checkBox.addEventListener('change', (event) => {
+        const checked = event.target.checked;
+        const subset = subsets[category];
+        if(checked) scene.add(subset);
+        else subset.removeFromParent();
+    });
+}
+
+// Creates a new subset and configures the checkbox
+async function setupCategory(category) {
+    subsets[category] = await newSubsetOfType(category);
+    setupCheckBox(category);
+}
+
+async function setupAllCategories() {
+    await setupCategory(IFCWALLSTANDARDCASE);
+    await setupCategory(IFCFURNISHINGELEMENT);
+    await setupCategory(IFCDOOR);
+    await setupCategory(IFCWINDOW);
+    await setupCategory(IFCSLAB);
+    await setupCategory(IFCMEMBER);
+    await setupCategory(IFCPLATE);
+}
+
+
 

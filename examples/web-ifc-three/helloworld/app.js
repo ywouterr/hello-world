@@ -83,7 +83,7 @@ ifcLoader.ifcManager.setWasmPath("../../../");
     "change",
     (changed) => {
       const ifcURL = URL.createObjectURL(changed.target.files[0]);
-      ifcLoader.load(ifcURL, (ifcModel) => scene.add(ifcModel.mesh));
+      ifcLoader.load(ifcURL, (ifcModel) => scene.add(ifcModel));
     },
     false
   );

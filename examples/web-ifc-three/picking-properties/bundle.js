@@ -82149,8 +82149,8 @@ const ifcModels = [];
 const ifcLoader = new IFCLoader();
 ifcLoader.ifcManager.setWasmPath("../../../");
 ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
-    ifcModels.push(ifcModel.mesh);
-    scene.add(ifcModel.mesh);
+    ifcModels.push(ifcModel);
+    scene.add(ifcModel);
 });
 
 
