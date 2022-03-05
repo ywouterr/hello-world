@@ -1,41 +1,39 @@
-# Hello world IFC.js!
+<p align="center">
+  <a href="https://ifcjs.github.io/info/">ifc.js</a>
+  |
+  <a href="https://discord.gg/FXfyR4XrKT">discord</a>
+</p>
 
-Several minimal examples using [IFC.js](https://ifcjs.github.io/info/). 
+<img src="banner.png">
+<h1>Hello world IFC.js <img src="https://ifcjs.github.io/info/img/logo.svg" width="32"></h1>
 
-## Community
+![opencollective](https://opencollective.com/ifcjs/tiers/badge.svg)
 
-Join the [Discord channel](https://discord.gg/g7Uzn2KSwB) to meet other people interested in this project!
+This repository contains the examples for the official documentation of [IFC.js](https://github.com/IFCjs). You can visit it live [here](https://ifcjs.github.io/info/). It contains all the information regarding the project, including:
 
-## Contribution
+* The motivation behind IFC.js.
 
-Do you want to contribute to make this even better? Bear in mind that this project is split in multiple repositories, so you might want to contribute to the part that interests you most.
+* Introduction to all the modules of the library.
 
-- [web-ifc](https://github.com/tomvandig/web-ifc) if you are interested in low-level IFC parsing, WebAssembly, Emscripten, C++.
+* API reference.
 
-- [web-ifc-three](https://github.com/IFCjs/web-ifc-three) if you want to help us with the Three.js geometry generation.
+* Step by step tutorials.
 
-- [web-ifc-viewer](https://github.com/IFCjs/web-ifc-viewer) if you have ideas about cool tools that could help others develop BIM applications!
+* Informal articles of the authors.
 
-- This repository if you want to help us by creating more example implementations of IFC.js.
+* Collaboration system and patreon.
 
-- Try it and spread the word!
+* Community highlight.
 
-## Issues
+* Link to social networks.
 
-You can refer your issue to the specific repository: 
+## Quick setup
 
-- [web-ifc](https://github.com/tomvandig/web-ifc) if you have any problem with the parsing / loading (items not being readed / loaded correctly, information missing).
+First, download this project or clone the repository and install the dependencies with `git clone https://github.com/IFCjs/hello-world`. You can then install the dependencies using `npm install` and build all the examples with `npm run build`. You can also build specific folders like this: `npm run build -- web-ifc-three`.
 
-- [web-ifc-three](https://github.com/agviegas/web-ifc-three) if you have any problem with the adaptation we did for Three.js (efficiency, Three geometry generation, etc).
+You can then execute the examples serving them locally with any library of your choosing (e.g. [this one](https://www.npmjs.com/package/reload)).
 
-- [web-ifc-viewer](https://github.com/IFCjs/web-ifc-viewer) if you have any problem with the boilerplate code it offers to develop BIM viewers.
+## Content
 
-- This repository if you have any problem with the specific implementation of an example.
+All the examples are contained in the `examples` folder. It contains separate folders for each section of the library, as well as specific folders for examples that can't be classified in one module.
 
-## Testing files
-
-You can find the IFC files for testing [here](https://github.com/agviegas/test-ifc-files).
-
-## License
-
-This project is licensed under the MIT License.

@@ -75034,6 +75034,14 @@ class ItemsMap {
     return `${baseID} - ${materialID} - ${customID}`;
   }
 
+  dispose() {
+    Object.values(this.map).forEach(model => {
+      model.indexCache = null;
+      model.map = null;
+    });
+    this.map = null;
+  }
+
   getGeometry(modelID) {
     const geometry = this.state.models[modelID].mesh.geometry;
     if (!geometry)
@@ -75159,6 +75167,10 @@ class SubsetCreator {
     if (config.scene)
       config.scene.add(subset);
     return this.subsets[subsetID].mesh;
+  }
+
+  dispose() {
+    this.tempIndex = [];
   }
 
   initializeSubset(config, subsetID) {
@@ -75314,6 +75326,26 @@ class SubsetManager {
     subset.geometry.setIndex([]);
   }
 
+  dispose() {
+    this.items.dispose();
+    this.subsetCreator.dispose();
+    Object.values(this.subsets).forEach(subset => {
+      subset.ids = null;
+      subset.mesh.removeFromParent();
+      const mats = subset.mesh.material;
+      if (Array.isArray(mats))
+        mats.forEach(mat => mat.dispose());
+      else
+        mats.dispose();
+      subset.mesh.geometry.dispose();
+      const geom = subset.mesh.geometry;
+      if (geom.disposeBoundsTree)
+        geom.disposeBoundsTree();
+      subset.mesh = null;
+    });
+    this.subsets = null;
+  }
+
   getSubsetID(modelID, material, customID = 'DEFAULT') {
     const baseID = modelID;
     const materialID = material ? material.uuid : 'DEFAULT';
@@ -75428,6 +75460,9 @@ class BasePropertyManager {
 
   getRelated(rel, propNames, IDs) {
     const element = rel[propNames.relating];
+    if (!element) {
+      return console.warn(`The object with ID ${rel.expressID} has a broken reference.`);
+    }
     if (!Array.isArray(element))
       IDs.push(element.value);
     else
@@ -75461,7 +75496,7 @@ class BasePropertyManager {
 
 }
 
-const IfcElements = {
+let IfcElements = {
   103090709: 'IFCPROJECT',
   4097777520: 'IFCSITE',
   4031249490: 'IFCBUILDING',
@@ -75666,7 +75701,7 @@ class WebIfcPropertyManager extends BasePropertyManager {
 
 }
 
-const IfcTypesMap = {
+let IfcTypesMap = {
   3821786052: "IFCACTIONREQUEST",
   2296667514: "IFCACTOR",
   3630933823: "IFCACTORROLE",
@@ -76662,9 +76697,11 @@ class TypeManager {
 
   async getAllTypes(worker) {
     for (let modelID in this.state.models) {
-      const types = this.state.models[modelID].types;
-      if (Object.keys(types).length == 0) {
-        await this.getAllTypesOfModel(parseInt(modelID), worker);
+      if (this.state.models.hasOwnProperty(modelID)) {
+        const types = this.state.models[modelID].types;
+        if (Object.keys(types).length == 0) {
+          await this.getAllTypesOfModel(parseInt(modelID), worker);
+        }
       }
     }
   }
@@ -76681,9 +76718,8 @@ class TypeManager {
     }
     if (this.state.worker.active && worker) {
       await worker.workerState.updateModelStateTypes(modelID, result);
-    } else {
-      this.state.models[modelID].types = result;
     }
+    this.state.models[modelID].types = result;
   }
 
 }
@@ -76719,7 +76755,9 @@ var WorkerActions;
   WorkerActions["updateModelStateTypes"] = "updateModelStateTypes";
   WorkerActions["updateModelStateJsonData"] = "updateModelStateJsonData";
   WorkerActions["loadJsonDataFromWorker"] = "loadJsonDataFromWorker";
+  WorkerActions["dispose"] = "dispose";
   WorkerActions["Close"] = "Close";
+  WorkerActions["DisposeWebIfc"] = "DisposeWebIfc";
   WorkerActions["Init"] = "Init";
   WorkerActions["OpenModel"] = "OpenModel";
   WorkerActions["CreateModel"] = "CreateModel";
@@ -77475,6 +77513,12 @@ class IFCWorkerHandler {
     });
   }
 
+  async terminate() {
+    await this.request(WorkerAPIs.workerState, WorkerActions.dispose);
+    await this.request(WorkerAPIs.webIfc, WorkerActions.DisposeWebIfc);
+    this.ifcWorker.terminate();
+  }
+
   async Close() {
     await this.request(WorkerAPIs.webIfc, WorkerActions.Close);
   }
@@ -77526,6 +77570,31 @@ class IFCWorkerHandler {
 
 }
 
+class MemoryCleaner {
+
+  constructor(state) {
+    this.state = state;
+  }
+
+  async dispose() {
+    Object.keys(this.state.models).forEach(modelID => {
+      const model = this.state.models[parseInt(modelID, 10)];
+      model.mesh.removeFromParent();
+      const geom = model.mesh.geometry;
+      if (geom.disposeBoundsTree)
+        geom.disposeBoundsTree();
+      geom.dispose();
+      model.mesh.material.forEach(mat => mat.dispose());
+      model.mesh = null;
+      model.types = null;
+      model.jsonData = null;
+    });
+    this.state.api = null;
+    this.state.models = null;
+  }
+
+}
+
 class IFCManager {
 
   constructor() {
@@ -77543,6 +77612,7 @@ class IFCManager {
     this.subsets = new SubsetManager(this.state, this.BVH);
     this.properties = new PropertyManager(this.state);
     this.types = new TypeManager(this.state);
+    this.cleaner = new MemoryCleaner(this.state);
   }
 
   get ifcAPI() {
@@ -77553,7 +77623,7 @@ class IFCManager {
     var _a;
     const model = await this.parser.parse(buffer, (_a = this.state.coordinationMatrix) === null || _a === void 0 ? void 0 : _a.toArray());
     model.setIFCManager(this);
-    this.state.useJSON ? await this.disposeMemory() : await this.types.getAllTypes(this.worker);
+    await this.types.getAllTypes(this.worker);
     return model;
   }
 
@@ -77686,11 +77756,20 @@ class IFCManager {
     return this.subsets.clearSubset(modelID, customID, material);
   }
 
+  async dispose() {
+    await this.cleaner.dispose();
+    this.subsets.dispose();
+    if (this.worker && this.state.worker.active)
+      await this.worker.terminate();
+    this.state = null;
+  }
+
   async disposeMemory() {
     var _a;
     if (this.state.worker.active) {
       await ((_a = this.worker) === null || _a === void 0 ? void 0 : _a.Close());
     } else {
+      this.state.api.Close();
       this.state.api = null;
       this.state.api = new IfcAPI2();
     }
