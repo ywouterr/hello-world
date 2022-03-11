@@ -75337,6 +75337,7 @@ class SubsetManager {
         mats.forEach(mat => mat.dispose());
       else
         mats.dispose();
+      subset.mesh.geometry.index = null;
       subset.mesh.geometry.dispose();
       const geom = subset.mesh.geometry;
       if (geom.disposeBoundsTree)
@@ -77629,6 +77630,8 @@ class IFCManager {
 
   async setWasmPath(path) {
     this.state.api.SetWasmPath(path);
+    if (!this.state.worker.active)
+      this.state.wasmPath = path;
   }
 
   setupThreeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast) {
@@ -77664,6 +77667,9 @@ class IFCManager {
       this.state.worker.active = active;
       this.state.worker.path = path;
       await this.initializeWorkers();
+      const wasm = this.state.wasmPath;
+      if (wasm)
+        await this.setWasmPath(wasm);
     } else {
       this.state.api = new IfcAPI2();
     }
