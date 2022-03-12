@@ -82152,9 +82152,6 @@ function getName(category) {
 	return names.find(name => categories[name] === category);
 }
 
-// Stores the created subsets
-const subsets = {};
-
 // Gets all the items of a category
 async function getAll(category) {
 	return ifcLoader.ifcManager.getAllItemsOfType(0, category, false);
@@ -82171,6 +82168,9 @@ async function newSubsetOfType(category) {
 		customID: category.toString(),
 	});
 }
+
+// Stores the created subsets
+const subsets = {};
 
 async function setupAllCategories() {
 	const allCategories = Object.values(categories);

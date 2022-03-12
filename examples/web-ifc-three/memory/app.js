@@ -60,7 +60,7 @@ controls.target.set(-2, 0, 0);
 
 // Stats
 const stats = new Stats();
-stats.showPanel(0);
+stats.showPanel(2);
 document.body.append(stats.dom);
 
 //Animation loop
@@ -103,7 +103,7 @@ input.addEventListener(
 
 // Sets up memory disposal
 const button = document.getElementById('memory-button');
-button.addEventListener(`click`, () => releaseMemory())
+button.addEventListener(`click`, () => releaseMemory());
 
 async function releaseMemory() {
 	  // This releases all IFCLoader memory
