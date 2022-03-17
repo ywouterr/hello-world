@@ -123,7 +123,7 @@ function cast(event) {
 
 const output = document.getElementById("id-output");
 
-function pick(event) {
+async function pick(event) {
     const found = cast(event)[0];
     if (found) {
         const index = found.faceIndex;
@@ -131,7 +131,7 @@ function pick(event) {
         const ifc = ifcLoader.ifcManager;
         const id = ifc.getExpressId(geometry, index);
         const modelID = found.object.modelID;
-        const props = ifc.getItemProperties(modelID, id);
+        const props = await ifc.getItemProperties(modelID, id);
         output.innerHTML = JSON.stringify(props, null, 2);
     }
 }
