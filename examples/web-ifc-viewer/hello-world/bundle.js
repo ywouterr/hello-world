@@ -107230,3 +107230,6 @@ async function loadIfc(url) {
 }
 
 loadIfc('../../../IFC/01.ifc');
+
+window.ondblclick = () => viewer.IFC.selector.pickIfcItem(true);
+window.onmousemove = () => viewer.IFC.selector.prePickIfcItem();
