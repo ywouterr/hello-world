@@ -26,6 +26,10 @@ li {
     overflow: auto;
 }
 
+.leaf-node {
+    margin-left: 2rem;
+}
+
 ul, #myUL {
     list-style-type: none;
 }
@@ -68,9 +72,4 @@ transform: rotate(90deg);
     position: relative;
     width: 70%;
     height: 100vh;
-}
-
-#file-input {
-    z-index: 3;
-    position: absolute;
 }
