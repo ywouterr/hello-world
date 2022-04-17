@@ -82105,10 +82105,14 @@ class ClippingEdges {
     }
     dispose() {
         Object.values(this.edges).forEach((edge) => {
+            if (edge.generatorGeometry.boundsTree)
+                edge.generatorGeometry.disposeBoundsTree();
             edge.generatorGeometry.dispose();
+            if (edge.mesh.geometry.boundsTree)
+                edge.mesh.geometry.disposeBoundsTree();
             edge.mesh.geometry.dispose();
-            edge.mesh = undefined;
             edge.mesh.removeFromParent();
+            edge.mesh = null;
         });
         this.edges = null;
         this.context = null;
@@ -82120,7 +82124,9 @@ class ClippingEdges {
             ClippingEdges.basicEdges.removeFromParent();
             ClippingEdges.basicEdges.geometry.dispose();
             ClippingEdges.basicEdges = null;
+            ClippingEdges.basicEdges = new LineSegments();
         }
+        ClippingEdges.edgesParent = undefined;
         if (!ClippingEdges.styles)
             return;
         const styles = Object.values(ClippingEdges.styles);
@@ -82141,6 +82147,7 @@ class ClippingEdges {
             style.material.dispose();
         });
         ClippingEdges.styles = null;
+        ClippingEdges.styles = {};
     }
     async updateEdges() {
         if (ClippingEdges.createDefaultIfcStyles) {
@@ -82334,13 +82341,15 @@ class ClippingEdges {
         if (!Number.isNaN(edges.generatorGeometry.attributes.position.array[0])) {
             ClippingEdges.basicEdges.geometry = edges.generatorGeometry;
             edges.mesh.geometry.fromLineSegments(ClippingEdges.basicEdges);
-            this.context.getScene().add(edges.mesh);
+            const parent = ClippingEdges.edgesParent || this.context.getScene();
+            parent.add(edges.mesh);
         }
     }
 }
 ClippingEdges.styles = {};
 ClippingEdges.forceStyleUpdate = false;
 ClippingEdges.createDefaultIfcStyles = true;
+ClippingEdges.edgesParent = null;
 ClippingEdges.invisibleMaterial = new MeshBasicMaterial({ visible: false });
 ClippingEdges.defaultMaterial = new LineMaterial({ color: 0x000000, linewidth: 0.001 });
 // Helpers
@@ -82409,15 +82418,28 @@ class IfcPlane extends IfcComponent {
         if (IfcPlane.planeMaterial) {
             IfcPlane.planeMaterial.dispose();
             IfcPlane.planeMaterial = null;
+            IfcPlane.planeMaterial = IfcPlane.getPlaneMaterial();
         }
         if (IfcPlane.hiddenMaterial) {
             IfcPlane.hiddenMaterial.dispose();
             IfcPlane.hiddenMaterial = null;
+            IfcPlane.hiddenMaterial = IfcPlane.getHiddenMaterial();
         }
         this.removeFromScene();
         this.edges.disposeStylesAndHelpers();
         this.edges = null;
         this.context = null;
+    }
+    static getPlaneMaterial() {
+        return new MeshBasicMaterial({
+            color: 0xffff00,
+            side: DoubleSide,
+            transparent: true,
+            opacity: 0.2
+        });
+    }
+    static getHiddenMaterial() {
+        return new MeshBasicMaterial({ visible: false });
     }
     newTransformControls() {
         const camera = this.context.getCamera();
@@ -82479,13 +82501,8 @@ class IfcPlane extends IfcComponent {
         return new Mesh(planeGeom, IfcPlane.planeMaterial);
     }
 }
-IfcPlane.planeMaterial = new MeshBasicMaterial({
-    color: 0xffff00,
-    side: DoubleSide,
-    transparent: true,
-    opacity: 0.2
-});
-IfcPlane.hiddenMaterial = new MeshBasicMaterial({ visible: false });
+IfcPlane.planeMaterial = IfcPlane.getPlaneMaterial();
+IfcPlane.hiddenMaterial = IfcPlane.getHiddenMaterial();
 
 class IfcClipper extends IfcComponent {
     constructor(context, ifc) {
@@ -82528,9 +82545,9 @@ class IfcClipper extends IfcComponent {
             this.updateMaterials();
         };
         this.deleteAllPlanes = () => {
-            this.planes.forEach((plane) => plane.removeFromScene());
-            this.planes = [];
-            this.updateMaterials();
+            while (this.planes.length > 0) {
+                this.deletePlane(this.planes[0]);
+            }
         };
         this.pickPlane = () => {
             const planeMeshes = this.planes.map((p) => p.planeMesh);
@@ -82606,6 +82623,9 @@ class IfcClipper extends IfcComponent {
             plane.edgesActive = state;
         });
     }
+    toggle() {
+        this.active = !this.active;
+    }
     dispose() {
         this.planes.forEach((plane) => plane.dispose());
         this.planes.length = 0;
@@ -82640,12 +82660,33 @@ class IfcClipper extends IfcComponent {
     }
 }
 
+function disposeMeshRecursively(mesh) {
+    mesh.removeFromParent();
+    if (mesh.geometry)
+        mesh.geometry.dispose();
+    if (mesh.material) {
+        if (Array.isArray(mesh.material))
+            mesh.material.forEach((mat) => mat.dispose());
+        else
+            mesh.material.dispose();
+    }
+    if (mesh.children && mesh.children.length) {
+        mesh.children.forEach((child) => disposeMeshRecursively(child));
+    }
+    mesh.children.length = 0;
+}
+
 class SectionFillManager {
     constructor(IFC, context) {
         this.IFC = IFC;
         this.context = context;
         this.existMessage = 'The specified fill already exists';
         this.fills = {};
+    }
+    dispose() {
+        const fills = Object.values(this.fills);
+        fills.forEach((fill) => disposeMeshRecursively(fill));
+        this.fills = null;
     }
     create(name, modelID, ids, material) {
         if (this.fills[name] !== undefined)
@@ -82772,6 +82813,12 @@ class PlanManager {
         this.previousTarget = new Vector3();
         this.previousProjection = CameraProjections.Perspective;
         this.sectionFill = new Mesh();
+    }
+    dispose() {
+        disposeMeshRecursively(this.sectionFill);
+        this.sectionFill = null;
+        this.storeys = null;
+        this.planLists = null;
     }
     getAll(modelID) {
         const currentPlans = this.planLists[modelID];
@@ -82929,22 +82976,6 @@ class PlanManager {
     }
 }
 
-function disposeMeshRecursively(mesh) {
-    mesh.removeFromParent();
-    if (mesh.geometry)
-        mesh.geometry.dispose();
-    if (mesh.material) {
-        if (Array.isArray(mesh.material))
-            mesh.material.forEach((mat) => mat.dispose());
-        else
-            mesh.material.dispose();
-    }
-    if (mesh.children && mesh.children.length) {
-        mesh.children.forEach((child) => disposeMeshRecursively(child));
-    }
-    mesh.children.length = 0;
-}
-
 class IfcGrid extends IfcComponent {
     constructor(context) {
         super(context);
@@ -82987,23 +83018,6 @@ class IfcAxes extends IfcComponent {
         this.axes.renderOrder = 2;
         const scene = this.context.getScene();
         scene.add(this.axes);
-    }
-}
-
-class IfcStats extends IfcComponent {
-    initializeStats(Stats) {
-        this.stats = new Stats();
-        this.stats.showPanel(0);
-    }
-    update(_delta) {
-        if (this.stats) {
-            this.stats.update();
-        }
-    }
-    addStats(css = '') {
-        if (css.length > 0)
-            this.stats.dom.style.cssText = css;
-        document.body.appendChild(this.stats.dom);
     }
 }
 
@@ -83236,6 +83250,31 @@ class IfcDimensionLine {
         this.context.ifcCamera.onChange.on(() => this.rescaleObjectsToCameraPosition());
         this.rescaleObjectsToCameraPosition();
     }
+    dispose() {
+        this.removeFromScene();
+        this.context = null;
+        disposeMeshRecursively(this.root);
+        this.root = null;
+        disposeMeshRecursively(this.line);
+        this.line = null;
+        this.endpointMeshes.forEach((mesh) => disposeMeshRecursively(mesh));
+        this.endpointMeshes.length = 0;
+        this.axis.dispose();
+        this.axis = null;
+        this.endpoint.dispose();
+        this.endpoint = null;
+        this.textLabel.removeFromParent();
+        this.textLabel.element.remove();
+        this.textLabel = null;
+        this.lineMaterial.dispose();
+        this.lineMaterial = null;
+        this.endpointMaterial.dispose();
+        this.endpointMaterial = null;
+        if (this.boundingMesh) {
+            disposeMeshRecursively(this.boundingMesh);
+            this.boundingMesh = null;
+        }
+    }
     get boundingBox() {
         return this.boundingMesh;
     }
@@ -83381,6 +83420,17 @@ class IfcDimensions extends IfcComponent {
         htmlPreview.className = this.previewClassName;
         this.previewElement = new CSS2DObject(htmlPreview);
         this.previewElement.visible = false;
+    }
+    dispose() {
+        this.context = null;
+        this.dimensions.forEach((dim) => dim.dispose());
+        this.dimensions = null;
+        this.currentDimension = null;
+        this.endpoint.dispose();
+        this.endpoint = null;
+        this.previewElement.removeFromParent();
+        this.previewElement.element.remove();
+        this.previewElement = null;
     }
     update(_delta) {
         if (this.enabled && this.preview) {
@@ -83573,6 +83623,20 @@ class Edges {
         material.polygonOffsetFactor = 1;
         material.polygonOffsetUnits = 1;
     }
+    dispose() {
+        const allEdges = Object.values(this.edges);
+        allEdges.forEach((item) => {
+            disposeMeshRecursively(item.edges);
+            if (Array.isArray(item.originalMaterials)) {
+                item.originalMaterials.forEach((mat) => mat.dispose());
+            }
+            else
+                item.originalMaterials.dispose();
+            if (item.baseMaterial)
+                item.baseMaterial.dispose();
+        });
+        this.edges = null;
+    }
     getAll() {
         return Object.keys(this.edges);
     }
@@ -83584,18 +83648,21 @@ class Edges {
         const model = this.context.items.ifcModels.find((model) => model.modelID === modelID);
         if (!model)
             return;
+        this.createFromMesh(name, model, lineMaterial, material);
+    }
+    createFromMesh(name, mesh, lineMaterial, material) {
         const planes = this.context.getClippingPlanes();
         lineMaterial.clippingPlanes = planes;
         if (material)
             material.clippingPlanes = planes;
-        this.setupModelMaterials(model);
-        const geo = new EdgesGeometry(model.geometry, this.threshold);
+        this.setupModelMaterials(mesh);
+        const geo = new EdgesGeometry(mesh.geometry, this.threshold);
         lineMaterial.clippingPlanes = this.context.getClippingPlanes();
         this.edges[name] = {
             edges: new LineSegments(geo, lineMaterial),
-            originalMaterials: model.material,
+            originalMaterials: mesh.material,
             baseMaterial: material,
-            model,
+            model: mesh,
             active: false
         };
     }
@@ -88000,16 +88067,19 @@ function mergeBufferAttributes( attributes ) {
 
 }
 
-let modelIdCounter = 0;
 const nullIfcManagerErrorMessage = 'IfcManager is null!';
 
 class IFCModel extends Mesh {
 
   constructor() {
     super(...arguments);
-    this.modelID = modelIdCounter++;
+    this.modelID = IFCModel.modelIdCounter++;
     this.ifcManager = null;
     this.mesh = this;
+  }
+
+  static dispose() {
+    IFCModel.modelIdCounter = 0;
   }
 
   setIFCManager(manager) {
@@ -88093,6 +88163,8 @@ class IFCModel extends Mesh {
   }
 
 }
+
+IFCModel.modelIdCounter = 0;
 
 class IFCParser {
 
@@ -90872,7 +90944,10 @@ class MemoryCleaner {
       if (geom.disposeBoundsTree)
         geom.disposeBoundsTree();
       geom.dispose();
-      model.mesh.material.forEach(mat => mat.dispose());
+      if (!Array.isArray(model.mesh.material))
+        model.mesh.material.dispose();
+      else
+        model.mesh.material.forEach(mat => mat.dispose());
       model.mesh = null;
       model.types = null;
       model.jsonData = null;
@@ -90898,6 +90973,7 @@ class IFCManager {
     this.BVH = new BvhManager();
     this.parser = new IFCParser(this.state, this.BVH);
     this.subsets = new SubsetManager(this.state, this.BVH);
+    this.typesMap = IfcTypesMap;
     this.properties = new PropertyManager(this.state);
     this.types = new TypeManager(this.state);
     this.cleaner = new MemoryCleaner(this.state);
@@ -91049,6 +91125,7 @@ class IFCManager {
   }
 
   async dispose() {
+    IFCModel.dispose();
     await this.cleaner.dispose();
     this.subsets.dispose();
     if (this.worker && this.state.worker.active)
@@ -91206,11 +91283,12 @@ class IfcSelector {
         this.highlight = new IfcSelection(context, this.ifc.loader);
     }
     dispose() {
-        this.defPreselectMat.dispose();
+        var _a, _b, _c;
+        (_a = this.defPreselectMat) === null || _a === void 0 ? void 0 : _a.dispose();
         this.defHighlightMat = null;
-        this.defSelectMat.dispose();
+        (_b = this.defSelectMat) === null || _b === void 0 ? void 0 : _b.dispose();
         this.defSelectMat = null;
-        this.defHighlightMat.dispose();
+        (_c = this.defHighlightMat) === null || _c === void 0 ? void 0 : _c.dispose();
         this.defHighlightMat = null;
         this.preselection.dispose();
         this.preselection = null;
@@ -91373,14 +91451,12 @@ class IfcProperties {
      * @maxSize (optional) maximum number of entities for each Blob. If not defined, it's infinite (only one Blob will be created).
      * @event (optional) callback called every time a 10% of entities are serialized into Blobs.
      */
-    async serializeAllProperties(modelID, maxSize, event) {
-        if (!this.webIfc)
-            this.webIfc = this.loader.ifcManager.ifcAPI;
-        const model = this.context.items.ifcModels.find((model) => model.modelID === modelID);
+    async serializeAllProperties(model, maxSize, event) {
+        this.webIfc = this.loader.ifcManager.ifcAPI;
         if (!model)
             throw new Error('The requested model was not found.');
         const blobs = [];
-        await this.getPropertiesAsBlobs(modelID, blobs, maxSize, event);
+        await this.getPropertiesAsBlobs(model.modelID, blobs, maxSize, event);
         return blobs;
     }
     async getPropertiesAsBlobs(modelID, blobs, maxSize, event) {
@@ -91410,11 +91486,17 @@ class IfcProperties {
         blobs.push(new Blob([JSON.stringify(properties)], { type: 'application/json' }));
     }
     async getItemProperty(modelID, id, properties) {
-        // eslint-disable-next-line no-await-in-loop
-        const props = await this.webIfc.GetLine(modelID, id);
-        delete props.expressID;
-        this.formatItemProperties(props);
-        properties[id] = props;
+        try {
+            const props = await this.webIfc.GetLine(modelID, id);
+            if (props.type) {
+                props.type = this.loader.ifcManager.typesMap[props.type];
+            }
+            this.formatItemProperties(props);
+            properties[id] = props;
+        }
+        catch (e) {
+            console.log(`There was a problem getting the properties of the item with ID ${id}`);
+        }
     }
     formatItemProperties(props) {
         Object.keys(props).forEach((key) => {
@@ -91431,8 +91513,26 @@ class IfcProperties {
     }
     async initializePropertiesObject(modelID) {
         return {
-            0: await this.webIfc.GetCoordinationMatrix(modelID)
+            coordinationMatrix: await this.webIfc.GetCoordinationMatrix(modelID),
+            globalHeight: await this.getBuildingHeight(modelID)
         };
+    }
+    async getBuildingHeight(modelID) {
+        const building = await this.getBuilding(modelID);
+        let placement;
+        const siteReference = building.ObjectPlacement.PlacementRelTo;
+        if (siteReference)
+            placement = siteReference.RelativePlacement.Location;
+        else
+            placement = building.ObjectPlacement.RelativePlacement.Location;
+        const transform = placement.Coordinates.map((coord) => coord.value);
+        return transform[2];
+    }
+    async getBuilding(modelID) {
+        const ifc = this.loader.ifcManager;
+        const allBuildingsIDs = await ifc.getAllItemsOfType(modelID, IFCBUILDING, false);
+        const buildingID = allBuildingsIDs[0];
+        return ifc.getItemProperties(modelID, buildingID, true);
     }
     async getAllGeometriesIDs(modelID) {
         const geometriesIDs = new Set();
@@ -91672,7 +91772,14 @@ class DropboxAPI extends IfcComponent {
         };
         this.loader = loader;
         this.counter = 0;
-        this.initializeAPI();
+    }
+    initializeAPI() {
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = 'https://www.dropbox.com/static/api/2/dropins.js';
+        script.id = 'dropboxjs';
+        script.setAttribute('data-app-key', 'iej3z16hhyca35a');
+        document.getElementsByTagName('head')[0].appendChild(script);
     }
     loadDropboxIfc() {
         this.openDropboxChooser(this.getOptions());
@@ -91697,14 +91804,6 @@ class DropboxAPI extends IfcComponent {
     }
     onDBChooserCancel(_files) {
         console.log('Canceled!');
-    }
-    initializeAPI() {
-        const script = document.createElement('script');
-        script.type = 'text/javascript';
-        script.src = 'https://www.dropbox.com/static/api/2/dropins.js';
-        script.id = 'dropboxjs';
-        script.setAttribute('data-app-key', 'iej3z16hhyca35a');
-        document.getElementsByTagName('head')[0].appendChild(script);
     }
 }
 
@@ -93095,14 +93194,15 @@ class CameraControls extends EventDispatcher {
 function createBoundingSphere(object3d, out) {
     const boundingSphere = out;
     const center = boundingSphere.center;
-    object3d.traverse((object) => {
+    _box3A.makeEmpty();
+    object3d.traverseVisible((object) => {
         if (!object.isMesh)
             return;
         _box3A.expandByObject(object);
     });
     _box3A.getCenter(center);
     let maxRadiusSq = 0;
-    object3d.traverse((object) => {
+    object3d.traverseVisible((object) => {
         if (!object.isMesh)
             return;
         const mesh = object;
@@ -93678,6 +93778,7 @@ class IfcRenderer extends IfcComponent {
             this.restoreRendererBackgroundColor();
     }
     dispose() {
+        this.basicRenderer.domElement.remove();
         this.basicRenderer.dispose();
         this.postProductionRenderer.dispose();
         this.basicRenderer = null;
@@ -93744,6 +93845,7 @@ class IfcScene extends IfcComponent {
     }
     dispose() {
         this.scene.children.length = 0;
+        this.scene = null;
     }
     add(item) {
         this.scene.add(item);
@@ -93786,10 +93888,10 @@ function _assertThisInitialized(self) { if (self === void 0) { throw new Referen
 function _inheritsLoose(subClass, superClass) { subClass.prototype = Object.create(superClass.prototype); subClass.prototype.constructor = subClass; subClass.__proto__ = superClass; }
 
 /*!
- * GSAP 3.9.1
+ * GSAP 3.10.0
  * https://greensock.com
  *
- * @license Copyright 2008-2021, GreenSock. All rights reserved.
+ * @license Copyright 2008-2022, GreenSock. All rights reserved.
  * Subject to the terms at https://greensock.com/standard-license or for
  * Club GreenSock members, the agreement issued with that membership.
  * @author: Jack Doyle, jack@greensock.com
@@ -93855,7 +93957,7 @@ _numWithUnitExp = /[-+=.]*\d+[.e-]*\d*[a-z%]*/g,
 _relExp = /[+-]=-?[.\d]+/,
     _delimitedValueExp = /[^,'"\[\]\s]+/gi,
     // previously /[#\-+.]*\b[a-z\d\-=+%.]+/gi but didn't catch special characters.
-_unitExp = /[\d.+\-=]+(?:e[-+]\d*)*/i,
+_unitExp = /^[+\-=e\s\d]*\d+[.\d]*([a-z]*|%)\s*$/i,
     _globalTimeline,
     _win$1,
     _coreInitted,
@@ -93927,7 +94029,13 @@ _round = function _round(value) {
   return Math.round(value * 10000000) / 10000000 || 0;
 },
     // increased precision mostly for timing values.
-_arrayContainsAny = function _arrayContainsAny(toSearch, toFind) {
+_parseRelative = function _parseRelative(start, value) {
+  var operator = value.charAt(0),
+      end = parseFloat(value.substr(2));
+  start = parseFloat(start);
+  return operator === "+" ? start + end : operator === "-" ? start - end : operator === "*" ? start * end : start / end;
+},
+    _arrayContainsAny = function _arrayContainsAny(toSearch, toFind) {
   //searches one array to find matches for any of the items in the toFind array. As soon as one is found, it returns true. It does NOT return all the matches; it's simply a boolean search.
   var l = toFind.length,
       i = 0;
@@ -94396,7 +94504,7 @@ _isFromOrFromStart = function _isFromOrFromStart(_ref2) {
   return value < min ? min : value > max ? max : value;
 },
     getUnit = function getUnit(value, v) {
-  return !_isString(value) || !(v = _unitExp.exec(value)) ? "" : value.substr(v.index + v[0].length);
+  return !_isString(value) || !(v = _unitExp.exec(value)) ? "" : v[1];
 },
     // note: protect against padded numbers as strings, like "100.100". That shouldn't return "00" as the unit. If it's numeric, return no unit.
 clamp = function clamp(min, max, value) {
@@ -95108,10 +95216,20 @@ _tickerActive,
       _gap = 1000 / (_fps || 240);
       _nextTime = _self.time * 1000 + _gap;
     },
-    add: function add(callback) {
-      _listeners.indexOf(callback) < 0 && _listeners.push(callback);
+    add: function add(callback, once, prioritize) {
+      var func = once ? function (t, d, f, v) {
+        callback(t, d, f, v);
+
+        _self.remove(func);
+      } : callback;
+
+      _self.remove(callback);
+
+      _listeners[prioritize ? "unshift" : "push"](func);
 
       _wake();
+
+      return func;
     },
     remove: function remove(callback, i) {
       ~(i = _listeners.indexOf(callback)) && _listeners.splice(i, 1) && _i >= i && _i--;
@@ -95502,12 +95620,12 @@ var Animation = /*#__PURE__*/function () {
     this._rts = +value || 0;
     this._ts = this._ps || value === -_tinyNum ? 0 : this._rts; // _ts is the functional timeScale which would be 0 if the animation is paused.
 
-    _recacheAncestors(this.totalTime(_clamp(-this._delay, this._tDur, tTime), true));
+    this.totalTime(_clamp(-this._delay, this._tDur, tTime), true);
 
     _setEnd(this); // if parent.smoothChildTiming was false, the end time didn't get updated in the _alignPlayhead() method, so do it here.
 
 
-    return this;
+    return _recacheAncestors(this);
   };
 
   _proto.paused = function paused(value) {
@@ -96016,7 +96134,8 @@ var Timeline = /*#__PURE__*/function (_Animation) {
       }
 
       this._onUpdate && !suppressEvents && _callback(this, "onUpdate", true);
-      if (tTime === tDur && tDur >= this.totalDuration() || !tTime && prevTime) if (prevStart === this._start || Math.abs(timeScale) !== Math.abs(this._ts)) if (!this._lock) {
+      if (tTime === tDur && this._tTime >= this.totalDuration() || !tTime && prevTime) if (prevStart === this._start || Math.abs(timeScale) !== Math.abs(this._ts)) if (!this._lock) {
+        // remember, a child's callback may alter this timeline's playhead or timeScale which is why we need to add some of these checks.
         (totalTime || !dur) && (tTime === tDur && this._ts > 0 || !tTime && this._ts < 0) && _removeFromParent(this, 1); // don't remove if the timeline is reversed and the playhead isn't at 0, otherwise tl.progress(1).reverse() won't work. Only remove if the playhead is at the end and timeScale is positive, or if the playhead is at 0 and the timeScale is negative.
 
         if (!suppressEvents && !(totalTime < 0 && !prevTime) && (tTime || prevTime || !tDur)) {
@@ -96475,7 +96594,7 @@ var _addComplexStringPropTween = function _addComplexStringPropTween(target, pro
         p: chunk || matchIndex === 1 ? chunk : ",",
         //note: SVG spec allows omission of comma/space when a negative sign is wedged between two numbers, like 2.5-5.3 instead of 2.5,-5.3 but when tweening, the negative value may switch to positive, so we insert the comma just in case.
         s: startNum,
-        c: endNum.charAt(1) === "=" ? parseFloat(endNum.substr(2)) * (endNum.charAt(0) === "-" ? -1 : 1) : parseFloat(endNum) - startNum,
+        c: endNum.charAt(1) === "=" ? _parseRelative(startNum, endNum) - startNum : parseFloat(endNum) - startNum,
         m: color && color < 4 ? Math.round : 0
       };
       index = _complexStringNumExp.lastIndex;
@@ -96507,7 +96626,7 @@ var _addComplexStringPropTween = function _addComplexStringPropTween(target, pro
     }
 
     if (end.charAt(1) === "=") {
-      pt = parseFloat(parsedStart) + parseFloat(end.substr(2)) * (end.charAt(0) === "-" ? -1 : 1) + (getUnit(parsedStart) || 0);
+      pt = _parseRelative(parsedStart, end) + (getUnit(parsedStart) || 0);
 
       if (pt || pt === 0) {
         // to avoid isNaN, like if someone passes in a value like "!= whatever"
@@ -96516,7 +96635,7 @@ var _addComplexStringPropTween = function _addComplexStringPropTween(target, pro
     }
   }
 
-  if (parsedStart !== end) {
+  if (parsedStart !== end || _forceAllPropTweens) {
     if (!isNaN(parsedStart * end) && end !== "") {
       // fun fact: any number multiplied by "" is evaluated as the number 0!
       pt = new PropTween(this._pt, target, prop, +parsedStart || 0, end - (parsedStart || 0), typeof currentValue === "boolean" ? _renderBoolean : _renderPlain, 0, setter);
@@ -96567,7 +96686,8 @@ _processVars = function _processVars(vars, index, target, targets, tween) {
 },
     _overwritingTween,
     //store a reference temporarily so we can avoid overwriting itself.
-_initTween = function _initTween(tween, time) {
+_forceAllPropTweens,
+    _initTween = function _initTween(tween, time) {
   var vars = tween.vars,
       ease = vars.ease,
       startAt = vars.startAt,
@@ -96619,7 +96739,12 @@ _initTween = function _initTween(tween, time) {
     harnessVars = harness && vars[harness.prop]; //someone may need to specify CSS-specific values AND non-CSS values, like if the element has an "x" property plus it's a standard DOM element. We allow people to distinguish by wrapping plugin-specific stuff in a css:{} object for example.
 
     cleanVars = _copyExcluding(vars, _reservedProps);
-    prevStartAt && _removeFromParent(prevStartAt.render(-1, true));
+
+    if (prevStartAt) {
+      _removeFromParent(prevStartAt.render(-1, true));
+
+      prevStartAt._lazy = 0;
+    }
 
     if (startAt) {
       _removeFromParent(tween._startAt = Tween.set(targets, _setDefaults({
@@ -96690,7 +96815,7 @@ _initTween = function _initTween(tween, time) {
       }
     }
 
-    tween._pt = 0;
+    tween._pt = tween._ptCache = 0;
     lazy = dur && _isNotFalse(lazy) || lazy && !dur;
 
     for (i = 0; i < targets.length; i++) {
@@ -96744,6 +96869,57 @@ _initTween = function _initTween(tween, time) {
   tween._initted = (!tween._op || tween._pt) && !overwritten; // if overwrittenProps resulted in the entire tween being killed, do NOT flag it as initted or else it may render for one tick.
 
   keyframes && time <= 0 && tl.render(_bigNum$1, true, true); // if there's a 0% keyframe, it'll render in the "before" state for any staggered/delayed animations thus when the following tween initializes, it'll use the "before" state instead of the "after" state as the initial values.
+},
+    _updatePropTweens = function _updatePropTweens(tween, property, value, start, startIsRelative, ratio, time) {
+  var ptCache = (tween._pt && tween._ptCache || (tween._ptCache = {}))[property],
+      pt,
+      lookup,
+      i;
+
+  if (!ptCache) {
+    ptCache = tween._ptCache[property] = [];
+    lookup = tween._ptLookup;
+    i = tween._targets.length;
+
+    while (i--) {
+      pt = lookup[i][property];
+
+      if (pt && pt.d && pt.d._pt) {
+        // it's a plugin, so find the nested PropTween
+        pt = pt.d._pt;
+
+        while (pt && pt.p !== property) {
+          pt = pt._next;
+        }
+      }
+
+      if (!pt) {
+        // there is no PropTween associated with that property, so we must FORCE one to be created and ditch out of this
+        // if the tween has other properties that already rendered at new positions, we'd normally have to rewind to put them back like tween.render(0, true) before forcing an _initTween(), but that can create another edge case like tweening a timeline's progress would trigger onUpdates to fire which could move other things around. It's better to just inform users that .resetTo() should ONLY be used for tweens that already have that property. For example, you can't gsap.to(...{ y: 0 }) and then tween.restTo("x", 200) for example.
+        _forceAllPropTweens = 1; // otherwise, when we _addPropTween() and it finds no change between the start and end values, it skips creating a PropTween (for efficiency...why tween when there's no difference?) but in this case we NEED that PropTween created so we can edit it.
+
+        tween.vars[property] = "+=0";
+
+        _initTween(tween, time);
+
+        _forceAllPropTweens = 0;
+        return 1;
+      }
+
+      ptCache.push(pt);
+    }
+  }
+
+  i = ptCache.length;
+
+  while (i--) {
+    pt = ptCache[i];
+    pt.s = (start || start === 0) && !startIsRelative ? start : pt.s + (start || 0) + ratio * pt.c;
+    pt.c = value - pt.s;
+    pt.e && (pt.e = _round(value) + getUnit(pt.e)); // mainly for CSSPlugin (end value)
+
+    pt.b && (pt.b = pt.s + getUnit(pt.b)); // (beginning value)
+  }
 },
     _addAliasesToVars = function _addAliasesToVars(targets, vars) {
   var harness = targets[0] ? _getCache(targets[0]).harness : 0,
@@ -96802,7 +96978,7 @@ _parseKeyframe = function _parseKeyframe(prop, obj, allProps, easeEach) {
     _parseFuncOrString = function _parseFuncOrString(value, tween, i, target, targets) {
   return _isFunction(value) ? value.call(tween, i, target, targets) : _isString(value) && ~value.indexOf("random(") ? _replaceRandom(value) : value;
 },
-    _staggerTweenProps = _callbackNames + "repeat,repeatDelay,yoyo,repeatRefresh,yoyoEase",
+    _staggerTweenProps = _callbackNames + "repeat,repeatDelay,yoyo,repeatRefresh,yoyoEase,autoRevert",
     _staggerPropsToSkip = {};
 
 _forEachName(_staggerTweenProps + ",id,stagger,delay,duration,paused,scrollTrigger", function (name) {
@@ -97034,6 +97210,7 @@ var Tween = /*#__PURE__*/function (_Animation2) {
 
         if (time === prevTime && !force && this._initted) {
           //could be during the repeatDelay part. No need to render and fire callbacks.
+          this._tTime = tTime;
           return this;
         }
 
@@ -97052,6 +97229,11 @@ var Tween = /*#__PURE__*/function (_Animation2) {
         if (_attemptInitTween(this, totalTime < 0 ? totalTime : time, force, suppressEvents)) {
           this._tTime = 0; // in constructor if immediateRender is true, we set _tTime to -_tinyNum to have the playhead cross the starting point but we can't leave _tTime as a negative number.
 
+          return this;
+        }
+
+        if (prevTime !== this._time) {
+          // rare edge case - during initialization, an onUpdate in the _startAt (.fromTo()) might force this tween to render at a different spot in which case we should ditch this render() call so that it doesn't revert the values.
           return this;
         }
 
@@ -97127,6 +97309,34 @@ var Tween = /*#__PURE__*/function (_Animation2) {
     this._ptLookup = [];
     this.timeline && this.timeline.invalidate();
     return _Animation2.prototype.invalidate.call(this);
+  };
+
+  _proto3.resetTo = function resetTo(property, value, start, startIsRelative) {
+    _tickerActive || _ticker.wake();
+    this._ts || this.play();
+    var time = Math.min(this._dur, (this._dp._time - this._start) * this._ts),
+        ratio,
+        p;
+    this._initted || _initTween(this, time);
+    ratio = this._ease(time / this._dur); // don't just get tween.ratio because it may not have rendered yet.
+
+    if (_isObject(property)) {
+      // performance optimization
+      for (p in property) {
+        if (_updatePropTweens(this, p, property[p], value ? value[p] : null, start, ratio, time)) {
+          return this.resetTo(property, value, start, startIsRelative); // if a PropTween wasn't found for the property, it'll get forced with a re-initialization so we need to jump out and start over again.
+        }
+      }
+    } else {
+      if (_updatePropTweens(this, property, value, start, startIsRelative, ratio, time)) {
+        return this.resetTo(property, value, start, startIsRelative); // if a PropTween wasn't found for the property, it'll get forced with a re-initialization so we need to jump out and start over again.
+      }
+    }
+
+    _alignPlayhead(this, 0);
+
+    this.parent || _addLinkedListItem(this._dp, this, "_first", "_last", this._dp._sort ? "_start" : 0);
+    return this.render(0);
   };
 
   _proto3.kill = function kill(targets, vars) {
@@ -97522,6 +97732,17 @@ var _gsap = {
       return setter(target, p, unit ? value + unit : value, cache, 1);
     };
   },
+  quickTo: function quickTo(target, property, vars) {
+    var _merge2;
+
+    var tween = gsap.to(target, _merge((_merge2 = {}, _merge2[property] = "+=0.1", _merge2.paused = true, _merge2), vars || {})),
+        func = function func(value, start, startIsRelative) {
+      return tween.resetTo(property, value, start, startIsRelative);
+    };
+
+    func.tween = tween;
+    return func;
+  },
   isTweening: function isTweening(targets) {
     return _globalTimeline.getTweensOf(targets, true).length > 0;
   },
@@ -97732,15 +97953,15 @@ var gsap = _gsap.registerPlugin({
   }
 }, _buildModifierPlugin("roundProps", _roundModifier), _buildModifierPlugin("modifiers"), _buildModifierPlugin("snap", snap)) || _gsap; //to prevent the core plugins from being dropped via aggressive tree shaking, we must include them in the variable declaration in this way.
 
-Tween.version = Timeline.version = gsap.version = "3.9.1";
+Tween.version = Timeline.version = gsap.version = "3.10.0";
 _coreReady = 1;
 _windowExists$1() && _wake();
 
 /*!
- * CSSPlugin 3.9.1
+ * CSSPlugin 3.10.0
  * https://greensock.com
  *
- * Copyright 2008-2021, GreenSock. All rights reserved.
+ * Copyright 2008-2022, GreenSock. All rights reserved.
  * Subject to the terms at https://greensock.com/standard-license or for
  * Club GreenSock members, the agreement issued with that membership.
  * @author: Jack Doyle, jack@greensock.com
@@ -97761,7 +97982,7 @@ var _win,
     _atan2 = Math.atan2,
     _bigNum = 1e8,
     _capsExp = /([A-Z])/g,
-    _horizontalExp = /(?:left|right|width|margin|padding|x)/i,
+    _horizontalExp = /(left|right|width|margin|padding|x)/i,
     _complexExp = /[\s,\(]\S/,
     _propertyAliases = {
   autoAlpha: "opacity,visibility",
@@ -98047,7 +98268,7 @@ _convertToUnit = function _convertToUnit(target, property, value, unit) {
   return unit && !~(value + "").trim().indexOf(" ") ? _convertToUnit(target, property, value, unit) + unit : value;
 },
     _tweenComplexCSSString = function _tweenComplexCSSString(target, prop, start, end) {
-  //note: we call _tweenComplexCSSString.call(pluginInstance...) to ensure that it's scoped properly. We may call it from within a plugin too, thus "this" would refer to the plugin.
+  // note: we call _tweenComplexCSSString.call(pluginInstance...) to ensure that it's scoped properly. We may call it from within a plugin too, thus "this" would refer to the plugin.
   if (!start || start === "none") {
     // some browsers like Safari actually PREFER the prefixed property and mis-report the unprefixed value like clipPath (BUG). In other words, even though clipPath exists in the style ("clipPath" in target.style) and it's set in the CSS properly (along with -webkit-clip-path), Safari reports clipPath as "none" whereas WebkitClipPath reports accurately like "ellipse(100% 0% at 50% 0%)", so in this case we must SWITCH to using the prefixed property instead. See https://greensock.com/forums/topic/18310-clippath-doesnt-work-on-ios/
     var p = _checkPropPrefix(prop, target, 1),
@@ -98075,11 +98296,10 @@ _convertToUnit = function _convertToUnit(target, property, value, unit) {
       chunk,
       endUnit,
       startUnit,
-      relative,
       endValues;
   pt.b = start;
   pt.e = end;
-  start += ""; //ensure values are strings
+  start += ""; // ensure values are strings
 
   end += "";
 
@@ -98091,7 +98311,7 @@ _convertToUnit = function _convertToUnit(target, property, value, unit) {
 
   a = [start, end];
 
-  _colorStringFilter(a); //pass an array with the starting and ending values and let the filter do whatever it needs to the values. If colors are found, it returns true and then we must match where the color shows up order-wise because for things like boxShadow, sometimes the browser provides the computed values with the color FIRST, but the user provides it with the color LAST, so flip them if necessary. Same for drop-shadow().
+  _colorStringFilter(a); // pass an array with the starting and ending values and let the filter do whatever it needs to the values. If colors are found, it returns true and then we must match where the color shows up order-wise because for things like boxShadow, sometimes the browser provides the computed values with the color FIRST, but the user provides it with the color LAST, so flip them if necessary. Same for drop-shadow().
 
 
   start = a[0];
@@ -98113,12 +98333,7 @@ _convertToUnit = function _convertToUnit(target, property, value, unit) {
       if (endValue !== (startValue = startValues[matchIndex++] || "")) {
         startNum = parseFloat(startValue) || 0;
         startUnit = startValue.substr((startNum + "").length);
-        relative = endValue.charAt(1) === "=" ? +(endValue.charAt(0) + "1") : 0;
-
-        if (relative) {
-          endValue = endValue.substr(2);
-        }
-
+        endValue.charAt(1) === "=" && (endValue = _parseRelative(startNum, endValue) + startUnit);
         endNum = parseFloat(endValue);
         endUnit = endValue.substr((endNum + "").length);
         index = _numWithUnitExp.lastIndex - endUnit.length;
@@ -98135,7 +98350,7 @@ _convertToUnit = function _convertToUnit(target, property, value, unit) {
 
         if (startUnit !== endUnit) {
           startNum = _convertToUnit(target, prop, startValue, endUnit) || 0;
-        } //these nested PropTweens are handled in a special way - we'll never actually call a render or setter method on them. We'll just loop through them in the parent complex string PropTween's render method.
+        } // these nested PropTweens are handled in a special way - we'll never actually call a render or setter method on them. We'll just loop through them in the parent complex string PropTween's render method.
 
 
         pt._pt = {
@@ -98143,7 +98358,7 @@ _convertToUnit = function _convertToUnit(target, property, value, unit) {
           p: chunk || matchIndex === 1 ? chunk : ",",
           //note: SVG spec allows omission of comma/space when a negative sign is wedged between two numbers, like 2.5-5.3 instead of 2.5,-5.3 but when tweening, the negative value may switch to positive, so we insert the comma just in case.
           s: startNum,
-          c: relative ? relative * endNum : endNum - startNum,
+          c: endNum - startNum,
           m: color && color < 4 || prop === "zIndex" ? Math.round : 0
         };
       }
@@ -98597,8 +98812,9 @@ _identity2DMatrix = [1, 0, 0, 1, 0, 0],
     }
   }
 
-  cache.x = x - ((cache.xPercent = x && (cache.xPercent || (Math.round(target.offsetWidth / 2) === Math.round(-x) ? -50 : 0))) ? target.offsetWidth * cache.xPercent / 100 : 0) + px;
-  cache.y = y - ((cache.yPercent = y && (cache.yPercent || (Math.round(target.offsetHeight / 2) === Math.round(-y) ? -50 : 0))) ? target.offsetHeight * cache.yPercent / 100 : 0) + px;
+  uncache = uncache || cache.uncache;
+  cache.x = x - ((cache.xPercent = x && (!uncache && cache.xPercent || (Math.round(target.offsetWidth / 2) === Math.round(-x) ? -50 : 0))) ? target.offsetWidth * cache.xPercent / 100 : 0) + px;
+  cache.y = y - ((cache.yPercent = y && (!uncache && cache.yPercent || (Math.round(target.offsetHeight / 2) === Math.round(-y) ? -50 : 0))) ? target.offsetHeight * cache.yPercent / 100 : 0) + px;
   cache.z = z + px;
   cache.scaleX = _round(scaleX);
   cache.scaleY = _round(scaleY);
@@ -98796,11 +99012,11 @@ _addPxTranslate = function _addPxTranslate(target, start, value) {
   target.setAttribute("transform", temp);
   forceCSS && (target.style[_transformProp] = temp); //some browsers prioritize CSS transforms over the transform attribute. When we sense that the user has CSS transforms applied, we must overwrite them this way (otherwise some browser simply won't render the  transform attribute changes!)
 },
-    _addRotationalPropTween = function _addRotationalPropTween(plugin, target, property, startNum, endValue, relative) {
+    _addRotationalPropTween = function _addRotationalPropTween(plugin, target, property, startNum, endValue) {
   var cap = 360,
       isString = _isString(endValue),
       endNum = parseFloat(endValue) * (isString && ~endValue.indexOf("rad") ? _RAD2DEG : 1),
-      change = relative ? endNum * relative : endNum - startNum,
+      change = endNum - startNum,
       finalValue = startNum + change + "deg",
       direction,
       pt;
@@ -99001,7 +99217,7 @@ var CSSPlugin = {
         }
 
         startNum = parseFloat(startValue);
-        relative = type === "string" && endValue.charAt(1) === "=" ? +(endValue.charAt(0) + "1") : 0;
+        relative = type === "string" && endValue.charAt(1) === "=" && endValue.substr(0, 2);
         relative && (endValue = endValue.substr(2));
         endNum = parseFloat(endValue);
 
@@ -99036,7 +99252,7 @@ var CSSPlugin = {
           }
 
           if (p === "scale") {
-            this._pt = new PropTween(this._pt, cache, "scaleY", cache.scaleY, (relative ? relative * endNum : endNum - cache.scaleY) || 0);
+            this._pt = new PropTween(this._pt, cache, "scaleY", cache.scaleY, (relative ? _parseRelative(cache.scaleY, relative + endNum) : endNum) - cache.scaleY || 0);
             props.push("scaleY", p);
             p += "X";
           } else if (p === "transformOrigin") {
@@ -99058,7 +99274,7 @@ var CSSPlugin = {
 
             continue;
           } else if (p in _rotationalProperties) {
-            _addRotationalPropTween(this, cache, p, startNum, endValue, relative);
+            _addRotationalPropTween(this, cache, p, startNum, relative ? _parseRelative(startNum, relative + endValue) : endValue);
 
             continue;
           } else if (p === "smoothOrigin") {
@@ -99083,7 +99299,7 @@ var CSSPlugin = {
 
           endUnit = getUnit(endValue) || (p in _config.units ? _config.units[p] : startUnit);
           startUnit !== endUnit && (startNum = _convertToUnit(target, p, startValue, endUnit));
-          this._pt = new PropTween(this._pt, isTransformRelated ? cache : style, p, startNum, relative ? relative * endNum : endNum - startNum, !isTransformRelated && (endUnit === "px" || p === "zIndex") && vars.autoRound !== false ? _renderRoundedCSSProp : _renderCSSProp);
+          this._pt = new PropTween(this._pt, isTransformRelated ? cache : style, p, startNum, (relative ? _parseRelative(startNum, relative + endNum) : endNum) - startNum, !isTransformRelated && (endUnit === "px" || p === "zIndex") && vars.autoRound !== false ? _renderRoundedCSSProp : _renderCSSProp);
           this._pt.u = endUnit || 0;
 
           if (startUnit !== endUnit && endUnit !== "%") {
@@ -99094,14 +99310,14 @@ var CSSPlugin = {
         } else if (!(p in style)) {
           if (p in target) {
             //maybe it's not a style - it could be a property added directly to an element in which case we'll try to animate that.
-            this.add(target, p, startValue || target[p], endValue, index, targets);
+            this.add(target, p, startValue || target[p], relative ? relative + endValue : endValue, index, targets);
           } else {
             _missingPlugin(p, endValue);
 
             continue;
           }
         } else {
-          _tweenComplexCSSString.call(this, target, p, startValue, endValue);
+          _tweenComplexCSSString.call(this, target, p, startValue, relative ? relative + endValue : endValue);
         }
 
         props.push(p);
@@ -106201,6 +106417,14 @@ class GLTFManager extends IfcComponent {
         this.GLTFModels = {};
         this.loader = new GLTFLoader();
         this.exporter = new GLTFExporter();
+        this.tempIfcLoader = null;
+        this.allFloors = 'allFloors';
+        this.allCategories = 'allCategories';
+        this.unitsFactor = {
+            MILLI: 0.001,
+            CENTI: 0.01,
+            DECI: 0.1
+        };
         this.options = {
             trs: false,
             onlyVisible: false,
@@ -106244,29 +106468,145 @@ class GLTFManager extends IfcComponent {
         this.setupMeshAsModel(gltfMesh);
         return gltfMesh;
     }
+    // TODO: Split up in smaller methods AND bring to new file
     /**
      * Exports the specified IFC file (or file subset) as glTF.
      * @fileURL The URL of the IFC file to convert to glTF
      * @ids (optional) The ids of the items to export. If not defined, the full model is exported
      */
-    async exportIfcFileAsGltf(ifcFileUrl, ids, onProgress) {
-        const loader = new IFCLoader();
-        const state = this.IFC.loader.ifcManager.state;
-        if (state.wasmPath)
-            await loader.ifcManager.setWasmPath(state.wasmPath);
-        if (state.worker.active)
-            await loader.ifcManager.useWebWorkers(true, state.worker.path);
-        if (state.webIfcSettings)
-            await loader.ifcManager.applyWebIfcConfig(state.webIfcSettings);
-        const model = await loader.loadAsync(ifcFileUrl, onProgress);
-        let result;
-        if (ids)
-            result = await this.exportModelPartToGltf(model, ids);
-        else
-            result = await this.exportMeshToGltf(model);
+    async exportIfcFileAsGltf(config) {
+        const { ifcFileUrl, getProperties, categories, splitByFloors, maxJSONSize, onProgress } = config;
+        const { loader, manager } = await this.setupIfcLoader();
+        const model = await loader.loadAsync(ifcFileUrl, (event) => {
+            if (onProgress)
+                onProgress(event.loaded, event.total, 'IFC');
+        });
+        const result = {
+            gltf: {},
+            json: [],
+            id: ''
+        };
+        const projects = await manager.getAllItemsOfType(model.modelID, IFCPROJECT, true);
+        if (!projects.length)
+            throw new Error('No IfcProject instances were found in the IFC.');
+        const GUID = projects[0].GlobalId;
+        if (!GUID)
+            throw new Error('The found IfcProject does not have a GUID');
+        result.id = GUID.value;
+        let allIdsByFloor = {};
+        let floorNames = [];
+        if (splitByFloors) {
+            allIdsByFloor = await this.getIDsByFloor(loader);
+            floorNames = Object.keys(allIdsByFloor);
+        }
+        await this.getModels(categories, result, manager, splitByFloors, floorNames, allIdsByFloor, model, onProgress);
+        if (getProperties) {
+            await this.getProperties(model, maxJSONSize, onProgress, result);
+        }
         await loader.ifcManager.dispose();
+        this.tempIfcLoader = null;
         return result;
     }
+    async getProperties(model, maxJSONSize, onProgress, result) {
+        const previousLoader = this.IFC.properties.loader;
+        this.IFC.properties.loader = this.tempIfcLoader;
+        const jsons = await this.IFC.properties.serializeAllProperties(model, maxJSONSize, (progress, total) => {
+            if (onProgress)
+                onProgress(progress, total, 'JSON');
+        });
+        result.json = jsons.map((json) => new File([json], 'properties.json'));
+        this.IFC.properties.loader = previousLoader;
+    }
+    async getModels(categories, result, manager, splitByFloors, floorNames, allIdsByFloor, model, onProgress) {
+        if (categories) {
+            await this.getModelsByCategory(categories, result, manager, splitByFloors, floorNames, allIdsByFloor, model, onProgress);
+        }
+        else {
+            await this.getModelsWithoutCategories(result, splitByFloors, floorNames, allIdsByFloor, model);
+        }
+    }
+    async setupIfcLoader() {
+        const loader = new IFCLoader();
+        this.tempIfcLoader = loader;
+        const state = this.IFC.loader.ifcManager.state;
+        const manager = loader.ifcManager;
+        if (state.wasmPath)
+            await manager.setWasmPath(state.wasmPath);
+        if (state.worker.active)
+            await manager.useWebWorkers(true, state.worker.path);
+        if (state.webIfcSettings)
+            await manager.applyWebIfcConfig(state.webIfcSettings);
+        return { loader, manager };
+    }
+    async getModelsByCategory(categories, result, manager, splitByFloors, floorNames, allIdsByFloor, model, onProgress) {
+        var _a;
+        const items = [];
+        const categoryNames = Object.keys(categories);
+        for (let i = 0; i < categoryNames.length; i++) {
+            const categoryName = categoryNames[i];
+            const currentCategories = categories[categoryName];
+            if (!result.gltf[categoryName])
+                result.gltf[categoryName] = {};
+            for (let j = 0; j < currentCategories.length; j++) {
+                const foundItems = await manager.getAllItemsOfType(0, currentCategories[j], false);
+                items.push(...foundItems);
+            }
+            const groupedIDs = {};
+            if (splitByFloors) {
+                floorNames.forEach((floorName) => {
+                    const floorIDs = allIdsByFloor[floorName];
+                    groupedIDs[floorName] = items.filter((id) => floorIDs.ids.has(id));
+                });
+            }
+            else {
+                groupedIDs[this.allFloors] = items;
+            }
+            const foundFloorNames = Object.keys(groupedIDs);
+            for (let j = 0; j < foundFloorNames.length; j++) {
+                const foundFloorName = foundFloorNames[j];
+                const items = groupedIDs[foundFloorName];
+                if (items.length) {
+                    const gltf = await this.exportModelPartToGltf(model, items, true);
+                    const height = ((_a = allIdsByFloor[foundFloorName]) === null || _a === void 0 ? void 0 : _a.height) || 0;
+                    result.gltf[categoryName][foundFloorName] = {
+                        file: this.glTFToFile(gltf, 'model-part.gltf'),
+                        height
+                    };
+                }
+                else {
+                    result.gltf[categoryName][foundFloorName] = {
+                        file: null,
+                        height: 0
+                    };
+                }
+            }
+            if (onProgress)
+                onProgress(i, categoryNames === null || categoryNames === void 0 ? void 0 : categoryNames.length, 'GLTF');
+            items.length = 0;
+        }
+    }
+    async getModelsWithoutCategories(result, splitByFloors, floorNames, allIdsByFloor, model) {
+        result.gltf[this.allCategories] = {};
+        if (splitByFloors) {
+            for (let i = 0; i < floorNames.length; i++) {
+                const floorName = floorNames[i];
+                const floorIDs = Array.from(allIdsByFloor[floorName].ids);
+                const gltf = await this.exportModelPartToGltf(model, floorIDs, true);
+                result.gltf[this.allCategories][floorName] = {
+                    file: this.glTFToFile(gltf),
+                    height: allIdsByFloor[floorName].height
+                };
+            }
+        }
+        else {
+            const gltf = await this.exportMeshToGltf(model);
+            result.gltf[this.allCategories][this.allFloors] = {
+                file: this.glTFToFile(gltf),
+                height: 0
+            };
+        }
+    }
+    // TODO: Is this really necessary? Maybe with exporting the file is enough
     /**
      * Exports the specified model (or model subset) as glTF.
      * @modelID The ID of the IFC model to convert to glTF
@@ -106278,14 +106618,26 @@ class GLTFManager extends IfcComponent {
             throw new Error('The specified model does not exist!');
         return ids ? this.exportModelPartToGltf(model, ids) : this.exportMeshToGltf(model);
     }
-    // TODO: Split up in smaller methods
-    exportModelPartToGltf(model, ids) {
+    /**
+     * Exports the given mesh as glTF.
+     * @mesh The mesh to export.
+     */
+    exportMeshToGltf(mesh) {
+        return new Promise((resolve) => {
+            this.exporter.parse(mesh, (result) => resolve(result), this.options);
+        });
+    }
+    // TODO: Split up in smaller methods AND bring to new file
+    exportModelPartToGltf(model, ids, useTempLoader = false) {
         const coordinates = [];
         const expressIDs = [];
         const newIndices = [];
         const alreadySaved = new Map();
         const customID = 'temp-gltf-subset';
-        const subset = this.IFC.loader.ifcManager.createSubset({
+        const loader = useTempLoader ? this.tempIfcLoader : this.IFC.loader;
+        if (!loader)
+            throw new Error('IFCLoader could not be found!');
+        const subset = loader.ifcManager.createSubset({
             modelID: model.modelID,
             ids,
             removePrevious: true,
@@ -106324,13 +106676,61 @@ class GLTFManager extends IfcComponent {
         geometryToExport.setIndex(newIndices);
         geometryToExport.groups = newGroups;
         geometryToExport.computeVertexNormals();
-        this.IFC.loader.ifcManager.removeSubset(model.modelID, undefined, customID);
+        loader.ifcManager.removeSubset(model.modelID, undefined, customID);
         const mesh = new Mesh(geometryToExport, newMaterials);
         return this.exportMeshToGltf(mesh);
     }
-    exportMeshToGltf(model) {
-        return new Promise((resolve) => {
-            this.exporter.parse(model, (result) => resolve(result), this.options);
+    glTFToFile(gltf, name = 'model.gltf') {
+        return new File([new Blob([gltf])], name);
+    }
+    async getIDsByFloor(loader) {
+        var _a;
+        const ifcProject = await loader.ifcManager.getSpatialStructure(0);
+        const idsByFloor = {};
+        const storeys = ifcProject.children[0].children[0].children;
+        const storeysIDs = storeys.map((storey) => storey.expressID);
+        for (let i = 0; i < storeysIDs.length; i++) {
+            const storey = storeys[i];
+            const ids = [];
+            this.getChildrenRecursively(storey, ids);
+            const storeyID = storeysIDs[i];
+            const properties = await loader.ifcManager.getItemProperties(0, storeyID);
+            const name = this.getStoreyName(properties);
+            const factor = await this.getUnitsFactor(loader);
+            const height = ((_a = properties.Elevation) === null || _a === void 0 ? void 0 : _a.value) * factor || 0;
+            idsByFloor[name] = {
+                ids: new Set(ids),
+                height
+            };
+        }
+        return idsByFloor;
+    }
+    // TODO: This assumes the first unit is the length, which is true in most cases
+    // Might need to fix this in the future
+    async getUnitsFactor(loader) {
+        var _a;
+        const allUnitsIDs = await loader.ifcManager.getAllItemsOfType(0, IFCUNITASSIGNMENT, false);
+        const unitsID = allUnitsIDs[0];
+        const unitsProps = await loader.ifcManager.getItemProperties(0, unitsID);
+        const lengthUnitID = unitsProps.Units[0].value;
+        const lengthUnit = await loader.ifcManager.getItemProperties(0, lengthUnitID);
+        const prefix = (_a = lengthUnit.Prefix) === null || _a === void 0 ? void 0 : _a.value;
+        return this.unitsFactor[prefix] || 1;
+    }
+    getStoreyName(storey) {
+        if (storey.Name)
+            return storey.Name.value;
+        if (storey.LongName)
+            return storey.LongName.value;
+        return storey.GlobalId;
+    }
+    getChildrenRecursively(spatialNode, result) {
+        const ids = spatialNode.children.map((child) => child.expressID);
+        result.push(...ids);
+        spatialNode.children.forEach((child) => {
+            if (child.children.length) {
+                this.getChildrenRecursively(child, result);
+            }
         });
     }
     getModelID() {
@@ -106363,20 +106763,24 @@ class GLTFManager extends IfcComponent {
         });
     }
     getMaterials(allMeshes) {
+        const clippingPlanes = this.context.getClippingPlanes();
         return allMeshes.map((mesh) => {
             const material = mesh.material;
             return new MeshLambertMaterial({
                 color: material.color,
-                transparent: true,
+                transparent: material.opacity !== 1,
                 opacity: material.opacity,
-                side: 2
+                side: 2,
+                clippingPlanes
             });
         });
     }
     async getMeshes(url) {
         const result = await this.load(url);
         result.removeFromParent();
-        return result.children[0].children;
+        const isNested = result.children[0].children.length !== 0;
+        const meshes = isNested ? result.children[0].children : [result.children[0]];
+        return meshes;
     }
     getGeometry(meshes) {
         const geometry = new BufferGeometry();
@@ -106544,33 +106948,62 @@ class ShadowDropper {
         this.resolution = 512;
         this.amount = 3.5;
         this.planeColor = 0xffffff;
+        this.shadowOffset = 0;
         this.tempMaterial = new MeshBasicMaterial({ visible: false });
         this.depthMaterial = new MeshDepthMaterial();
         this.context = context;
         this.IFC = IFC;
         this.initializeDepthMaterial();
     }
+    dispose() {
+        const shadowIDs = Object.keys(this.shadows);
+        shadowIDs.forEach((shadowID) => this.deleteShadow(shadowID));
+        this.shadows = null;
+        this.tempMaterial.dispose();
+        this.tempMaterial = null;
+        this.depthMaterial.dispose();
+        this.depthMaterial = null;
+        this.context = null;
+        this.IFC = null;
+    }
     async renderShadow(modelID) {
-        const { size, center } = this.getSizeAndCenter(modelID);
+        const model = this.context.items.ifcModels.find((model) => model.modelID === modelID);
+        if (!model)
+            throw new Error('The requested model was not found.');
+        await this.renderShadowOfMesh(model, `${model.modelID}`);
+    }
+    renderShadowOfMesh(model, id = model.uuid) {
+        if (this.shadows[id])
+            throw new Error(`There is already a shadow with ID ${id}`);
+        const { size, center } = this.getSizeAndCenter(model);
         const scene = this.context.getScene();
-        const shadow = this.createShadow(modelID, size);
-        await this.initializeShadow(modelID, shadow, scene, center);
+        const shadow = this.createShadow(id, size);
+        this.initializeShadow(model, shadow, scene, center);
         this.createPlanes(shadow, size);
-        this.bakeShadow(modelID, shadow, scene);
+        this.bakeShadow(model, shadow, scene);
+    }
+    deleteShadow(id) {
+        const shadow = this.shadows[id];
+        delete this.shadows[id];
+        if (!shadow)
+            throw new Error(`No shadow with ID ${id} was found.`);
+        disposeMeshRecursively(shadow.root);
+        disposeMeshRecursively(shadow.blurPlane);
+        shadow.rt.dispose();
+        shadow.rtBlur.dispose();
     }
     createPlanes(currentShadow, size) {
         const planeGeometry = new PlaneGeometry(size.x, size.z).rotateX(Math.PI / 2);
         this.createBasePlane(currentShadow, planeGeometry);
         this.createBlurPlane(currentShadow, planeGeometry);
-        this.createGroundColorPlane(currentShadow, planeGeometry);
+        // this.createGroundColorPlane(currentShadow, planeGeometry);
     }
-    async initializeShadow(modelID, shadow, scene, center) {
-        await this.initializeRoot(modelID, shadow, scene, center);
+    initializeShadow(model, shadow, scene, center) {
+        this.initializeRoot(model, shadow, scene, center);
         this.initializeRenderTargets(shadow);
         this.initializeCamera(shadow);
     }
-    bakeShadow(modelID, shadow, scene) {
-        const model = this.context.items.ifcModels[modelID];
+    bakeShadow(model, shadow, scene) {
         const isModelInScene = model.parent !== null && model.parent !== undefined;
         if (!isModelInScene)
             scene.add(model);
@@ -106610,29 +107043,30 @@ class ShadowDropper {
         shadow.rt.texture.generateMipmaps = false;
         shadow.rtBlur.texture.generateMipmaps = false;
     }
-    async initializeRoot(modelID, shadow, scene, center) {
-        const minPosition = await this.getLowestYCoordinate(modelID);
-        shadow.root.position.set(center.x, minPosition - 0.1, center.z);
+    initializeRoot(model, shadow, scene, center) {
+        const minPosition = this.getLowestYCoordinate(model);
+        shadow.root.position.set(center.x, minPosition - this.shadowOffset, center.z);
         scene.add(shadow.root);
     }
-    createGroundColorPlane(shadow, planeGeometry) {
-        const fillPlaneMaterial = new MeshBasicMaterial({
-            color: this.planeColor,
-            opacity: this.opacity,
-            transparent: true,
-            depthWrite: false,
-            clippingPlanes: this.context.getClippingPlanes()
-        });
-        const fillPlane = new Mesh(planeGeometry, fillPlaneMaterial);
-        fillPlane.rotateX(Math.PI);
-        fillPlane.renderOrder = -1;
-        shadow.root.add(fillPlane);
-    }
+    // Plane simulating the "ground". This is not needed for BIM models generally
+    // private createGroundColorPlane(_shadow: Shadow, planeGeometry: BufferGeometry) {
+    //   const fillPlaneMaterial = new MeshBasicMaterial({
+    //     color: this.planeColor,
+    //     opacity: this.opacity,
+    //     transparent: true,
+    //     depthWrite: false,
+    //     clippingPlanes: this.context.getClippingPlanes()
+    //   });
+    //   const fillPlane = new Mesh(planeGeometry, fillPlaneMaterial);
+    //   fillPlane.rotateX(Math.PI);
+    //   fillPlane.renderOrder = -1;
+    //   shadow.root.add(fillPlane);
+    // }
     createBasePlane(shadow, planeGeometry) {
         const planeMaterial = this.createPlaneMaterial(shadow);
         const plane = new Mesh(planeGeometry, planeMaterial);
         // make sure it's rendered after the fillPlane
-        plane.renderOrder = 0;
+        plane.renderOrder = 2;
         shadow.root.add(plane);
         // the y from the texture is flipped!
         plane.scale.y = -1;
@@ -106666,21 +107100,21 @@ class ShadowDropper {
 					`;
         };
     }
-    createShadow(modelID, size) {
-        this.shadows[modelID] = {
+    createShadow(id, size) {
+        this.shadows[id] = {
             root: new Group(),
             rt: new WebGLRenderTarget(this.resolution, this.resolution),
             rtBlur: new WebGLRenderTarget(this.resolution, this.resolution),
             blurPlane: new Mesh(),
             camera: this.createCamera(size)
         };
-        return this.shadows[modelID];
+        return this.shadows[id];
     }
     createCamera(size) {
         return new OrthographicCamera(-size.x / 2, size.x / 2, size.z / 2, -size.z / 2, 0, this.cameraHeight);
     }
-    getSizeAndCenter(modelID) {
-        const geometry = this.context.items.ifcModels[modelID].geometry;
+    getSizeAndCenter(model) {
+        const geometry = model.geometry;
         geometry.computeBoundingBox();
         if (geometry.boundingBox) {
             const size = new Vector3();
@@ -106691,19 +107125,17 @@ class ShadowDropper {
             geometry.boundingBox.getCenter(center);
             return { size, center };
         }
-        throw new Error(`Bounding box could not be computed for model ${modelID}`);
+        throw new Error(`Bounding box could not be computed for the mesh ${model.uuid}`);
     }
-    async getLowestYCoordinate(modelID) {
-        const mesh = this.context.items.ifcModels[modelID];
-        const indices = mesh.geometry.index;
-        const position = mesh.geometry.attributes.position;
+    getLowestYCoordinate(model) {
+        const indices = model.geometry.index;
+        const position = model.geometry.attributes.position;
         let minPosition = Number.MAX_VALUE;
         for (let i = 0; i <= indices.count; i++) {
             const current = position.getY(indices.array[i]);
             if (current < minPosition)
                 minPosition = current;
         }
-        this.IFC.loader.ifcManager.removeSubset(modelID, this.tempMaterial);
         return minPosition;
     }
     blurShadow(shadow, amount) {
@@ -106735,6 +107167,9 @@ class DXFWriter {
     constructor() {
         this.drawings = {};
         this.Drawing = null;
+    }
+    dispose() {
+        this.drawings = null;
     }
     initializeJSDXF(drawing) {
         this.Drawing = drawing;
@@ -106805,6 +107240,9 @@ class PDFWriter {
         this.documents = {};
         this.errorText = 'The specified document does not exist.';
     }
+    dispose() {
+        this.documents = null;
+    }
     setLineWidth(id, lineWidth) {
         const document = this.getDocument(id);
         document.drawing.setLineWidth(lineWidth);
@@ -106872,6 +107310,14 @@ class EdgesVectorizer {
         // Every time the html image is updated, its vertices are processed by opencv
         this.htmlImage = document.createElement('img');
         this.htmlImage.onload = () => this.getEdges2DPoints();
+    }
+    dispose() {
+        this.cv = null;
+        this.cvCamera.removeFromParent();
+        this.cvCamera = null;
+        this.controls = null;
+        disposeMeshRecursively(this.bucketMesh);
+        this.htmlImage.remove();
     }
     initializeOpenCV(openCV) {
         this.cv = openCV;
@@ -107029,22 +107475,25 @@ class EdgesVectorizer {
 class IfcViewerAPI {
     constructor(options) {
         /**
+         * @deprecated Use `IfcViewerAPI.clipper.createPlane()` instead.
          * Adds a clipping plane on the face pointed to by the cursor.
          */
         this.addClippingPlane = () => {
             this.clipper.createPlane();
         };
         /**
+         * @deprecated Use `IfcViewerAPI.clipper.deletePlane()` instead.
          * Removes the clipping plane pointed by the cursor.
          */
         this.removeClippingPlane = () => {
             this.clipper.deletePlane();
         };
         /**
+         * @deprecated Use `IfcViewerAPI.clipper.toggle()` instead.
          * Turns on / off all clipping planes.
          */
         this.toggleClippingPlanes = () => {
-            this.clipper.active = !this.clipper.active;
+            this.clipper.toggle();
         };
         /**
          * @deprecated Use `IfcViewerAPI.IFC.selector.prePickIfcItem()` instead.
@@ -107085,30 +107534,14 @@ class IfcViewerAPI {
         this.dxf = new DXFWriter();
         this.pdf = new PDFWriter();
         this.GLTF = new GLTFManager(this.context, this.IFC);
+        this.dropbox = new DropboxAPI(this.context, this.IFC);
     }
     /**
-     * Adds [stats](https://github.com/mrdoob/stats.js/) to the scene for testing purposes. For example:
-     * ```js
-     *     this.loader.addStats('position:fixed;top:6rem;right:0px;z-index:1;');
-     * ```
-     * @css The css text to control where to locate the stats.
-     * @stats The stats.js API object
-     */
-    addStats(css = '', stats) {
-        var _a, _b;
-        // @ts-ignore
-        this.stats = new IfcStats(this.context);
-        (_a = this.stats) === null || _a === void 0 ? void 0 : _a.initializeStats(stats);
-        (_b = this.stats) === null || _b === void 0 ? void 0 : _b.addStats(css);
-    }
-    /**
+     * @deprecated Use `this.dropbox.loadDropboxIfc()` instead.
      * Opens a dropbox window where the user can select their IFC models.
      */
     openDropboxWindow() {
-        var _a;
-        if (!this.dropbox)
-            this.dropbox = new DropboxAPI(this.context, this.IFC);
-        (_a = this.dropbox) === null || _a === void 0 ? void 0 : _a.loadDropboxIfc();
+        this.dropbox.loadDropboxIfc();
     }
     /**
      * @deprecated Use `IfcViewerAPI.IFC.loadIfc()` instead.
@@ -107210,11 +107643,34 @@ class IfcViewerAPI {
      */
     async dispose() {
         this.grid.dispose();
+        this.grid = null;
         this.axes.dispose();
+        this.axes = null;
         this.context.dispose();
+        this.context = null;
         this.clipper.dispose();
+        this.clipper = null;
+        this.plans.dispose();
+        this.plans = null;
+        this.filler.dispose();
+        this.filler = null;
+        this.dimensions.dispose();
+        this.dimensions = null;
+        this.edges.dispose();
+        this.edges = null;
+        this.shadowDropper.dispose();
+        this.shadowDropper = null;
+        this.dxf.dispose();
+        this.dxf = null;
+        this.pdf.dispose();
+        this.pdf = null;
+        this.edgesVectorizer.dispose();
+        this.edgesVectorizer = null;
+        this.dropbox = null;
         this.GLTF.dispose();
+        this.GLTF = null;
         await this.IFC.dispose();
+        this.IFC = null;
     }
 }
 
