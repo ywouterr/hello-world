@@ -14,8 +14,11 @@ import {
     WebGLRenderer,
     Raycaster,
     Vector3,
+    Triangle,
+    Box3,
+    Color
 } from 'three';
-import {IFCWALLSTANDARDCASE, IFCWALL, IFCSLAB, IFCWINDOW, IFCDOOR, IFCPLATE, IFCMEMBER} from 'web-ifc';
+import {IFCRELVOIDSELEMENT, IFCRELFILLSELEMENT, IFCWALLSTANDARDCASE, IFCWALL, IFCGEOMETRICREPRESENTATIONSUBCONTEXT, IFCSLAB, IFCWINDOW, IFCDOOR, IFCPLATE, IFCMEMBER} from 'web-ifc';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls';
 import {IFCLoader} from 'web-ifc-three/IFCLoader';
 import {acceleratedRaycast, computeBoundsTree, disposeBoundsTree} from 'three-mesh-bvh';
@@ -84,29 +87,6 @@ window.addEventListener('resize', () => {
     renderer.setSize(size.width, size.height);
 });
 
-// Setup raycasting
-
-const raycaster = new Raycaster();
-const resolution = 1;
-const raycastOffset = 1;
-
-const voxels = {
-    count: 0,
-    matrices: {}
-};
-
-const innerVoxels = {
-    count: 0,
-    matrices: {}
-};
-
-const material = new MeshLambertMaterial({color: 0x00ff00, transparent: true, opacity: 0.2});
-const innerMaterial = new MeshLambertMaterial({color: 0xff0000, transparent: true, opacity: 0.2});
-const geometry = new BoxGeometry(resolution * 0.8, resolution * 0.8, resolution * 0.8);
-
-const rotation = new Quaternion();
-const scale = new Vector3(1, 1, 1);
-
 const ifcLoader = new IFCLoader();
 
 async function loadIFC() {
@@ -122,179 +102,133 @@ async function loadIFC() {
         disposeBoundsTree,
         acceleratedRaycast);
 
-    const model = await ifcLoader.loadAsync('../../../IFC/02.ifc');
+    const model = await ifcLoader.loadAsync('../../../IFC/01.ifc');
     scene.add(model);
-    model.visible = false;
     console.log(model);
 
-    // model.material.forEach(mat => {
-    // 	mat.opacity = 0.2;
-    // 	mat.transparent = true;
-    // });
-    // model.visible = false;
+    // Get north rotation
+    const contextsIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCGEOMETRICREPRESENTATIONSUBCONTEXT);
+    const contextID = contextsIDs[0];
+    const contextProps = await ifcLoader.ifcManager.getItemProperties(0, contextID, true);
+    const rotation = {value: 0};
+    getContextTrueNorthRotation(contextProps, rotation);
+    console.log(rotation.value);
 
-    // Voxelize
-    await renderOuterVoxels(model);
-    renderInnerVoxels();
-    showVoxels();
+    // Get all walls orientation
+    const wallOrientations = {};
 
-    // Create a subset with all the walls
-    // For each wall >
-    //     take the biggest triangle and check a point with some offset in the direction of the normal
-    //     voxelize the point
-    //     if the voxel exists in the stored voxels, the orientation is the opposite: if not, that normal is the orientation
-    //     for windows and doors: check relation objects and the orientation is equivalent to the parent wall
+    const walls = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWALL, false);
+    const wallsStandard = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWALLSTANDARDCASE, false);
+    const allWalls = [...walls, ...wallsStandard];
 
+    const raycaster = new Raycaster();
+    const mat = new MeshLambertMaterial({visible: false});
 
-    console.log(voxels);
-    console.log(innerVoxels);
+    for(let wall of allWalls) {
+        // Get the wall geometry
+        const wallMesh = await ifcLoader.ifcManager.createSubset({
+            modelID: 0,
+            ids: [wall],
+            removePrevious: true,
+            material: mat
+        });
 
-}
+        // Get the largest face (triangle) of the wall
+        const largestTriangle = new Triangle();
+        const tempTriangle = new Triangle();
 
-async function renderOuterVoxels(model) {
-    const subset = await getSubsetToVoxelize();
-    const min = model.geometry.boundingBox.min;
-    const max = model.geometry.boundingBox.max;
-    renderVoxels(min, max, subset, 'x', 'y', 'z');
-    renderVoxels(min, max, subset, 'z', 'y', 'x');
-    renderVoxels(min, max, subset, 'x', 'z', 'y');
-}
+        for(let i = 0; i < wallMesh.geometry.index.count - 2; i+= 3) {
+            const indexA = wallMesh.geometry.index.array[i];
+            tempTriangle.a.x = wallMesh.geometry.attributes.position.getX(indexA);
+            tempTriangle.a.y = wallMesh.geometry.attributes.position.getY(indexA);
+            tempTriangle.a.z = wallMesh.geometry.attributes.position.getZ(indexA);
 
-function renderInnerVoxels() {
-    let previousX;
-    let previousY;
-    let previousZ;
+            const indexB = wallMesh.geometry.index.array[i + 1];
+            tempTriangle.b.x = wallMesh.geometry.attributes.position.getX(indexB);
+            tempTriangle.b.y = wallMesh.geometry.attributes.position.getY(indexB);
+            tempTriangle.b.z = wallMesh.geometry.attributes.position.getZ(indexB);
 
-    traverseVoxels(voxels, (index, voxel, x, y, z) => {
+            const indexC = wallMesh.geometry.index.array[i + 2];
+            tempTriangle.c.x = wallMesh.geometry.attributes.position.getX(indexC);
+            tempTriangle.c.y = wallMesh.geometry.attributes.position.getY(indexC);
+            tempTriangle.c.z = wallMesh.geometry.attributes.position.getZ(indexC);
 
-        const isStartingNewVoxelRow = previousX !== x || previousY !== y;
-
-        if (!isStartingNewVoxelRow) {
-
-            const matrices = innerVoxels.matrices;
-            const count = (z - previousZ - resolution) / resolution;
-            for (let i = 0; i < count; i++) {
-
-                innerVoxels.count++;
-                const innerZ = previousZ + i * resolution;
-
-                if(matrices[x] === undefined) matrices[x] = {};
-                if(matrices[x][y] === undefined) matrices[x][y] = {};
-
-                matrices[x][y][innerZ] = new Matrix4().compose(
-                    new Vector3(x, y, innerZ), rotation, scale,
-                );
-
-            }
-
-        }
-
-        previousX = x;
-        previousY = y;
-        previousZ = z;
-
-    })
-}
-
-
-function showVoxels() {
-
-    // const mesh = new InstancedMesh(geometry, material, voxels.count);
-    // traverseVoxels(voxels, (index, voxel) => mesh.setMatrixAt(index, voxel));
-    // scene.add(mesh);
-
-    const innerMesh = new InstancedMesh(geometry, innerMaterial, innerVoxels.count);
-    traverseVoxels(innerVoxels, (index, voxel) => innerMesh.setMatrixAt(index, voxel));
-    scene.add(innerMesh);
-
-}
-
-function traverseVoxels(voxelObject, callback) {
-    let counter = 0;
-    for (const x in voxelObject.matrices) {
-        const voxelPlane = voxelObject.matrices[x];
-        for (const y in voxelPlane) {
-            const voxelArray = voxelPlane[y];
-            for (const z in voxelArray) {
-                const voxel = voxelArray[z];
-
-                const xFloat = parseFloat(x);
-                const yFloat = parseFloat(y);
-                const zFloat = parseFloat(z);
-
-                callback(counter++, voxel, xFloat, yFloat, zFloat);
+            if(tempTriangle.getArea() > largestTriangle.getArea()) {
+                largestTriangle.copy(tempTriangle);
             }
         }
+
+        // Compare the two wall directions:
+        // the one with the greatest distance in front is the wall orientation
+        const direction = new Vector3();
+        largestTriangle.getNormal(direction)
+        // console.log(direction);
+
+        const midPoint = new Vector3();
+        const center = largestTriangle.getMidpoint(midPoint);
+
+        raycaster.set(center, direction);
+        let result = raycaster.intersectObject(model)
+            .filter((found) => {
+                const id = model.geometry.attributes.expressID.getX(found.face.a);
+                return id !== wall;
+            });
+
+        console.log(result);
+
+        const inverseDirection = new Vector3().copy(direction).negate();
+        raycaster.set(center, inverseDirection);
+        const inverseResult = raycaster.intersectObject(model)
+            .filter((found) => {
+            const id = model.geometry.attributes.expressID.getX(found.face.a);
+            return id !== wall;
+        });
+
+        console.log(inverseResult);
+
+        let wallGeometryOrientation = new Vector3();
+
+        if( result.length === 0) {
+            wallGeometryOrientation.copy(direction);
+        } else if(inverseResult.length === 0) {
+            wallGeometryOrientation.copy(inverseDirection);
+        } else if(result[0].distance > inverseResult[0].distance) {
+            wallGeometryOrientation.copy(direction);
+        } else {
+            wallGeometryOrientation.copy(inverseDirection);
+        }
+
+        wallGeometryOrientation.applyAxisAngle(new Vector3( 0, 1, 0 ), rotation.value);
+        console.log(wallGeometryOrientation);
+
+        wallOrientations[wall] = wallGeometryOrientation;
     }
-}
 
-function renderVoxels(min, max, mesh, dimension1, dimension2, dimension3, interior = false) {
+    // Get all windows and doors orientation
+    // It's not necesary to compute it geometrically: just find out the wall where they are
+    // And they have the same orientation
+    const voidsRelations = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCRELVOIDSELEMENT, true);
+    const fillsRelations = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCRELFILLSELEMENT, true);
 
-    const rayCastPosition = new Vector3(min.x, min.y, min.z);
-    rayCastPosition[dimension3] -= raycastOffset;
-    const rayCastDirection = new Vector3();
-    rayCastDirection[dimension3] = 1;
+    const elements = {};
 
-    const iterations1 = getIterationNumber(min, max, dimension1);
-    const start1 = min[dimension1] + (resolution / 2);
-
-    const iterations2 = getIterationNumber(min, max, dimension2);
-    const start2 = min[dimension2] + (resolution / 2);
-
-    for (let i = 0; i < iterations1; i++) {
-        for (let j = 0; j < iterations2; j++) {
-
-            rayCastPosition[dimension1] = start1 + (i * resolution);
-            rayCastPosition[dimension2] = start2 + (j * resolution);
-
-            raycaster.set(rayCastPosition, rayCastDirection);
-            const results = raycaster.intersectObject(mesh);
-            const matrices = voxels.matrices;
-
-            for (const result of results) {
-                const {x, y, z} = getVoxelizedPosition(result.point);
-
-                if (matrices[x] === undefined) matrices[x] = {};
-                if (matrices[x][y] === undefined) matrices[x][y] = {};
-                if (matrices[x][y][z] === undefined) {
-                    voxels.count++;
-                    matrices[x][y][z] = new Matrix4().compose(
-                        new Vector3(x, y, z), rotation, scale,
-                    );
-                }
-            }
-        }
+    for(let voidRelation of voidsRelations) {
+        const elementID = voidRelation.RelatingBuildingElement.value;
+        const openingID = voidRelation.RelatedOpeningElement.value;
+        if(!elements[elementID]) elements[elementID] = {openings: [], doorsAndWindows: []};
+        elements[elementID].openings.push(openingID);
     }
+
+    for(let voidRelation of voidsRelations) {
+        const walls = Object.values(elements);
+        const opening = voidRelation.RelatedOpeningElement.value;
+        const wall = walls.find(element => element.openings.includes(opening));
+        wall.doorsAndWindows.push(voidRelation.RelatingBuildingElement.value);
+    }
+
+    console.log(elements);
 }
 
-function getIterationNumber(min, max, dimension) {
-    return Math.ceil((max[dimension] - min[dimension]) / resolution);
-}
-
-async function getSubsetToVoxelize() {
-    const wallsStandardIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWALLSTANDARDCASE, false);
-    const wallsIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWALL, false);
-    const windowsIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWINDOW, false);
-    const slabsIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCSLAB, false);
-    const membersIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCMEMBER, false);
-    const platesIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCPLATE, false);
-    const doorsIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCDOOR, false);
-    const ids = [...wallsIDs, ...wallsStandardIDs, ...windowsIDs, ...membersIDs, ...platesIDs, ...doorsIDs, ...slabsIDs];
-
-    return ifcLoader.ifcManager.createSubset({
-        modelID: 0,
-        ids,
-        applyBVH: true,
-        removePrevious: true,
-    });
-}
-
-function getVoxelizedPosition(point) {
-    const x = Math.trunc(point.x / resolution) * resolution;
-    const y = Math.trunc(point.y / resolution) * resolution;
-    const z = Math.trunc(point.z / resolution) * resolution;
-    return {x, y, z};
-}
 
 function getContextTrueNorthRotation(context, rotation = {value: 0}) {
 

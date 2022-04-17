@@ -27197,6 +27197,173 @@ class Scene extends Object3D {
 
 Scene.prototype.isScene = true;
 
+class InstancedBufferAttribute extends BufferAttribute {
+
+	constructor( array, itemSize, normalized, meshPerAttribute = 1 ) {
+
+		if ( typeof normalized === 'number' ) {
+
+			meshPerAttribute = normalized;
+
+			normalized = false;
+
+			console.error( 'THREE.InstancedBufferAttribute: The constructor now expects normalized as the third argument.' );
+
+		}
+
+		super( array, itemSize, normalized );
+
+		this.meshPerAttribute = meshPerAttribute;
+
+	}
+
+	copy( source ) {
+
+		super.copy( source );
+
+		this.meshPerAttribute = source.meshPerAttribute;
+
+		return this;
+
+	}
+
+	toJSON() {
+
+		const data = super.toJSON();
+
+		data.meshPerAttribute = this.meshPerAttribute;
+
+		data.isInstancedBufferAttribute = true;
+
+		return data;
+
+	}
+
+}
+
+InstancedBufferAttribute.prototype.isInstancedBufferAttribute = true;
+
+const _instanceLocalMatrix = /*@__PURE__*/ new Matrix4();
+const _instanceWorldMatrix = /*@__PURE__*/ new Matrix4();
+
+const _instanceIntersects = [];
+
+const _mesh = /*@__PURE__*/ new Mesh();
+
+class InstancedMesh extends Mesh {
+
+	constructor( geometry, material, count ) {
+
+		super( geometry, material );
+
+		this.instanceMatrix = new InstancedBufferAttribute( new Float32Array( count * 16 ), 16 );
+		this.instanceColor = null;
+
+		this.count = count;
+
+		this.frustumCulled = false;
+
+	}
+
+	copy( source ) {
+
+		super.copy( source );
+
+		this.instanceMatrix.copy( source.instanceMatrix );
+
+		if ( source.instanceColor !== null ) this.instanceColor = source.instanceColor.clone();
+
+		this.count = source.count;
+
+		return this;
+
+	}
+
+	getColorAt( index, color ) {
+
+		color.fromArray( this.instanceColor.array, index * 3 );
+
+	}
+
+	getMatrixAt( index, matrix ) {
+
+		matrix.fromArray( this.instanceMatrix.array, index * 16 );
+
+	}
+
+	raycast( raycaster, intersects ) {
+
+		const matrixWorld = this.matrixWorld;
+		const raycastTimes = this.count;
+
+		_mesh.geometry = this.geometry;
+		_mesh.material = this.material;
+
+		if ( _mesh.material === undefined ) return;
+
+		for ( let instanceId = 0; instanceId < raycastTimes; instanceId ++ ) {
+
+			// calculate the world matrix for each instance
+
+			this.getMatrixAt( instanceId, _instanceLocalMatrix );
+
+			_instanceWorldMatrix.multiplyMatrices( matrixWorld, _instanceLocalMatrix );
+
+			// the mesh represents this single instance
+
+			_mesh.matrixWorld = _instanceWorldMatrix;
+
+			_mesh.raycast( raycaster, _instanceIntersects );
+
+			// process the result of raycast
+
+			for ( let i = 0, l = _instanceIntersects.length; i < l; i ++ ) {
+
+				const intersect = _instanceIntersects[ i ];
+				intersect.instanceId = instanceId;
+				intersect.object = this;
+				intersects.push( intersect );
+
+			}
+
+			_instanceIntersects.length = 0;
+
+		}
+
+	}
+
+	setColorAt( index, color ) {
+
+		if ( this.instanceColor === null ) {
+
+			this.instanceColor = new InstancedBufferAttribute( new Float32Array( this.instanceMatrix.count * 3 ), 3 );
+
+		}
+
+		color.toArray( this.instanceColor.array, index * 3 );
+
+	}
+
+	setMatrixAt( index, matrix ) {
+
+		matrix.toArray( this.instanceMatrix.array, index * 16 );
+
+	}
+
+	updateMorphTargets() {
+
+	}
+
+	dispose() {
+
+		this.dispatchEvent( { type: 'dispose' } );
+
+	}
+
+}
+
+InstancedMesh.prototype.isInstancedMesh = true;
+
 /**
  * parameters = {
  *  color: <hex>,
@@ -28660,112 +28827,6 @@ const _wordCharOrDot = '[^' + _RESERVED_CHARS_RE.replace( '\\.', '' ) + ']';
 // Property and accessor. May not contain reserved characters. Accessor may
 // contain any non-bracket characters.
 /\.(WC+)(?:\[(.+)\])?/.source.replace( 'WC', _wordChar );
-
-class Raycaster {
-
-	constructor( origin, direction, near = 0, far = Infinity ) {
-
-		this.ray = new Ray( origin, direction );
-		// direction is assumed to be normalized (for accurate distance calculations)
-
-		this.near = near;
-		this.far = far;
-		this.camera = null;
-		this.layers = new Layers();
-
-		this.params = {
-			Mesh: {},
-			Line: { threshold: 1 },
-			LOD: {},
-			Points: { threshold: 1 },
-			Sprite: {}
-		};
-
-	}
-
-	set( origin, direction ) {
-
-		// direction is assumed to be normalized (for accurate distance calculations)
-
-		this.ray.set( origin, direction );
-
-	}
-
-	setFromCamera( coords, camera ) {
-
-		if ( camera && camera.isPerspectiveCamera ) {
-
-			this.ray.origin.setFromMatrixPosition( camera.matrixWorld );
-			this.ray.direction.set( coords.x, coords.y, 0.5 ).unproject( camera ).sub( this.ray.origin ).normalize();
-			this.camera = camera;
-
-		} else if ( camera && camera.isOrthographicCamera ) {
-
-			this.ray.origin.set( coords.x, coords.y, ( camera.near + camera.far ) / ( camera.near - camera.far ) ).unproject( camera ); // set origin in plane of camera
-			this.ray.direction.set( 0, 0, - 1 ).transformDirection( camera.matrixWorld );
-			this.camera = camera;
-
-		} else {
-
-			console.error( 'THREE.Raycaster: Unsupported camera type: ' + camera.type );
-
-		}
-
-	}
-
-	intersectObject( object, recursive = true, intersects = [] ) {
-
-		intersectObject( object, this, intersects, recursive );
-
-		intersects.sort( ascSort );
-
-		return intersects;
-
-	}
-
-	intersectObjects( objects, recursive = true, intersects = [] ) {
-
-		for ( let i = 0, l = objects.length; i < l; i ++ ) {
-
-			intersectObject( objects[ i ], this, intersects, recursive );
-
-		}
-
-		intersects.sort( ascSort );
-
-		return intersects;
-
-	}
-
-}
-
-function ascSort( a, b ) {
-
-	return a.distance - b.distance;
-
-}
-
-function intersectObject( object, raycaster, intersects, recursive ) {
-
-	if ( object.layers.test( raycaster.layers ) ) {
-
-		object.raycast( raycaster, intersects );
-
-	}
-
-	if ( recursive === true ) {
-
-		const children = object.children;
-
-		for ( let i = 0, l = children.length; i < l; i ++ ) {
-
-			intersectObject( children[ i ], raycaster, intersects, true );
-
-		}
-
-	}
-
-}
 
 /**
  * Ref: https://en.wikipedia.org/wiki/Spherical_coordinate_system
@@ -82248,137 +82309,167 @@ async function loadIFC() {
     scene.add(model);
     console.log(model);
 
-    // Get north rotation
-    const contextsIDs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCGEOMETRICREPRESENTATIONSUBCONTEXT);
-    const contextID = contextsIDs[0];
-    const contextProps = await ifcLoader.ifcManager.getItemProperties(0, contextID, true);
-    const rotation = {value: 0};
-    getContextTrueNorthRotation(contextProps, rotation);
-    console.log(rotation.value);
-
     const walls = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWALL, false);
     const wallsStandard = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWALLSTANDARDCASE, false);
-    const allWalls = [...walls, ...wallsStandard];
+    const slabs = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCSLAB, false);
+    const doors = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCDOOR, false);
+    const windows = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCWINDOW, false);
+    const members = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCMEMBER, false);
+    const plates = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCPLATE, false);
 
-    const raycaster = new Raycaster();
-    const mat = new MeshLambertMaterial({visible: false});
+    const subset =  await ifcLoader.ifcManager.createSubset({
+        ids: [...walls, ...wallsStandard, ...slabs, ...doors, ...windows, ...members, ...plates],
+        scene,
+        removePrevious: true,
+        modelID: 0,
+        applyBVH: true
+    });
 
-    for(let wall of allWalls) {
-        // Get the wall geometry
-        const wallMesh = await ifcLoader.ifcManager.createSubset({
-            modelID: 0,
-            ids: [wall],
-            removePrevious: true,
-            material: mat
-        });
+    // Voxelize
+    const resolution = 0.5;
+    const {min, max} = subset.geometry.boundingBox;
 
-        // Get the largest face (triangle) of the wall
-        const largestTriangle = new Triangle();
-        const tempTriangle = new Triangle();
+    const voxelCollider = new Box3();
+    voxelCollider.min.set(-resolution / 2, -resolution / 2, -resolution / 2);
+    voxelCollider.max.set(resolution / 2, resolution / 2, resolution / 2);
 
-        for(let i = 0; i < wallMesh.geometry.index.count - 2; i+= 3) {
-            const indexA = wallMesh.geometry.index.array[i];
-            tempTriangle.a.x = wallMesh.geometry.attributes.position.getX(indexA);
-            tempTriangle.a.y = wallMesh.geometry.attributes.position.getY(indexA);
-            tempTriangle.a.z = wallMesh.geometry.attributes.position.getZ(indexA);
+    const voxelizationSize = {
+        x: Math.ceil((max.x - min.x) / resolution),
+        y: Math.ceil((max.y - min.y) / resolution),
+        z: Math.ceil((max.z - min.z) / resolution)
+    };
 
-            const indexB = wallMesh.geometry.index.array[i + 1];
-            tempTriangle.b.x = wallMesh.geometry.attributes.position.getX(indexB);
-            tempTriangle.b.y = wallMesh.geometry.attributes.position.getY(indexB);
-            tempTriangle.b.z = wallMesh.geometry.attributes.position.getZ(indexB);
+    // 0 is not visited, 1 is empty, 2 is filled
+    const voxels = newVoxels(voxelizationSize);
 
-            const indexC = wallMesh.geometry.index.array[i + 2];
-            tempTriangle.c.x = wallMesh.geometry.attributes.position.getX(indexC);
-            tempTriangle.c.y = wallMesh.geometry.attributes.position.getY(indexC);
-            tempTriangle.c.z = wallMesh.geometry.attributes.position.getZ(indexC);
 
-            if(tempTriangle.getArea() > largestTriangle.getArea()) {
-                largestTriangle.copy(tempTriangle);
+    const voxelGeometry = new BoxGeometry(resolution, resolution, resolution);
+    const green = new MeshLambertMaterial({color: 0x00ff00, transparent: true, opacity: 0.2});
+    const red = new MeshLambertMaterial({color: 0xff0000, transparent: true, opacity: 0.2});
+    const voxelMesh = new Mesh(voxelGeometry, green);
+    scene.add(voxelMesh);
+
+    const transformMatrix = new Matrix4();
+
+    const origin = [min.x + resolution / 2, min.y + resolution / 2, min.z + resolution / 2];
+
+    const filledVoxelsMatrices = [];
+    const emptyVoxelsMatrices = [];
+
+    // Compute voxels
+    for (let i = 0; i < voxelizationSize.x; i++) {
+        for (let j = 0; j < voxelizationSize.y; j++) {
+            for (let k = 0; k < voxelizationSize.z; k++) {
+
+                voxelMesh.position.set( origin[0] + i * resolution,
+                                        origin[1] + j * resolution,
+                                        origin[2] + k * resolution);
+
+                voxelMesh.updateMatrixWorld();
+                transformMatrix.copy(subset.matrixWorld).invert().multiply(voxelMesh.matrixWorld);
+                const hit = subset.geometry.boundsTree.intersectsBox(voxelCollider, transformMatrix);
+
+
+                voxels[i][j][k] = hit ? 2 : 1;
+
+                const array = hit ? filledVoxelsMatrices : emptyVoxelsMatrices;
+                array.push(voxelMesh.matrixWorld.clone());
             }
         }
+    }
 
-        // Compare the two wall directions:
-        // the one with the greatest distance in front is the wall orientation
-        const direction = new Vector3();
-        largestTriangle.getNormal(direction);
-        // console.log(direction);
+    // Representation
+    const filledVoxels = new InstancedMesh(voxelGeometry, green, filledVoxelsMatrices.length);
+    new InstancedMesh(voxelGeometry, red, emptyVoxelsMatrices.length);
 
-        const midPoint = new Vector3();
-        const center = largestTriangle.getMidpoint(midPoint);
+    let counter = 0;
+    for(let matrix of filledVoxelsMatrices) {
+        filledVoxels.setMatrixAt(counter++, matrix);
+    }
 
-        raycaster.set(center, direction);
-        let result = raycaster.intersectObject(model)
-            .filter((found) => {
-                const id = model.geometry.attributes.expressID.getX(found.face.a);
-                return id !== wall;
-            });
+    scene.add(filledVoxels);
 
-        console.log(result);
+    // counter = 0;
+    // for(let matrix of emptyVoxelsMatrices) {
+    //     emptyVoxels.setMatrixAt(counter++, matrix);
+    // }
+    //
+    // scene.add(emptyVoxels);
 
-        const inverseDirection = new Vector3().copy(direction).negate();
-        raycaster.set(center, inverseDirection);
-        const inverseResult = raycaster.intersectObject(model)
-            .filter((found) => {
-            const id = model.geometry.attributes.expressID.getX(found.face.a);
-            return id !== wall;
-        });
 
-        console.log(inverseResult);
-
-        let wallGeometryOrientation = new Vector3();
-
-        if( result.length === 0) {
-            wallGeometryOrientation.copy(direction);
-        } else if(inverseResult.length === 0) {
-            wallGeometryOrientation.copy(inverseDirection);
-        } else if(result[0].distance > inverseResult[0].distance) {
-            wallGeometryOrientation.copy(direction);
-        } else {
-            wallGeometryOrientation.copy(inverseDirection);
+    function newVoxels(voxelizationSize) {
+        const newVoxels = [];
+        for (let i = 0; i < voxelizationSize.x; i++) {
+            const newArray = [];
+            newVoxels.push(newArray);
+            for (let j = 0; j < voxelizationSize.y; j++) {
+                newArray.push(new Uint8Array(voxelizationSize.z));
+            }
         }
-
-        wallGeometryOrientation.applyAxisAngle(new Vector3( 0, 1, 0 ), rotation.value);
-        console.log(wallGeometryOrientation);
+        return newVoxels;
     }
 
-    // Get all windows and doors orientation
-    // It's not necesary to compute it geometrically: just find out the wall where they are
-    // And they have the same orientation
-    const voidsRelations = await ifcLoader.ifcManager.getAllItemsOfType(0, IFCRELVOIDSELEMENT, true);
-    await ifcLoader.ifcManager.getAllItemsOfType(0, IFCRELFILLSELEMENT, true);
 
-    const elements = {};
+    // const green = new Color(0, 255, 0);
+    // const red = new Color(255, 0, 0);
+    //
+    // window.addEventListener('keydown', (event) => {
+    //     if(event.code === 'KeyX') {
+    //
+    //         if(event.shiftKey) voxelMesh.position.x += resolution;
+    //         else voxelMesh.position.x -= resolution;
+    //         hit();
+    //
+    //     }
+    //
+    //     else if(event.code === 'KeyY') {
+    //         if(event.shiftKey) voxelMesh.position.y += resolution;
+    //         else voxelMesh.position.y -= resolution;
+    //         hit();
+    //     }
+    //
+    //     else if(event.code === 'KeyZ') {
+    //         if(event.shiftKey) voxelMesh.position.z += resolution;
+    //         else voxelMesh.position.z -= resolution;
+    //         hit();
+    //     }
+    //
+    // })
 
-    for(let voidRelation of voidsRelations) {
-        const elementID = voidRelation.RelatingBuildingElement.value;
-        const openingID = voidRelation.RelatedOpeningElement.value;
-        if(!elements[elementID]) elements[elementID] = {openings: [], doorsAndWindows: []};
-        elements[elementID].openings.push(openingID);
-    }
+    // function hit() {
+    //     voxelMesh.updateMatrixWorld();
+    //
+    //     transformMatrix.copy( model.matrixWorld ).invert()
+    //         .multiply( voxelMesh.matrixWorld );
+    //
+    //     const hit = model.geometry.boundsTree.intersectsBox(voxelCollider, transformMatrix);
+    //     voxelMesh.material.color = hit ? green : red;
+    // }
 
-    for(let voidRelation of voidsRelations) {
-        const walls = Object.values(elements);
-        const opening = voidRelation.RelatedOpeningElement.value;
-        const wall = walls.find(element => element.openings.includes(opening));
-        wall.doorsAndWindows.push(voidRelation.RelatingBuildingElement.value);
-    }
 
-    console.log(elements);
+
+    // Create a subset with all the walls
+    // For each wall >
+    //     take the biggest triangle and check a point with some offset in the direction of the normal
+    //     voxelize the point
+    //     if the voxel exists in the stored voxels, the orientation is the opposite: if not, that normal is the orientation
+    //     for windows and doors: check relation objects and the orientation is equivalent to the parent wall
+
 }
 
 
-function getContextTrueNorthRotation(context, rotation = {value: 0}) {
-
-    if (context.TrueNorth.DirectionRatios) {
-        const ratios = context.TrueNorth.DirectionRatios.map(item => item.value);
-        rotation.value += (Math.atan2(ratios[1], ratios[0]) - Math.PI / 2);
-    }
-
-    if (context.ParentContext) {
-        getContextTrueNorthRotation(context.ParentContext, rotation);
-    }
-
-    return rotation.value;
-}
+// function getContextTrueNorthRotation(context, rotation = {value: 0}) {
+//
+//     if (context.TrueNorth.DirectionRatios) {
+//         const ratios = context.TrueNorth.DirectionRatios.map(item => item.value);
+//         rotation.value += (Math.atan2(ratios[1], ratios[0]) - Math.PI / 2);
+//     }
+//
+//     if (context.ParentContext) {
+//         getContextTrueNorthRotation(context.ParentContext, rotation);
+//     }
+//
+//     return rotation.value;
+// }
 
 loadIFC();
