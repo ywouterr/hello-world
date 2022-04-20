@@ -4,8 +4,7 @@
   "description": "-",
   "main": "app.js",
   "scripts": {
-    "build": "node example-builder.js",
-    "watch": "rollup -w -c scenes/helloworld/rollup.config.js"
+    "build": "node example-builder.js"
   },
   "author": "",
   "license": "MIT",
@@ -21,6 +20,6 @@
     "three-mesh-bvh": "^0.5.5",
     "web-ifc": "^0.0.33",
     "web-ifc-three": "^0.0.106",
-    "web-ifc-viewer": "^1.0.169"
+    "web-ifc-viewer": "^1.0.176"
   }
 }
