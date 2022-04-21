@@ -82235,12 +82235,14 @@ const ifcLoader = new IFCLoader();
 ifcLoader.ifcManager.setWasmPath("../../../");
 ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
     ifcModels.push(ifcModel);
-    ifcModel.material = new MeshLambertMaterial({
+    ifcModel.visible = false;
+    const modelCopy = new Mesh(ifcModel.geometry, new MeshLambertMaterial({
         transparent: true,
         opacity: 0.1,
         color: 0x77aaff
-    });
+    }));
     scene.add(ifcModel);
+    scene.add(modelCopy);
 });
 
 
