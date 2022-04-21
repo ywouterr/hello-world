@@ -91519,13 +91519,8 @@ class IfcProperties {
     }
     async getBuildingHeight(modelID) {
         const building = await this.getBuilding(modelID);
-        let placement;
-        const siteReference = building.ObjectPlacement.PlacementRelTo;
-        if (siteReference)
-            placement = siteReference.RelativePlacement.Location;
-        else
-            placement = building.ObjectPlacement.RelativePlacement.Location;
-        const transform = placement.Coordinates.map((coord) => coord.value);
+        const sitePlace = building.ObjectPlacement.PlacementRelTo.RelativePlacement.Location;
+        const transform = sitePlace.Coordinates.map((coord) => coord.value);
         return transform[2];
     }
     async getBuilding(modelID) {
@@ -91772,14 +91767,7 @@ class DropboxAPI extends IfcComponent {
         };
         this.loader = loader;
         this.counter = 0;
-    }
-    initializeAPI() {
-        const script = document.createElement('script');
-        script.type = 'text/javascript';
-        script.src = 'https://www.dropbox.com/static/api/2/dropins.js';
-        script.id = 'dropboxjs';
-        script.setAttribute('data-app-key', 'iej3z16hhyca35a');
-        document.getElementsByTagName('head')[0].appendChild(script);
+        this.initializeAPI();
     }
     loadDropboxIfc() {
         this.openDropboxChooser(this.getOptions());
@@ -91804,6 +91792,14 @@ class DropboxAPI extends IfcComponent {
     }
     onDBChooserCancel(_files) {
         console.log('Canceled!');
+    }
+    initializeAPI() {
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = 'https://www.dropbox.com/static/api/2/dropins.js';
+        script.id = 'dropboxjs';
+        script.setAttribute('data-app-key', 'iej3z16hhyca35a');
+        document.getElementsByTagName('head')[0].appendChild(script);
     }
 }
 
@@ -107689,3 +107685,13 @@ loadIfc('../../../IFC/01.ifc');
 
 window.ondblclick = () => viewer.IFC.selector.pickIfcItem(true);
 window.onmousemove = () => viewer.IFC.selector.prePickIfcItem();
+viewer.clipper.active = true;
+
+window.onkeydown = (event) => {
+    if(event.code === 'KeyP') {
+        viewer.clipper.createPlane();
+    }
+    else if(event.code === 'KeyO') {
+        viewer.clipper.deletePlane();
+    }
+};

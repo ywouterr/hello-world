@@ -16,3 +16,13 @@ loadIfc('../../../IFC/01.ifc');
 
 window.ondblclick = () => viewer.IFC.selector.pickIfcItem(true);
 window.onmousemove = () => viewer.IFC.selector.prePickIfcItem();
+viewer.clipper.active = true;
+
+window.onkeydown = (event) => {
+    if(event.code === 'KeyP') {
+        viewer.clipper.createPlane();
+    }
+    else if(event.code === 'KeyO') {
+        viewer.clipper.deletePlane();
+    }
+}
