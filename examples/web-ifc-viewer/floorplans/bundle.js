@@ -94050,6 +94050,7 @@ class IfcRenderer extends IfcComponent {
         this.renderer = null;
         this.container = null;
         this.context = null;
+        this.tempRenderer.dispose();
     }
     update(_delta) {
         if (this.blocked)
@@ -94070,22 +94071,25 @@ class IfcRenderer extends IfcComponent {
     newScreenshot(camera, dimensions) {
         const previousDimensions = this.getSize();
         const domElement = this.basicRenderer.domElement;
-        const tempCanvas = domElement.cloneNode(true);
+        if(!this.tempCanvas) {
+            this.tempCanvas = domElement.cloneNode(true);
+        }
+
         // Using a new renderer to make screenshots without updating what the user sees in the canvas
-        const tempRenderer = new WebGLRenderer({ canvas: tempCanvas, antialias: true });
-        tempRenderer.localClippingEnabled = true;
+        if(!this.tempRenderer) {
+            this.tempRenderer = new WebGLRenderer({ canvas: this.tempCanvas, antialias: true });
+            this.tempRenderer.localClippingEnabled = true;
+        }
         if (dimensions) {
-            tempRenderer.setSize(dimensions.x, dimensions.y);
+            this.tempRenderer.setSize(dimensions.x, dimensions.y);
             this.context.ifcCamera.updateAspect(dimensions);
         }
         const scene = this.context.getScene();
         const cameraToRender = camera || this.context.getCamera();
-        tempRenderer.render(scene, cameraToRender);
-        const result = tempRenderer.domElement.toDataURL();
+        this.tempRenderer.render(scene, cameraToRender);
+        const result = this.tempRenderer.domElement.toDataURL();
         if (dimensions)
             this.context.ifcCamera.updateAspect(previousDimensions);
-        tempRenderer.dispose();
-        tempCanvas.remove();
         return result;
     }
     setupRenderers() {
@@ -109912,7 +109916,7 @@ async function exportFloorPlanToDxf() {
 		}
 	};
 
-	setTimeout(() => viewer.edgesVectorizer.vectorize(10), 100);
+	setTimeout(() => viewer.edgesVectorizer.vectorize(100), 100);
 }
 
 function toggleAllShadowsVisibility(visible) {
