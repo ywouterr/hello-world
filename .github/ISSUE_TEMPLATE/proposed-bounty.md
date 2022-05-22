@@ -1,7 +1,7 @@
 ---
 name: Proposed Bounty
 about: Allows IFC.js patreons to propose new bounties.
-title: "New bounty: [BOUNTY] \U0001F680"
+title: "New bounty: [BOUNTY TITLE HERE] \U0001F680"
 labels: proposed-bounty
 assignees: ''
 
