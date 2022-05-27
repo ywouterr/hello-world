@@ -78436,9 +78436,9 @@ const renderer = new WebGLRenderer({
 renderer.setSize(size.width, size.height);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-//Outline Effect
+//Outline effect
 const outlineEffect = new OutlineEffect(renderer, {
-  defaultThickness: 0.002,
+  defaultThickness: 0.003,
   defaultColor: [0, 0, 0],
   defaultAlpha: 1,
   defaultKeepAlive: true,
@@ -78460,11 +78460,39 @@ const controls = new OrbitControls(camera, threeCanvas);
 controls.enableDamping = true;
 controls.target.set(-2, 0, 0);
 
+// Show lines only when the user is not moving the camera
+let activateOutline = true;
+let pointerDown = false;
+window.onmousedown = () => {
+  activateOutline = false;
+  pointerDown = true;
+};
+window.onmouseup = () => {
+  activateOutline = true;
+  pointerDown = false;
+};
+
+let lastWheeled = 0;
+let wheelDelayAO = 500; // milliseconds
+window.onwheel = () => {
+  activateOutline = false;
+  lastWheeled = performance.now();
+};
+
 //Animation loop
 const animate = () => {
   controls.update();
   renderer.render(scene, camera);
-  outlineEffect.render(scene, camera);
+
+  if(activateOutline) {
+    outlineEffect.render(scene, camera);
+  } else if (!pointerDown) {
+    const now = performance.now();
+    if(now - lastWheeled > wheelDelayAO) {
+      activateOutline = true;
+    }
+  }
+
   requestAnimationFrame(animate);
 };
 
@@ -78480,14 +78508,23 @@ window.addEventListener("resize", () => {
 
 //Sets up the IFC loading
 const ifcLoader = new IFCLoader();
-ifcLoader.ifcManager.setWasmPath("../../../");
 
-const input = document.getElementById("file-input");
-input.addEventListener(
-  "change",
-  (changed) => {
-    const ifcURL = URL.createObjectURL(changed.target.files[0]);
-    ifcLoader.load(ifcURL, (ifcModel) => scene.add(ifcModel));
-  },
-  false
-);
+async function loadIfc() {
+  await ifcLoader.ifcManager.setWasmPath("../../../");
+
+  await ifcLoader.ifcManager.applyWebIfcConfig({
+    USE_FAST_BOOLS: true,
+    COORDINATE_TO_ORIGIN: true
+  });
+
+  await ifcLoader.ifcManager.parser.setupOptionalCategories({
+    [IFCSPACE]: false,
+    [IFCOPENINGELEMENT]: false
+  });
+
+  ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
+    scene.add(ifcModel);
+  });
+}
+
+loadIfc();

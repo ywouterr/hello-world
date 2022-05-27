@@ -8,6 +8,8 @@ import {
   WebGLRenderer,
 } from "three";
 
+import {IFCSPACE, IFCOPENINGELEMENT} from 'web-ifc';
+
 import Stats from "three/examples/jsm/libs/stats.module";
 import GUI from "three/examples/jsm/libs/lil-gui.module.min.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
@@ -65,7 +67,7 @@ scene.add(axes);
 
 //Creates the orbit controls (to navigate the scene)
 const controls = new OrbitControls(camera, threeCanvas);
-controls.enableDamping = true;
+// controls.enableDamping = true;
 controls.target.set(-2, 0, 0);
 
 //Postprocessing
@@ -86,11 +88,39 @@ composer.addPass(renderPass);
 composer.addPass(fxaaPass);
 composer.addPass(saoPass);
 
+// Show AO only when the user is not moving the camera
+let activateAO = true;
+let pointerDown = false;
+window.onmousedown = () => {
+  activateAO = false;
+  pointerDown = true;
+}
+window.onmouseup = () => {
+  activateAO = true;
+  pointerDown = false;
+}
+
+let lastWheeled = 0;
+let wheelDelayAO = 500; // milliseconds
+window.onwheel = () => {
+  activateAO = false;
+  lastWheeled = performance.now();
+}
+
 // //Animation loop
 const animate = () => {
   controls.update();
   renderer.render(scene, camera);
-  composer.render();
+
+  if(activateAO) {
+    composer.render();
+  } else if (!pointerDown) {
+    const now = performance.now();
+    if(now - lastWheeled > wheelDelayAO) {
+      activateAO = true;
+    }
+  }
+
   stats.update();
   requestAnimationFrame(animate);
 };
@@ -108,10 +138,27 @@ window.addEventListener("resize", () => {
 
 //Sets up the IFC loading
 const ifcLoader = new IFCLoader();
-ifcLoader.ifcManager.setWasmPath("../../../");
-ifcLoader.load("./rme_advanced_sample_project.ifc", (ifcModel) => {
-  scene.add(ifcModel);
-});
+
+async function loadIfc() {
+  await ifcLoader.ifcManager.setWasmPath("../../../");
+
+  await ifcLoader.ifcManager.applyWebIfcConfig({
+    USE_FAST_BOOLS: true,
+    COORDINATE_TO_ORIGIN: true
+  });
+
+  await ifcLoader.ifcManager.parser.setupOptionalCategories({
+    [IFCSPACE]: false,
+    [IFCOPENINGELEMENT]: false
+  });
+
+  ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
+    scene.add(ifcModel);
+  });
+}
+
+loadIfc();
+
 
 //GUI
 const gui = new GUI();

@@ -15,7 +15,3 @@ html, body {
     outline: none;
 }
 
-#file-input{
-    z-index: 1;
-    position: absolute;
-}
