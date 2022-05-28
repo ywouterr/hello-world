@@ -42991,26 +42991,17 @@ const table = document.createElement("table");
 const ifcapi = new IfcAPI2();
 ifcapi.SetWasmPath("../../../../");
 
-const button = document.getElementById("file-opener-button");
-button.addEventListener('click', () => input.click());
-
 const leftContainer = document.getElementById("left-container");
-document.getElementById("save-button");
-
 const json = document.getElementById("json");
 
-const input = document.getElementById("file-input");
-input.addEventListener(
-    "change",
-    (changed) => {
-        const reader = new FileReader();
-        reader.onload = () => LoadFile(reader.result);
-        reader.readAsText(changed.target.files[0]);
-    },
-    false
-);
 
-async function LoadFile(ifcAsText) {
+fetch('../../../../IFC/01.ifc')
+  .then(response => response.text())
+  .then(data => {
+    LoadFileData(data);
+});
+
+async function LoadFileData(ifcAsText) {
     leftContainer.innerHTML = ifcAsText.replace(/(?:\r\n|\r|\n)/g, '<br>');
     const uint8array = new TextEncoder().encode(ifcAsText);
     const modelID = await OpenIfc(uint8array);
