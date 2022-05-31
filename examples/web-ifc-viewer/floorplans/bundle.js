@@ -83118,7 +83118,7 @@ class ClippingEdges {
         }
         Object.keys(ClippingEdges.styles).forEach((styleName) => {
             try {
-                //this can trow error if there is an empty mesh, we still want to update other edges so we catch ere
+                // this can trow error if there is an empty mesh, we still want to update other edges so we catch ere
                 this.drawEdges(styleName);
             }
             catch (e) {
@@ -83132,7 +83132,10 @@ class ClippingEdges {
         const ids = ClippingEdges.context.items.ifcModels.map((model) => model.modelID);
         for (let i = 0; i < ids.length; i++) {
             // eslint-disable-next-line no-await-in-loop
-            subsets.push(await this.newSubset(styleName, ids[i], categories));
+            const subset = await ClippingEdges.newSubset(styleName, ids[i], categories);
+            if (subset) {
+                subsets.push(subset);
+            }
         }
         material.clippingPlanes = ClippingEdges.context.getClippingPlanes();
         ClippingEdges.styles[styleName] = {
@@ -83166,7 +83169,10 @@ class ClippingEdges {
             style.meshes.length = 0;
             for (let i = 0; i < ids.length; i++) {
                 // eslint-disable-next-line no-await-in-loop
-                style.meshes.push(await ClippingEdges.newSubset(name, ids[i], style.categories));
+                const subset = await ClippingEdges.newSubset(name, ids[i], style.categories);
+                if (subset) {
+                    style.meshes.push(subset);
+                }
             }
         }
     }
@@ -83210,8 +83216,10 @@ class ClippingEdges {
     // Creates a new subset. This allows to apply a style just to a specific set of items
     static async newSubset(styleName, modelID, categories) {
         const ids = await this.getItemIDs(modelID, categories);
+        // If no items were found, no geometry is created for this style
+        if (!ids.length)
+            return null;
         const manager = this.ifc.loader.ifcManager;
-        // todo handle case with empty ids list
         if (ids.length > 0) {
             return manager.createSubset({
                 modelID,
@@ -83223,18 +83231,7 @@ class ClippingEdges {
                 applyBVH: true
             });
         }
-        try {
-            const subset = manager.getSubset(modelID, ClippingEdges.invisibleMaterial, styleName);
-            if (subset) {
-                manager.clearSubset(modelID, styleName, ClippingEdges.invisibleMaterial);
-                return subset;
-            }
-            // todo handling in case getSubset does not find one because above the creation was not successful
-        }
-        catch (e) {
-            console.error('unable to find a subset', e);
-        }
-        return new Mesh();
+        return manager.getSubset(modelID, ClippingEdges.invisibleMaterial, styleName);
     }
     static async getItemIDs(modelID, categories) {
         const ids = [];
@@ -83793,7 +83790,7 @@ class IfcUnits {
             if (foundUnit) {
                 const prefix = foundUnit.Prefix;
                 let scale;
-                if (prefix === null)
+                if (prefix === null || prefix === undefined)
                     scale = UnitScale.NONE;
                 else
                     scale = UnitScale[prefix.value];
