@@ -113820,9 +113820,7 @@ class TagsManager$o {
      * @param {Tag[]} tags
      */
     addTags(tags) {
-        for(let tag of tags) {
-            this._tags.push(tag);
-        }
+        this._tags.push(...tags);
     }
 
     /**
