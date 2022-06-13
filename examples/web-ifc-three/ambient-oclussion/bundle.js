@@ -81914,6 +81914,7 @@ async function loadIfc() {
 loadIfc();
 
 
+
 //GUI
 const gui = new g();
 
@@ -81931,3 +81932,17 @@ saoFolder
 
 const fxaaFolder = gui.addFolder("FXAA");
 fxaaFolder.add(fxaaPass, "enabled");
+
+const plane = new Plane(new Vector3(0, -1, 0), 1.5);
+let clippingPlaneControls = {enabled: false};
+
+const clippingPlaneFolder = gui.addFolder("Clipping planes");
+clippingPlaneFolder.add(clippingPlaneControls, "enabled").listen().onChange(
+    () => {
+      if(clippingPlaneControls.enabled) {
+        renderer.clippingPlanes = [plane];
+      } else {
+        renderer.clippingPlanes = [];
+      }
+    }
+);
