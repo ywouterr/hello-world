@@ -77,7 +77,7 @@ const controls = new OrbitControls(camera, threeCanvas);
 controls.target.set(-2, 0, 0);
 
 // Set up post processing
-// Create a render target that holds a depthTexture so we can use it in the outline pass
+// Create a render target that holds a depthTexture so we can use it in the postproduction pass
 // See: https://threejs.org/docs/index.html#api/en/renderers/WebGLRenderTarget.depthBuffer
 const depthTexture = new DepthTexture();
 const renderTarget = new WebGLRenderTarget(
@@ -139,12 +139,28 @@ animate();
 
 const img = document.getElementById('overlay');
 
+let isMouseDown = false;
 onmousedown = () => {
+  isMouseDown = true;
   hideSaoPass();
 }
 
 onmouseup = () => {
+  isMouseDown = false;
   updateSaoPass();
+}
+
+let lastWheeled = 0;
+let waitingTime = 500;
+onwheel = () => {
+  hideSaoPass();
+  lastWheeled = performance.now();
+  setTimeout(() => {
+    const userStoppedWheeling = performance.now() - lastWheeled >= waitingTime;
+    if(userStoppedWheeling && !isMouseDown) {
+      updateSaoPass();
+    }
+  }, waitingTime)
 }
 
 function hideSaoPass() {
@@ -158,6 +174,9 @@ function updateSaoPass() {
   grid.visible = true;
   img.classList.remove('collapsed');
 }
+
+setTimeout(() => updateSaoPass(), 300);
+
 
 // const plane = new Plane(new Vector3(0, -2, 0), 1.5);
 // renderer.clippingPlanes = [plane];
@@ -221,6 +240,7 @@ gui
     });
 
 // Initial values
+uniforms.outlineColor.value.set(0x6b6b6b);
 uniforms.multiplierParameters.value.x = params.depthBias;
 uniforms.multiplierParameters.value.y = params.depthMult;
 uniforms.multiplierParameters.value.z = params.normalBias;

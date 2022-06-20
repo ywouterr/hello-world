@@ -79885,784 +79885,6 @@ class RenderPass extends Pass {
 }
 
 /**
- * TODO
- */
-
-const SAOShader = {
-	defines: {
-		'NUM_SAMPLES': 7,
-		'NUM_RINGS': 4,
-		'NORMAL_TEXTURE': 0,
-		'DIFFUSE_TEXTURE': 0,
-		'DEPTH_PACKING': 1,
-		'PERSPECTIVE_CAMERA': 1
-	},
-	uniforms: {
-
-		'tDepth': { value: null },
-		'tDiffuse': { value: null },
-		'tNormal': { value: null },
-		'size': { value: new Vector2( 512, 512 ) },
-
-		'cameraNear': { value: 1 },
-		'cameraFar': { value: 100 },
-		'cameraProjectionMatrix': { value: new Matrix4() },
-		'cameraInverseProjectionMatrix': { value: new Matrix4() },
-
-		'scale': { value: 1.0 },
-		'intensity': { value: 0.1 },
-		'bias': { value: 0.5 },
-
-		'minResolution': { value: 0.0 },
-		'kernelRadius': { value: 100.0 },
-		'randomSeed': { value: 0.0 }
-	},
-	vertexShader: /* glsl */`
-
-		varying vec2 vUv;
-
-		void main() {
-			vUv = uv;
-			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-		}`,
-
-	fragmentShader: /* glsl */`
-
-		#include <common>
-
-		varying vec2 vUv;
-
-		#if DIFFUSE_TEXTURE == 1
-		uniform sampler2D tDiffuse;
-		#endif
-
-		uniform sampler2D tDepth;
-
-		#if NORMAL_TEXTURE == 1
-		uniform sampler2D tNormal;
-		#endif
-
-		uniform float cameraNear;
-		uniform float cameraFar;
-		uniform mat4 cameraProjectionMatrix;
-		uniform mat4 cameraInverseProjectionMatrix;
-
-		uniform float scale;
-		uniform float intensity;
-		uniform float bias;
-		uniform float kernelRadius;
-		uniform float minResolution;
-		uniform vec2 size;
-		uniform float randomSeed;
-
-		// RGBA depth
-
-		#include <packing>
-
-		vec4 getDefaultColor( const in vec2 screenPosition ) {
-			#if DIFFUSE_TEXTURE == 1
-			return texture2D( tDiffuse, vUv );
-			#else
-			return vec4( 1.0 );
-			#endif
-		}
-
-		float getDepth( const in vec2 screenPosition ) {
-			#if DEPTH_PACKING == 1
-			return unpackRGBAToDepth( texture2D( tDepth, screenPosition ) );
-			#else
-			return texture2D( tDepth, screenPosition ).x;
-			#endif
-		}
-
-		float getViewZ( const in float depth ) {
-			#if PERSPECTIVE_CAMERA == 1
-			return perspectiveDepthToViewZ( depth, cameraNear, cameraFar );
-			#else
-			return orthographicDepthToViewZ( depth, cameraNear, cameraFar );
-			#endif
-		}
-
-		vec3 getViewPosition( const in vec2 screenPosition, const in float depth, const in float viewZ ) {
-			float clipW = cameraProjectionMatrix[2][3] * viewZ + cameraProjectionMatrix[3][3];
-			vec4 clipPosition = vec4( ( vec3( screenPosition, depth ) - 0.5 ) * 2.0, 1.0 );
-			clipPosition *= clipW; // unprojection.
-
-			return ( cameraInverseProjectionMatrix * clipPosition ).xyz;
-		}
-
-		vec3 getViewNormal( const in vec3 viewPosition, const in vec2 screenPosition ) {
-			#if NORMAL_TEXTURE == 1
-			return unpackRGBToNormal( texture2D( tNormal, screenPosition ).xyz );
-			#else
-			return normalize( cross( dFdx( viewPosition ), dFdy( viewPosition ) ) );
-			#endif
-		}
-
-		float scaleDividedByCameraFar;
-		float minResolutionMultipliedByCameraFar;
-
-		float getOcclusion( const in vec3 centerViewPosition, const in vec3 centerViewNormal, const in vec3 sampleViewPosition ) {
-			vec3 viewDelta = sampleViewPosition - centerViewPosition;
-			float viewDistance = length( viewDelta );
-			float scaledScreenDistance = scaleDividedByCameraFar * viewDistance;
-
-			return max(0.0, (dot(centerViewNormal, viewDelta) - minResolutionMultipliedByCameraFar) / scaledScreenDistance - bias) / (1.0 + pow2( scaledScreenDistance ) );
-		}
-
-		// moving costly divides into consts
-		const float ANGLE_STEP = PI2 * float( NUM_RINGS ) / float( NUM_SAMPLES );
-		const float INV_NUM_SAMPLES = 1.0 / float( NUM_SAMPLES );
-
-		float getAmbientOcclusion( const in vec3 centerViewPosition ) {
-			// precompute some variables require in getOcclusion.
-			scaleDividedByCameraFar = scale / cameraFar;
-			minResolutionMultipliedByCameraFar = minResolution * cameraFar;
-			vec3 centerViewNormal = getViewNormal( centerViewPosition, vUv );
-
-			// jsfiddle that shows sample pattern: https://jsfiddle.net/a16ff1p7/
-			float angle = rand( vUv + randomSeed ) * PI2;
-			vec2 radius = vec2( kernelRadius * INV_NUM_SAMPLES ) / size;
-			vec2 radiusStep = radius;
-
-			float occlusionSum = 0.0;
-			float weightSum = 0.0;
-
-			for( int i = 0; i < NUM_SAMPLES; i ++ ) {
-				vec2 sampleUv = vUv + vec2( cos( angle ), sin( angle ) ) * radius;
-				radius += radiusStep;
-				angle += ANGLE_STEP;
-
-				float sampleDepth = getDepth( sampleUv );
-				if( sampleDepth >= ( 1.0 - EPSILON ) ) {
-					continue;
-				}
-
-				float sampleViewZ = getViewZ( sampleDepth );
-				vec3 sampleViewPosition = getViewPosition( sampleUv, sampleDepth, sampleViewZ );
-				occlusionSum += getOcclusion( centerViewPosition, centerViewNormal, sampleViewPosition );
-				weightSum += 1.0;
-			}
-
-			if( weightSum == 0.0 ) discard;
-
-			return occlusionSum * ( intensity / weightSum );
-		}
-
-		void main() {
-			float centerDepth = getDepth( vUv );
-			if( centerDepth >= ( 1.0 - EPSILON ) ) {
-				discard;
-			}
-
-			float centerViewZ = getViewZ( centerDepth );
-			vec3 viewPosition = getViewPosition( vUv, centerDepth, centerViewZ );
-
-			float ambientOcclusion = getAmbientOcclusion( viewPosition );
-
-			gl_FragColor = getDefaultColor( vUv );
-			gl_FragColor.xyz *=  1.0 - ambientOcclusion;
-		}`
-
-};
-
-/**
- * TODO
- */
-
-const DepthLimitedBlurShader = {
-	defines: {
-		'KERNEL_RADIUS': 4,
-		'DEPTH_PACKING': 1,
-		'PERSPECTIVE_CAMERA': 1
-	},
-	uniforms: {
-		'tDiffuse': { value: null },
-		'size': { value: new Vector2( 512, 512 ) },
-		'sampleUvOffsets': { value: [ new Vector2( 0, 0 ) ] },
-		'sampleWeights': { value: [ 1.0 ] },
-		'tDepth': { value: null },
-		'cameraNear': { value: 10 },
-		'cameraFar': { value: 1000 },
-		'depthCutoff': { value: 10 },
-	},
-	vertexShader: /* glsl */`
-
-		#include <common>
-
-		uniform vec2 size;
-
-		varying vec2 vUv;
-		varying vec2 vInvSize;
-
-		void main() {
-			vUv = uv;
-			vInvSize = 1.0 / size;
-
-			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-		}`,
-
-	fragmentShader: /* glsl */`
-
-		#include <common>
-		#include <packing>
-
-		uniform sampler2D tDiffuse;
-		uniform sampler2D tDepth;
-
-		uniform float cameraNear;
-		uniform float cameraFar;
-		uniform float depthCutoff;
-
-		uniform vec2 sampleUvOffsets[ KERNEL_RADIUS + 1 ];
-		uniform float sampleWeights[ KERNEL_RADIUS + 1 ];
-
-		varying vec2 vUv;
-		varying vec2 vInvSize;
-
-		float getDepth( const in vec2 screenPosition ) {
-			#if DEPTH_PACKING == 1
-			return unpackRGBAToDepth( texture2D( tDepth, screenPosition ) );
-			#else
-			return texture2D( tDepth, screenPosition ).x;
-			#endif
-		}
-
-		float getViewZ( const in float depth ) {
-			#if PERSPECTIVE_CAMERA == 1
-			return perspectiveDepthToViewZ( depth, cameraNear, cameraFar );
-			#else
-			return orthographicDepthToViewZ( depth, cameraNear, cameraFar );
-			#endif
-		}
-
-		void main() {
-			float depth = getDepth( vUv );
-			if( depth >= ( 1.0 - EPSILON ) ) {
-				discard;
-			}
-
-			float centerViewZ = -getViewZ( depth );
-			bool rBreak = false, lBreak = false;
-
-			float weightSum = sampleWeights[0];
-			vec4 diffuseSum = texture2D( tDiffuse, vUv ) * weightSum;
-
-			for( int i = 1; i <= KERNEL_RADIUS; i ++ ) {
-
-				float sampleWeight = sampleWeights[i];
-				vec2 sampleUvOffset = sampleUvOffsets[i] * vInvSize;
-
-				vec2 sampleUv = vUv + sampleUvOffset;
-				float viewZ = -getViewZ( getDepth( sampleUv ) );
-
-				if( abs( viewZ - centerViewZ ) > depthCutoff ) rBreak = true;
-
-				if( ! rBreak ) {
-					diffuseSum += texture2D( tDiffuse, sampleUv ) * sampleWeight;
-					weightSum += sampleWeight;
-				}
-
-				sampleUv = vUv - sampleUvOffset;
-				viewZ = -getViewZ( getDepth( sampleUv ) );
-
-				if( abs( viewZ - centerViewZ ) > depthCutoff ) lBreak = true;
-
-				if( ! lBreak ) {
-					diffuseSum += texture2D( tDiffuse, sampleUv ) * sampleWeight;
-					weightSum += sampleWeight;
-				}
-
-			}
-
-			gl_FragColor = diffuseSum / weightSum;
-		}`
-
-};
-
-const BlurShaderUtils = {
-
-	createSampleWeights: function ( kernelRadius, stdDev ) {
-
-		const weights = [];
-
-		for ( let i = 0; i <= kernelRadius; i ++ ) {
-
-			weights.push( gaussian( i, stdDev ) );
-
-		}
-
-		return weights;
-
-	},
-
-	createSampleOffsets: function ( kernelRadius, uvIncrement ) {
-
-		const offsets = [];
-
-		for ( let i = 0; i <= kernelRadius; i ++ ) {
-
-			offsets.push( uvIncrement.clone().multiplyScalar( i ) );
-
-		}
-
-		return offsets;
-
-	},
-
-	configure: function ( material, kernelRadius, stdDev, uvIncrement ) {
-
-		material.defines[ 'KERNEL_RADIUS' ] = kernelRadius;
-		material.uniforms[ 'sampleUvOffsets' ].value = BlurShaderUtils.createSampleOffsets( kernelRadius, uvIncrement );
-		material.uniforms[ 'sampleWeights' ].value = BlurShaderUtils.createSampleWeights( kernelRadius, stdDev );
-		material.needsUpdate = true;
-
-	}
-
-};
-
-function gaussian( x, stdDev ) {
-
-	return Math.exp( - ( x * x ) / ( 2.0 * ( stdDev * stdDev ) ) ) / ( Math.sqrt( 2.0 * Math.PI ) * stdDev );
-
-}
-
-/**
- * Unpack RGBA depth shader
- * - show RGBA encoded depth as monochrome color
- */
-
-const UnpackDepthRGBAShader = {
-
-	uniforms: {
-
-		'tDiffuse': { value: null },
-		'opacity': { value: 1.0 }
-
-	},
-
-	vertexShader: /* glsl */`
-
-		varying vec2 vUv;
-
-		void main() {
-
-			vUv = uv;
-			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-
-		}`,
-
-	fragmentShader: /* glsl */`
-
-		uniform float opacity;
-
-		uniform sampler2D tDiffuse;
-
-		varying vec2 vUv;
-
-		#include <packing>
-
-		void main() {
-
-			float depth = 1.0 - unpackRGBAToDepth( texture2D( tDiffuse, vUv ) );
-			gl_FragColor = vec4( vec3( depth ), opacity );
-
-		}`
-
-};
-
-/**
- * SAO implementation inspired from bhouston previous SAO work
- */
-
-class SAOPass extends Pass {
-
-	constructor( scene, camera, useDepthTexture = false, useNormals = false, resolution = new Vector2( 256, 256 ) ) {
-
-		super();
-
-		this.scene = scene;
-		this.camera = camera;
-
-		this.clear = true;
-		this.needsSwap = false;
-
-		this.supportsDepthTextureExtension = useDepthTexture;
-		this.supportsNormalTexture = useNormals;
-
-		this.originalClearColor = new Color();
-		this._oldClearColor = new Color();
-		this.oldClearAlpha = 1;
-
-		this.params = {
-			output: 0,
-			saoBias: 0.5,
-			saoIntensity: 0.18,
-			saoScale: 1,
-			saoKernelRadius: 100,
-			saoMinResolution: 0,
-			saoBlur: true,
-			saoBlurRadius: 8,
-			saoBlurStdDev: 4,
-			saoBlurDepthCutoff: 0.01
-		};
-
-		this.resolution = new Vector2( resolution.x, resolution.y );
-
-		this.saoRenderTarget = new WebGLRenderTarget( this.resolution.x, this.resolution.y, {
-			minFilter: LinearFilter,
-			magFilter: LinearFilter,
-			format: RGBAFormat
-		} );
-		this.blurIntermediateRenderTarget = this.saoRenderTarget.clone();
-		this.beautyRenderTarget = this.saoRenderTarget.clone();
-
-		this.normalRenderTarget = new WebGLRenderTarget( this.resolution.x, this.resolution.y, {
-			minFilter: NearestFilter,
-			magFilter: NearestFilter,
-			format: RGBAFormat
-		} );
-		this.depthRenderTarget = this.normalRenderTarget.clone();
-		
-		let depthTexture;
-
-		if ( this.supportsDepthTextureExtension ) {
-
-			depthTexture = new DepthTexture();
-			depthTexture.type = UnsignedShortType;
-
-			this.beautyRenderTarget.depthTexture = depthTexture;
-			this.beautyRenderTarget.depthBuffer = true;
-
-		}
-
-		this.depthMaterial = new MeshDepthMaterial();
-		this.depthMaterial.depthPacking = RGBADepthPacking;
-		this.depthMaterial.blending = NoBlending;
-
-		this.normalMaterial = new MeshNormalMaterial();
-		this.normalMaterial.blending = NoBlending;
-
-		if ( SAOShader === undefined ) {
-
-			console.error( 'THREE.SAOPass relies on SAOShader' );
-
-		}
-
-		this.saoMaterial = new ShaderMaterial( {
-			defines: Object.assign( {}, SAOShader.defines ),
-			fragmentShader: SAOShader.fragmentShader,
-			vertexShader: SAOShader.vertexShader,
-			uniforms: UniformsUtils.clone( SAOShader.uniforms )
-		} );
-		this.saoMaterial.extensions.derivatives = true;
-		this.saoMaterial.defines[ 'DEPTH_PACKING' ] = this.supportsDepthTextureExtension ? 0 : 1;
-		this.saoMaterial.defines[ 'NORMAL_TEXTURE' ] = this.supportsNormalTexture ? 1 : 0;
-		this.saoMaterial.defines[ 'PERSPECTIVE_CAMERA' ] = this.camera.isPerspectiveCamera ? 1 : 0;
-		this.saoMaterial.uniforms[ 'tDepth' ].value = ( this.supportsDepthTextureExtension ) ? depthTexture : this.depthRenderTarget.texture;
-		this.saoMaterial.uniforms[ 'tNormal' ].value = this.normalRenderTarget.texture;
-		this.saoMaterial.uniforms[ 'size' ].value.set( this.resolution.x, this.resolution.y );
-		this.saoMaterial.uniforms[ 'cameraInverseProjectionMatrix' ].value.copy( this.camera.projectionMatrixInverse );
-		this.saoMaterial.uniforms[ 'cameraProjectionMatrix' ].value = this.camera.projectionMatrix;
-		this.saoMaterial.blending = NoBlending;
-
-		if ( DepthLimitedBlurShader === undefined ) {
-
-			console.error( 'THREE.SAOPass relies on DepthLimitedBlurShader' );
-
-		}
-
-		this.vBlurMaterial = new ShaderMaterial( {
-			uniforms: UniformsUtils.clone( DepthLimitedBlurShader.uniforms ),
-			defines: Object.assign( {}, DepthLimitedBlurShader.defines ),
-			vertexShader: DepthLimitedBlurShader.vertexShader,
-			fragmentShader: DepthLimitedBlurShader.fragmentShader
-		} );
-		this.vBlurMaterial.defines[ 'DEPTH_PACKING' ] = this.supportsDepthTextureExtension ? 0 : 1;
-		this.vBlurMaterial.defines[ 'PERSPECTIVE_CAMERA' ] = this.camera.isPerspectiveCamera ? 1 : 0;
-		this.vBlurMaterial.uniforms[ 'tDiffuse' ].value = this.saoRenderTarget.texture;
-		this.vBlurMaterial.uniforms[ 'tDepth' ].value = ( this.supportsDepthTextureExtension ) ? depthTexture : this.depthRenderTarget.texture;
-		this.vBlurMaterial.uniforms[ 'size' ].value.set( this.resolution.x, this.resolution.y );
-		this.vBlurMaterial.blending = NoBlending;
-
-		this.hBlurMaterial = new ShaderMaterial( {
-			uniforms: UniformsUtils.clone( DepthLimitedBlurShader.uniforms ),
-			defines: Object.assign( {}, DepthLimitedBlurShader.defines ),
-			vertexShader: DepthLimitedBlurShader.vertexShader,
-			fragmentShader: DepthLimitedBlurShader.fragmentShader
-		} );
-		this.hBlurMaterial.defines[ 'DEPTH_PACKING' ] = this.supportsDepthTextureExtension ? 0 : 1;
-		this.hBlurMaterial.defines[ 'PERSPECTIVE_CAMERA' ] = this.camera.isPerspectiveCamera ? 1 : 0;
-		this.hBlurMaterial.uniforms[ 'tDiffuse' ].value = this.blurIntermediateRenderTarget.texture;
-		this.hBlurMaterial.uniforms[ 'tDepth' ].value = ( this.supportsDepthTextureExtension ) ? depthTexture : this.depthRenderTarget.texture;
-		this.hBlurMaterial.uniforms[ 'size' ].value.set( this.resolution.x, this.resolution.y );
-		this.hBlurMaterial.blending = NoBlending;
-
-		if ( CopyShader === undefined ) {
-
-			console.error( 'THREE.SAOPass relies on CopyShader' );
-
-		}
-
-		this.materialCopy = new ShaderMaterial( {
-			uniforms: UniformsUtils.clone( CopyShader.uniforms ),
-			vertexShader: CopyShader.vertexShader,
-			fragmentShader: CopyShader.fragmentShader,
-			blending: NoBlending
-		} );
-		this.materialCopy.transparent = true;
-		this.materialCopy.depthTest = false;
-		this.materialCopy.depthWrite = false;
-		this.materialCopy.blending = CustomBlending;
-		this.materialCopy.blendSrc = DstColorFactor;
-		this.materialCopy.blendDst = ZeroFactor;
-		this.materialCopy.blendEquation = AddEquation;
-		this.materialCopy.blendSrcAlpha = DstAlphaFactor;
-		this.materialCopy.blendDstAlpha = ZeroFactor;
-		this.materialCopy.blendEquationAlpha = AddEquation;
-
-		if ( UnpackDepthRGBAShader === undefined ) {
-
-			console.error( 'THREE.SAOPass relies on UnpackDepthRGBAShader' );
-
-		}
-
-		this.depthCopy = new ShaderMaterial( {
-			uniforms: UniformsUtils.clone( UnpackDepthRGBAShader.uniforms ),
-			vertexShader: UnpackDepthRGBAShader.vertexShader,
-			fragmentShader: UnpackDepthRGBAShader.fragmentShader,
-			blending: NoBlending
-		} );
-
-		this.fsQuad = new FullScreenQuad( null );
-
-	}
-
-	render( renderer, writeBuffer, readBuffer/*, deltaTime, maskActive*/ ) {
-
-		// Rendering readBuffer first when rendering to screen
-		if ( this.renderToScreen ) {
-
-			this.materialCopy.blending = NoBlending;
-			this.materialCopy.uniforms[ 'tDiffuse' ].value = readBuffer.texture;
-			this.materialCopy.needsUpdate = true;
-			this.renderPass( renderer, this.materialCopy, null );
-
-		}
-
-		if ( this.params.output === 1 ) {
-
-			return;
-
-		}
-
-		renderer.getClearColor( this._oldClearColor );
-		this.oldClearAlpha = renderer.getClearAlpha();
-		const oldAutoClear = renderer.autoClear;
-		renderer.autoClear = false;
-
-		renderer.setRenderTarget( this.depthRenderTarget );
-		renderer.clear();
-
-		this.saoMaterial.uniforms[ 'bias' ].value = this.params.saoBias;
-		this.saoMaterial.uniforms[ 'intensity' ].value = this.params.saoIntensity;
-		this.saoMaterial.uniforms[ 'scale' ].value = this.params.saoScale;
-		this.saoMaterial.uniforms[ 'kernelRadius' ].value = this.params.saoKernelRadius;
-		this.saoMaterial.uniforms[ 'minResolution' ].value = this.params.saoMinResolution;
-		this.saoMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
-		this.saoMaterial.uniforms[ 'cameraFar' ].value = this.camera.far;
-		// this.saoMaterial.uniforms['randomSeed'].value = Math.random();
-
-		const depthCutoff = this.params.saoBlurDepthCutoff * ( this.camera.far - this.camera.near );
-		this.vBlurMaterial.uniforms[ 'depthCutoff' ].value = depthCutoff;
-		this.hBlurMaterial.uniforms[ 'depthCutoff' ].value = depthCutoff;
-
-		this.vBlurMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
-		this.vBlurMaterial.uniforms[ 'cameraFar' ].value = this.camera.far;
-		this.hBlurMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
-		this.hBlurMaterial.uniforms[ 'cameraFar' ].value = this.camera.far;
-
-		this.params.saoBlurRadius = Math.floor( this.params.saoBlurRadius );
-		if ( ( this.prevStdDev !== this.params.saoBlurStdDev ) || ( this.prevNumSamples !== this.params.saoBlurRadius ) ) {
-
-			BlurShaderUtils.configure( this.vBlurMaterial, this.params.saoBlurRadius, this.params.saoBlurStdDev, new Vector2( 0, 1 ) );
-			BlurShaderUtils.configure( this.hBlurMaterial, this.params.saoBlurRadius, this.params.saoBlurStdDev, new Vector2( 1, 0 ) );
-			this.prevStdDev = this.params.saoBlurStdDev;
-			this.prevNumSamples = this.params.saoBlurRadius;
-
-		}
-
-		// Rendering scene to depth texture
-		renderer.setClearColor( 0x000000 );
-		renderer.setRenderTarget( this.beautyRenderTarget );
-		renderer.clear();
-		renderer.render( this.scene, this.camera );
-
-		// Re-render scene if depth texture extension is not supported
-		if ( ! this.supportsDepthTextureExtension ) {
-
-			// Clear rule : far clipping plane in both RGBA and Basic encoding
-			this.renderOverride( renderer, this.depthMaterial, this.depthRenderTarget, 0x000000, 1.0 );
-
-		}
-
-		if ( this.supportsNormalTexture ) {
-
-			// Clear rule : default normal is facing the camera
-			this.renderOverride( renderer, this.normalMaterial, this.normalRenderTarget, 0x7777ff, 1.0 );
-
-		}
-
-		// Rendering SAO texture
-		this.renderPass( renderer, this.saoMaterial, this.saoRenderTarget, 0xffffff, 1.0 );
-
-		// Blurring SAO texture
-		if ( this.params.saoBlur ) {
-
-			this.renderPass( renderer, this.vBlurMaterial, this.blurIntermediateRenderTarget, 0xffffff, 1.0 );
-			this.renderPass( renderer, this.hBlurMaterial, this.saoRenderTarget, 0xffffff, 1.0 );
-
-		}
-
-		let outputMaterial = this.materialCopy;
-		// Setting up SAO rendering
-		if ( this.params.output === 3 ) {
-
-			if ( this.supportsDepthTextureExtension ) {
-
-				this.materialCopy.uniforms[ 'tDiffuse' ].value = this.beautyRenderTarget.depthTexture;
-				this.materialCopy.needsUpdate = true;
-
-			} else {
-
-				this.depthCopy.uniforms[ 'tDiffuse' ].value = this.depthRenderTarget.texture;
-				this.depthCopy.needsUpdate = true;
-				outputMaterial = this.depthCopy;
-
-			}
-
-		} else if ( this.params.output === 4 ) {
-
-			this.materialCopy.uniforms[ 'tDiffuse' ].value = this.normalRenderTarget.texture;
-			this.materialCopy.needsUpdate = true;
-
-		} else {
-
-			this.materialCopy.uniforms[ 'tDiffuse' ].value = this.saoRenderTarget.texture;
-			this.materialCopy.needsUpdate = true;
-
-		}
-
-		// Blending depends on output, only want a CustomBlending when showing SAO
-		if ( this.params.output === 0 ) {
-
-			outputMaterial.blending = CustomBlending;
-
-		} else {
-
-			outputMaterial.blending = NoBlending;
-
-		}
-
-		// Rendering SAOPass result on top of previous pass
-		this.renderPass( renderer, outputMaterial, this.renderToScreen ? null : readBuffer );
-
-		renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
-		renderer.autoClear = oldAutoClear;
-
-	}
-
-	renderPass( renderer, passMaterial, renderTarget, clearColor, clearAlpha ) {
-
-		// save original state
-		renderer.getClearColor( this.originalClearColor );
-		const originalClearAlpha = renderer.getClearAlpha();
-		const originalAutoClear = renderer.autoClear;
-
-		renderer.setRenderTarget( renderTarget );
-
-		// setup pass state
-		renderer.autoClear = false;
-		if ( ( clearColor !== undefined ) && ( clearColor !== null ) ) {
-
-			renderer.setClearColor( clearColor );
-			renderer.setClearAlpha( clearAlpha || 0.0 );
-			renderer.clear();
-
-		}
-
-		this.fsQuad.material = passMaterial;
-		this.fsQuad.render( renderer );
-
-		// restore original state
-		renderer.autoClear = originalAutoClear;
-		renderer.setClearColor( this.originalClearColor );
-		renderer.setClearAlpha( originalClearAlpha );
-
-	}
-
-	renderOverride( renderer, overrideMaterial, renderTarget, clearColor, clearAlpha ) {
-
-		renderer.getClearColor( this.originalClearColor );
-		const originalClearAlpha = renderer.getClearAlpha();
-		const originalAutoClear = renderer.autoClear;
-
-		renderer.setRenderTarget( renderTarget );
-		renderer.autoClear = false;
-
-		clearColor = overrideMaterial.clearColor || clearColor;
-		clearAlpha = overrideMaterial.clearAlpha || clearAlpha;
-		if ( ( clearColor !== undefined ) && ( clearColor !== null ) ) {
-
-			renderer.setClearColor( clearColor );
-			renderer.setClearAlpha( clearAlpha || 0.0 );
-			renderer.clear();
-
-		}
-
-		this.scene.overrideMaterial = overrideMaterial;
-		renderer.render( this.scene, this.camera );
-		this.scene.overrideMaterial = null;
-
-		// restore original state
-		renderer.autoClear = originalAutoClear;
-		renderer.setClearColor( this.originalClearColor );
-		renderer.setClearAlpha( originalClearAlpha );
-
-	}
-
-	setSize( width, height ) {
-
-		this.beautyRenderTarget.setSize( width, height );
-		this.saoRenderTarget.setSize( width, height );
-		this.blurIntermediateRenderTarget.setSize( width, height );
-		this.normalRenderTarget.setSize( width, height );
-		this.depthRenderTarget.setSize( width, height );
-
-		this.saoMaterial.uniforms[ 'size' ].value.set( width, height );
-		this.saoMaterial.uniforms[ 'cameraInverseProjectionMatrix' ].value.copy( this.camera.projectionMatrixInverse );
-		this.saoMaterial.uniforms[ 'cameraProjectionMatrix' ].value = this.camera.projectionMatrix;
-		this.saoMaterial.needsUpdate = true;
-
-		this.vBlurMaterial.uniforms[ 'size' ].value.set( width, height );
-		this.vBlurMaterial.needsUpdate = true;
-
-		this.hBlurMaterial.uniforms[ 'size' ].value.set( width, height );
-		this.hBlurMaterial.needsUpdate = true;
-
-	}
-
-}
-
-SAOPass.OUTPUT = {
-	'Beauty': 1,
-	'Default': 0,
-	'SAO': 2,
-	'Depth': 3,
-	'Normal': 4
-};
-
-/**
  * NVIDIA FXAA by Timothy Lottes
  * http://timothylottes.blogspot.com/2011/06/fxaa3-source-released.html
  * - WebGL port by @supereggbert
@@ -81775,6 +80997,1013 @@ const FXAAShader = {
 
 };
 
+// Follows the structure of
+// 		https://github.com/mrdoob/three.js/blob/master/examples/jsm/postprocessing/OutlinePass.js
+class CustomOutlinePass extends Pass {
+  constructor(resolution, scene, camera) {
+    super();
+
+    this.renderScene = scene;
+    this.renderCamera = camera;
+    this.resolution = new Vector2(resolution.x, resolution.y);
+
+    this.fsQuad = new FullScreenQuad(null);
+    this.fsQuad.material = this.createOutlinePostProcessMaterial();
+
+    // Create a buffer to store the normals of the scene onto
+    const normalTarget = new WebGLRenderTarget(
+      this.resolution.x,
+      this.resolution.y
+    );
+    normalTarget.texture.format = RGBFormat;
+    normalTarget.texture.minFilter = NearestFilter;
+    normalTarget.texture.magFilter = NearestFilter;
+    normalTarget.texture.generateMipmaps = false;
+    normalTarget.stencilBuffer = false;
+    this.normalTarget = normalTarget;
+
+    this.normalOverrideMaterial = new MeshNormalMaterial();
+  }
+
+  dispose() {
+    this.normalTarget.dispose();
+    this.fsQuad.dispose();
+  }
+
+  setSize(width, height) {
+    this.normalTarget.setSize(width, height);
+    this.resolution.set(width * 2, height * 2);
+
+    this.fsQuad.material.uniforms.screenSize.value.set(
+      this.resolution.x,
+      this.resolution.y,
+      1 / this.resolution.x,
+      1 / this.resolution.y
+    );
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    // Turn off writing to the depth buffer
+    // because we need to read from it in the subsequent passes.
+    const depthBufferValue = writeBuffer.depthBuffer;
+    writeBuffer.depthBuffer = false;
+
+    // 1. Re-render the scene to capture all normals in texture.
+    // Ideally we could capture this in the first render pass along with
+    // the depth texture.
+    renderer.setRenderTarget(this.normalTarget);
+
+    const overrideMaterialValue = this.renderScene.overrideMaterial;
+    this.renderScene.overrideMaterial = this.normalOverrideMaterial;
+    renderer.render(this.renderScene, this.renderCamera);
+    this.renderScene.overrideMaterial = overrideMaterialValue;
+
+    this.fsQuad.material.uniforms["depthBuffer"].value =
+      readBuffer.depthTexture;
+    this.fsQuad.material.uniforms[
+      "normalBuffer"
+    ].value = this.normalTarget.texture;
+    this.fsQuad.material.uniforms["sceneColorBuffer"].value =
+      readBuffer.texture;
+
+    // 2. Draw the outlines using the depth texture and normal texture
+    // and combine it with the scene color
+    if (this.renderToScreen) {
+      // If this is the last effect, then renderToScreen is true.
+      // So we should render to the screen by setting target null
+      // Otherwise, just render into the writeBuffer that the next effect will use as its read buffer.
+      renderer.setRenderTarget(null);
+      this.fsQuad.render(renderer);
+    } else {
+      renderer.setRenderTarget(writeBuffer);
+      this.fsQuad.render(renderer);
+    }
+
+    // Reset the depthBuffer value so we continue writing to it in the next render.
+    writeBuffer.depthBuffer = depthBufferValue;
+  }
+
+  get vertexShader() {
+    return `
+			varying vec2 vUv;
+			void main() {
+			  vUv = uv;
+			  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+			}
+			`;
+  }
+  get fragmentShader() {
+    return `
+			#include <packing>
+			// The above include imports "perspectiveDepthToViewZ"
+			// and other GLSL functions from ThreeJS we need for reading depth.
+			uniform sampler2D sceneColorBuffer;
+			uniform sampler2D depthBuffer;
+			uniform sampler2D normalBuffer;
+			uniform float cameraNear;
+  		uniform float cameraFar;
+  		uniform vec4 screenSize;
+      uniform vec3 outlineColor;
+      uniform vec4 multiplierParameters;
+      uniform int debugVisualize;
+
+			varying vec2 vUv;
+
+			// Helper functions for reading from depth buffer.
+			float readDepth (sampler2D depthSampler, vec2 coord) {
+				float fragCoordZ = texture2D(depthSampler, coord).x;
+				float viewZ = perspectiveDepthToViewZ( fragCoordZ, cameraNear, cameraFar );
+				return viewZToOrthographicDepth( viewZ, cameraNear, cameraFar );
+			}
+			float getLinearDepth(vec3 pos) {
+				return -(viewMatrix * vec4(pos, 1.0)).z;
+			}
+
+			float getLinearScreenDepth(sampler2D map) {
+		    	vec2 uv = gl_FragCoord.xy * screenSize.zw;
+		    	return readDepth(map,uv);
+			}
+			// Helper functions for reading normals and depth of neighboring pixels.
+			float getPixelDepth(int x, int y) {
+				// screenSize.zw is pixel size 
+				// vUv is current position
+				return readDepth(depthBuffer, vUv + screenSize.zw * vec2(x, y));
+			}
+			vec3 getPixelNormal(int x, int y) {
+				return texture2D(normalBuffer, vUv + screenSize.zw * vec2(x, y)).rgb;
+			}
+
+      float saturate(float num) {
+        return clamp(num, 0.0, 1.0);
+      }
+
+			void main() {
+				vec4 sceneColor = texture2D(sceneColorBuffer, vUv);
+				float depth = getPixelDepth(0, 0);
+				vec3 normal = getPixelNormal(0, 0);
+
+				// Get the difference between depth of neighboring pixels and current.
+				float depthDiff = 0.0;
+		  	depthDiff += abs(depth - getPixelDepth(1, 0));
+		  	depthDiff += abs(depth - getPixelDepth(-1, 0));
+		  	depthDiff += abs(depth - getPixelDepth(0, 1));
+		  	depthDiff += abs(depth - getPixelDepth(0, -1));
+
+		  	// Get the difference between normals of neighboring pixels and current
+		  	float normalDiff = 0.0;
+		  	normalDiff += distance(normal, getPixelNormal(1, 0));
+		  	normalDiff += distance(normal, getPixelNormal(0, 1));
+		  	normalDiff += distance(normal, getPixelNormal(0, 1));
+		  	normalDiff += distance(normal, getPixelNormal(0, -1));
+
+        normalDiff += distance(normal, getPixelNormal(1, 1));
+        normalDiff += distance(normal, getPixelNormal(1, -1));
+        normalDiff += distance(normal, getPixelNormal(-1, 1));
+        normalDiff += distance(normal, getPixelNormal(-1, -1));
+
+        // Apply multiplier & bias to each 
+        float depthBias = multiplierParameters.x;
+        float depthMultiplier = multiplierParameters.y;
+        float normalBias = multiplierParameters.z;
+        float normalMultiplier = multiplierParameters.w;
+
+        depthDiff = depthDiff * depthMultiplier;
+        depthDiff = saturate(depthDiff);
+        depthDiff = pow(depthDiff, depthBias);
+
+        normalDiff = normalDiff * normalMultiplier;
+        normalDiff = saturate(normalDiff);
+        normalDiff = pow(normalDiff, normalBias);
+
+
+		  	float outline = normalDiff + depthDiff;
+			
+		  	// Combine outline with scene color.
+		  	vec4 outlineColor = vec4(outlineColor, 1.0);
+		  	gl_FragColor = vec4(mix(sceneColor, outlineColor, outline));
+
+        // For debug visualization of the different inputs to this shader.
+        if (debugVisualize == 1) {
+          gl_FragColor = sceneColor;
+        }
+        if (debugVisualize == 2) {
+          gl_FragColor = vec4(vec3(depth), 1.0);
+        }
+        if (debugVisualize == 3) {
+          gl_FragColor = vec4(normal, 1.0);
+        }
+        if (debugVisualize == 4) {
+          gl_FragColor = vec4(vec3(outline * outlineColor), 1.0);
+        }
+			}
+			`;
+  }
+
+  createOutlinePostProcessMaterial() {
+    return new ShaderMaterial({
+      uniforms: {
+        debugVisualize: { value: 0 },
+        sceneColorBuffer: {},
+        depthBuffer: {},
+        normalBuffer: {},
+        outlineColor: { value: new Color(0xffffff) },
+        //4 scalar values packed in one uniform: depth multiplier, depth bias, and same for normals.
+        multiplierParameters: { value: new Vector4(1, 1, 1, 1) },
+        cameraNear: { value: this.renderCamera.near },
+        cameraFar: { value: this.renderCamera.far },
+        screenSize: {
+          value: new Vector4(
+            this.resolution.x,
+            this.resolution.y,
+            1 / this.resolution.x,
+            1 / this.resolution.y
+          )
+        }
+      },
+      vertexShader: this.vertexShader,
+      fragmentShader: this.fragmentShader
+    });
+  }
+}
+
+/**
+ * TODO
+ */
+
+const SAOShader = {
+	defines: {
+		'NUM_SAMPLES': 7,
+		'NUM_RINGS': 4,
+		'NORMAL_TEXTURE': 0,
+		'DIFFUSE_TEXTURE': 0,
+		'DEPTH_PACKING': 1,
+		'PERSPECTIVE_CAMERA': 1
+	},
+	uniforms: {
+
+		'tDepth': { value: null },
+		'tDiffuse': { value: null },
+		'tNormal': { value: null },
+		'size': { value: new Vector2( 512, 512 ) },
+
+		'cameraNear': { value: 1 },
+		'cameraFar': { value: 100 },
+		'cameraProjectionMatrix': { value: new Matrix4() },
+		'cameraInverseProjectionMatrix': { value: new Matrix4() },
+
+		'scale': { value: 1.0 },
+		'intensity': { value: 0.1 },
+		'bias': { value: 0.5 },
+
+		'minResolution': { value: 0.0 },
+		'kernelRadius': { value: 100.0 },
+		'randomSeed': { value: 0.0 }
+	},
+	vertexShader: /* glsl */`
+
+		varying vec2 vUv;
+
+		void main() {
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+		}`,
+
+	fragmentShader: /* glsl */`
+
+		#include <common>
+
+		varying vec2 vUv;
+
+		#if DIFFUSE_TEXTURE == 1
+		uniform sampler2D tDiffuse;
+		#endif
+
+		uniform sampler2D tDepth;
+
+		#if NORMAL_TEXTURE == 1
+		uniform sampler2D tNormal;
+		#endif
+
+		uniform float cameraNear;
+		uniform float cameraFar;
+		uniform mat4 cameraProjectionMatrix;
+		uniform mat4 cameraInverseProjectionMatrix;
+
+		uniform float scale;
+		uniform float intensity;
+		uniform float bias;
+		uniform float kernelRadius;
+		uniform float minResolution;
+		uniform vec2 size;
+		uniform float randomSeed;
+
+		// RGBA depth
+
+		#include <packing>
+
+		vec4 getDefaultColor( const in vec2 screenPosition ) {
+			#if DIFFUSE_TEXTURE == 1
+			return texture2D( tDiffuse, vUv );
+			#else
+			return vec4( 1.0 );
+			#endif
+		}
+
+		float getDepth( const in vec2 screenPosition ) {
+			#if DEPTH_PACKING == 1
+			return unpackRGBAToDepth( texture2D( tDepth, screenPosition ) );
+			#else
+			return texture2D( tDepth, screenPosition ).x;
+			#endif
+		}
+
+		float getViewZ( const in float depth ) {
+			#if PERSPECTIVE_CAMERA == 1
+			return perspectiveDepthToViewZ( depth, cameraNear, cameraFar );
+			#else
+			return orthographicDepthToViewZ( depth, cameraNear, cameraFar );
+			#endif
+		}
+
+		vec3 getViewPosition( const in vec2 screenPosition, const in float depth, const in float viewZ ) {
+			float clipW = cameraProjectionMatrix[2][3] * viewZ + cameraProjectionMatrix[3][3];
+			vec4 clipPosition = vec4( ( vec3( screenPosition, depth ) - 0.5 ) * 2.0, 1.0 );
+			clipPosition *= clipW; // unprojection.
+
+			return ( cameraInverseProjectionMatrix * clipPosition ).xyz;
+		}
+
+		vec3 getViewNormal( const in vec3 viewPosition, const in vec2 screenPosition ) {
+			#if NORMAL_TEXTURE == 1
+			return unpackRGBToNormal( texture2D( tNormal, screenPosition ).xyz );
+			#else
+			return normalize( cross( dFdx( viewPosition ), dFdy( viewPosition ) ) );
+			#endif
+		}
+
+		float scaleDividedByCameraFar;
+		float minResolutionMultipliedByCameraFar;
+
+		float getOcclusion( const in vec3 centerViewPosition, const in vec3 centerViewNormal, const in vec3 sampleViewPosition ) {
+			vec3 viewDelta = sampleViewPosition - centerViewPosition;
+			float viewDistance = length( viewDelta );
+			float scaledScreenDistance = scaleDividedByCameraFar * viewDistance;
+
+			return max(0.0, (dot(centerViewNormal, viewDelta) - minResolutionMultipliedByCameraFar) / scaledScreenDistance - bias) / (1.0 + pow2( scaledScreenDistance ) );
+		}
+
+		// moving costly divides into consts
+		const float ANGLE_STEP = PI2 * float( NUM_RINGS ) / float( NUM_SAMPLES );
+		const float INV_NUM_SAMPLES = 1.0 / float( NUM_SAMPLES );
+
+		float getAmbientOcclusion( const in vec3 centerViewPosition ) {
+			// precompute some variables require in getOcclusion.
+			scaleDividedByCameraFar = scale / cameraFar;
+			minResolutionMultipliedByCameraFar = minResolution * cameraFar;
+			vec3 centerViewNormal = getViewNormal( centerViewPosition, vUv );
+
+			// jsfiddle that shows sample pattern: https://jsfiddle.net/a16ff1p7/
+			float angle = rand( vUv + randomSeed ) * PI2;
+			vec2 radius = vec2( kernelRadius * INV_NUM_SAMPLES ) / size;
+			vec2 radiusStep = radius;
+
+			float occlusionSum = 0.0;
+			float weightSum = 0.0;
+
+			for( int i = 0; i < NUM_SAMPLES; i ++ ) {
+				vec2 sampleUv = vUv + vec2( cos( angle ), sin( angle ) ) * radius;
+				radius += radiusStep;
+				angle += ANGLE_STEP;
+
+				float sampleDepth = getDepth( sampleUv );
+				if( sampleDepth >= ( 1.0 - EPSILON ) ) {
+					continue;
+				}
+
+				float sampleViewZ = getViewZ( sampleDepth );
+				vec3 sampleViewPosition = getViewPosition( sampleUv, sampleDepth, sampleViewZ );
+				occlusionSum += getOcclusion( centerViewPosition, centerViewNormal, sampleViewPosition );
+				weightSum += 1.0;
+			}
+
+			if( weightSum == 0.0 ) discard;
+
+			return occlusionSum * ( intensity / weightSum );
+		}
+
+		void main() {
+			float centerDepth = getDepth( vUv );
+			if( centerDepth >= ( 1.0 - EPSILON ) ) {
+				discard;
+			}
+
+			float centerViewZ = getViewZ( centerDepth );
+			vec3 viewPosition = getViewPosition( vUv, centerDepth, centerViewZ );
+
+			float ambientOcclusion = getAmbientOcclusion( viewPosition );
+
+			gl_FragColor = getDefaultColor( vUv );
+			gl_FragColor.xyz *=  1.0 - ambientOcclusion;
+		}`
+
+};
+
+/**
+ * TODO
+ */
+
+const DepthLimitedBlurShader = {
+	defines: {
+		'KERNEL_RADIUS': 4,
+		'DEPTH_PACKING': 1,
+		'PERSPECTIVE_CAMERA': 1
+	},
+	uniforms: {
+		'tDiffuse': { value: null },
+		'size': { value: new Vector2( 512, 512 ) },
+		'sampleUvOffsets': { value: [ new Vector2( 0, 0 ) ] },
+		'sampleWeights': { value: [ 1.0 ] },
+		'tDepth': { value: null },
+		'cameraNear': { value: 10 },
+		'cameraFar': { value: 1000 },
+		'depthCutoff': { value: 10 },
+	},
+	vertexShader: /* glsl */`
+
+		#include <common>
+
+		uniform vec2 size;
+
+		varying vec2 vUv;
+		varying vec2 vInvSize;
+
+		void main() {
+			vUv = uv;
+			vInvSize = 1.0 / size;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+		}`,
+
+	fragmentShader: /* glsl */`
+
+		#include <common>
+		#include <packing>
+
+		uniform sampler2D tDiffuse;
+		uniform sampler2D tDepth;
+
+		uniform float cameraNear;
+		uniform float cameraFar;
+		uniform float depthCutoff;
+
+		uniform vec2 sampleUvOffsets[ KERNEL_RADIUS + 1 ];
+		uniform float sampleWeights[ KERNEL_RADIUS + 1 ];
+
+		varying vec2 vUv;
+		varying vec2 vInvSize;
+
+		float getDepth( const in vec2 screenPosition ) {
+			#if DEPTH_PACKING == 1
+			return unpackRGBAToDepth( texture2D( tDepth, screenPosition ) );
+			#else
+			return texture2D( tDepth, screenPosition ).x;
+			#endif
+		}
+
+		float getViewZ( const in float depth ) {
+			#if PERSPECTIVE_CAMERA == 1
+			return perspectiveDepthToViewZ( depth, cameraNear, cameraFar );
+			#else
+			return orthographicDepthToViewZ( depth, cameraNear, cameraFar );
+			#endif
+		}
+
+		void main() {
+			float depth = getDepth( vUv );
+			if( depth >= ( 1.0 - EPSILON ) ) {
+				discard;
+			}
+
+			float centerViewZ = -getViewZ( depth );
+			bool rBreak = false, lBreak = false;
+
+			float weightSum = sampleWeights[0];
+			vec4 diffuseSum = texture2D( tDiffuse, vUv ) * weightSum;
+
+			for( int i = 1; i <= KERNEL_RADIUS; i ++ ) {
+
+				float sampleWeight = sampleWeights[i];
+				vec2 sampleUvOffset = sampleUvOffsets[i] * vInvSize;
+
+				vec2 sampleUv = vUv + sampleUvOffset;
+				float viewZ = -getViewZ( getDepth( sampleUv ) );
+
+				if( abs( viewZ - centerViewZ ) > depthCutoff ) rBreak = true;
+
+				if( ! rBreak ) {
+					diffuseSum += texture2D( tDiffuse, sampleUv ) * sampleWeight;
+					weightSum += sampleWeight;
+				}
+
+				sampleUv = vUv - sampleUvOffset;
+				viewZ = -getViewZ( getDepth( sampleUv ) );
+
+				if( abs( viewZ - centerViewZ ) > depthCutoff ) lBreak = true;
+
+				if( ! lBreak ) {
+					diffuseSum += texture2D( tDiffuse, sampleUv ) * sampleWeight;
+					weightSum += sampleWeight;
+				}
+
+			}
+
+			gl_FragColor = diffuseSum / weightSum;
+		}`
+
+};
+
+const BlurShaderUtils = {
+
+	createSampleWeights: function ( kernelRadius, stdDev ) {
+
+		const weights = [];
+
+		for ( let i = 0; i <= kernelRadius; i ++ ) {
+
+			weights.push( gaussian( i, stdDev ) );
+
+		}
+
+		return weights;
+
+	},
+
+	createSampleOffsets: function ( kernelRadius, uvIncrement ) {
+
+		const offsets = [];
+
+		for ( let i = 0; i <= kernelRadius; i ++ ) {
+
+			offsets.push( uvIncrement.clone().multiplyScalar( i ) );
+
+		}
+
+		return offsets;
+
+	},
+
+	configure: function ( material, kernelRadius, stdDev, uvIncrement ) {
+
+		material.defines[ 'KERNEL_RADIUS' ] = kernelRadius;
+		material.uniforms[ 'sampleUvOffsets' ].value = BlurShaderUtils.createSampleOffsets( kernelRadius, uvIncrement );
+		material.uniforms[ 'sampleWeights' ].value = BlurShaderUtils.createSampleWeights( kernelRadius, stdDev );
+		material.needsUpdate = true;
+
+	}
+
+};
+
+function gaussian( x, stdDev ) {
+
+	return Math.exp( - ( x * x ) / ( 2.0 * ( stdDev * stdDev ) ) ) / ( Math.sqrt( 2.0 * Math.PI ) * stdDev );
+
+}
+
+/**
+ * Unpack RGBA depth shader
+ * - show RGBA encoded depth as monochrome color
+ */
+
+const UnpackDepthRGBAShader = {
+
+	uniforms: {
+
+		'tDiffuse': { value: null },
+		'opacity': { value: 1.0 }
+
+	},
+
+	vertexShader: /* glsl */`
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+
+	fragmentShader: /* glsl */`
+
+		uniform float opacity;
+
+		uniform sampler2D tDiffuse;
+
+		varying vec2 vUv;
+
+		#include <packing>
+
+		void main() {
+
+			float depth = 1.0 - unpackRGBAToDepth( texture2D( tDiffuse, vUv ) );
+			gl_FragColor = vec4( vec3( depth ), opacity );
+
+		}`
+
+};
+
+/**
+ * SAO implementation inspired from bhouston previous SAO work
+ */
+
+class SAOPass extends Pass {
+
+	constructor( scene, camera, useDepthTexture = false, useNormals = false, resolution = new Vector2( 256, 256 ) ) {
+
+		super();
+
+		this.scene = scene;
+		this.camera = camera;
+
+		this.clear = true;
+		this.needsSwap = false;
+
+		this.supportsDepthTextureExtension = useDepthTexture;
+		this.supportsNormalTexture = useNormals;
+
+		this.originalClearColor = new Color();
+		this._oldClearColor = new Color();
+		this.oldClearAlpha = 1;
+
+		this.params = {
+			output: 0,
+			saoBias: 0.5,
+			saoIntensity: 0.18,
+			saoScale: 1,
+			saoKernelRadius: 100,
+			saoMinResolution: 0,
+			saoBlur: true,
+			saoBlurRadius: 8,
+			saoBlurStdDev: 4,
+			saoBlurDepthCutoff: 0.01
+		};
+
+		this.resolution = new Vector2( resolution.x, resolution.y );
+
+		this.saoRenderTarget = new WebGLRenderTarget( this.resolution.x, this.resolution.y, {
+			minFilter: LinearFilter,
+			magFilter: LinearFilter,
+			format: RGBAFormat
+		} );
+		this.blurIntermediateRenderTarget = this.saoRenderTarget.clone();
+		this.beautyRenderTarget = this.saoRenderTarget.clone();
+
+		this.normalRenderTarget = new WebGLRenderTarget( this.resolution.x, this.resolution.y, {
+			minFilter: NearestFilter,
+			magFilter: NearestFilter,
+			format: RGBAFormat
+		} );
+		this.depthRenderTarget = this.normalRenderTarget.clone();
+		
+		let depthTexture;
+
+		if ( this.supportsDepthTextureExtension ) {
+
+			depthTexture = new DepthTexture();
+			depthTexture.type = UnsignedShortType;
+
+			this.beautyRenderTarget.depthTexture = depthTexture;
+			this.beautyRenderTarget.depthBuffer = true;
+
+		}
+
+		this.depthMaterial = new MeshDepthMaterial();
+		this.depthMaterial.depthPacking = RGBADepthPacking;
+		this.depthMaterial.blending = NoBlending;
+
+		this.normalMaterial = new MeshNormalMaterial();
+		this.normalMaterial.blending = NoBlending;
+
+		if ( SAOShader === undefined ) {
+
+			console.error( 'THREE.SAOPass relies on SAOShader' );
+
+		}
+
+		this.saoMaterial = new ShaderMaterial( {
+			defines: Object.assign( {}, SAOShader.defines ),
+			fragmentShader: SAOShader.fragmentShader,
+			vertexShader: SAOShader.vertexShader,
+			uniforms: UniformsUtils.clone( SAOShader.uniforms )
+		} );
+		this.saoMaterial.extensions.derivatives = true;
+		this.saoMaterial.defines[ 'DEPTH_PACKING' ] = this.supportsDepthTextureExtension ? 0 : 1;
+		this.saoMaterial.defines[ 'NORMAL_TEXTURE' ] = this.supportsNormalTexture ? 1 : 0;
+		this.saoMaterial.defines[ 'PERSPECTIVE_CAMERA' ] = this.camera.isPerspectiveCamera ? 1 : 0;
+		this.saoMaterial.uniforms[ 'tDepth' ].value = ( this.supportsDepthTextureExtension ) ? depthTexture : this.depthRenderTarget.texture;
+		this.saoMaterial.uniforms[ 'tNormal' ].value = this.normalRenderTarget.texture;
+		this.saoMaterial.uniforms[ 'size' ].value.set( this.resolution.x, this.resolution.y );
+		this.saoMaterial.uniforms[ 'cameraInverseProjectionMatrix' ].value.copy( this.camera.projectionMatrixInverse );
+		this.saoMaterial.uniforms[ 'cameraProjectionMatrix' ].value = this.camera.projectionMatrix;
+		this.saoMaterial.blending = NoBlending;
+
+		if ( DepthLimitedBlurShader === undefined ) {
+
+			console.error( 'THREE.SAOPass relies on DepthLimitedBlurShader' );
+
+		}
+
+		this.vBlurMaterial = new ShaderMaterial( {
+			uniforms: UniformsUtils.clone( DepthLimitedBlurShader.uniforms ),
+			defines: Object.assign( {}, DepthLimitedBlurShader.defines ),
+			vertexShader: DepthLimitedBlurShader.vertexShader,
+			fragmentShader: DepthLimitedBlurShader.fragmentShader
+		} );
+		this.vBlurMaterial.defines[ 'DEPTH_PACKING' ] = this.supportsDepthTextureExtension ? 0 : 1;
+		this.vBlurMaterial.defines[ 'PERSPECTIVE_CAMERA' ] = this.camera.isPerspectiveCamera ? 1 : 0;
+		this.vBlurMaterial.uniforms[ 'tDiffuse' ].value = this.saoRenderTarget.texture;
+		this.vBlurMaterial.uniforms[ 'tDepth' ].value = ( this.supportsDepthTextureExtension ) ? depthTexture : this.depthRenderTarget.texture;
+		this.vBlurMaterial.uniforms[ 'size' ].value.set( this.resolution.x, this.resolution.y );
+		this.vBlurMaterial.blending = NoBlending;
+
+		this.hBlurMaterial = new ShaderMaterial( {
+			uniforms: UniformsUtils.clone( DepthLimitedBlurShader.uniforms ),
+			defines: Object.assign( {}, DepthLimitedBlurShader.defines ),
+			vertexShader: DepthLimitedBlurShader.vertexShader,
+			fragmentShader: DepthLimitedBlurShader.fragmentShader
+		} );
+		this.hBlurMaterial.defines[ 'DEPTH_PACKING' ] = this.supportsDepthTextureExtension ? 0 : 1;
+		this.hBlurMaterial.defines[ 'PERSPECTIVE_CAMERA' ] = this.camera.isPerspectiveCamera ? 1 : 0;
+		this.hBlurMaterial.uniforms[ 'tDiffuse' ].value = this.blurIntermediateRenderTarget.texture;
+		this.hBlurMaterial.uniforms[ 'tDepth' ].value = ( this.supportsDepthTextureExtension ) ? depthTexture : this.depthRenderTarget.texture;
+		this.hBlurMaterial.uniforms[ 'size' ].value.set( this.resolution.x, this.resolution.y );
+		this.hBlurMaterial.blending = NoBlending;
+
+		if ( CopyShader === undefined ) {
+
+			console.error( 'THREE.SAOPass relies on CopyShader' );
+
+		}
+
+		this.materialCopy = new ShaderMaterial( {
+			uniforms: UniformsUtils.clone( CopyShader.uniforms ),
+			vertexShader: CopyShader.vertexShader,
+			fragmentShader: CopyShader.fragmentShader,
+			blending: NoBlending
+		} );
+		this.materialCopy.transparent = true;
+		this.materialCopy.depthTest = false;
+		this.materialCopy.depthWrite = false;
+		this.materialCopy.blending = CustomBlending;
+		this.materialCopy.blendSrc = DstColorFactor;
+		this.materialCopy.blendDst = ZeroFactor;
+		this.materialCopy.blendEquation = AddEquation;
+		this.materialCopy.blendSrcAlpha = DstAlphaFactor;
+		this.materialCopy.blendDstAlpha = ZeroFactor;
+		this.materialCopy.blendEquationAlpha = AddEquation;
+
+		if ( UnpackDepthRGBAShader === undefined ) {
+
+			console.error( 'THREE.SAOPass relies on UnpackDepthRGBAShader' );
+
+		}
+
+		this.depthCopy = new ShaderMaterial( {
+			uniforms: UniformsUtils.clone( UnpackDepthRGBAShader.uniforms ),
+			vertexShader: UnpackDepthRGBAShader.vertexShader,
+			fragmentShader: UnpackDepthRGBAShader.fragmentShader,
+			blending: NoBlending
+		} );
+
+		this.fsQuad = new FullScreenQuad( null );
+
+	}
+
+	render( renderer, writeBuffer, readBuffer/*, deltaTime, maskActive*/ ) {
+
+		// Rendering readBuffer first when rendering to screen
+		if ( this.renderToScreen ) {
+
+			this.materialCopy.blending = NoBlending;
+			this.materialCopy.uniforms[ 'tDiffuse' ].value = readBuffer.texture;
+			this.materialCopy.needsUpdate = true;
+			this.renderPass( renderer, this.materialCopy, null );
+
+		}
+
+		if ( this.params.output === 1 ) {
+
+			return;
+
+		}
+
+		renderer.getClearColor( this._oldClearColor );
+		this.oldClearAlpha = renderer.getClearAlpha();
+		const oldAutoClear = renderer.autoClear;
+		renderer.autoClear = false;
+
+		renderer.setRenderTarget( this.depthRenderTarget );
+		renderer.clear();
+
+		this.saoMaterial.uniforms[ 'bias' ].value = this.params.saoBias;
+		this.saoMaterial.uniforms[ 'intensity' ].value = this.params.saoIntensity;
+		this.saoMaterial.uniforms[ 'scale' ].value = this.params.saoScale;
+		this.saoMaterial.uniforms[ 'kernelRadius' ].value = this.params.saoKernelRadius;
+		this.saoMaterial.uniforms[ 'minResolution' ].value = this.params.saoMinResolution;
+		this.saoMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
+		this.saoMaterial.uniforms[ 'cameraFar' ].value = this.camera.far;
+		// this.saoMaterial.uniforms['randomSeed'].value = Math.random();
+
+		const depthCutoff = this.params.saoBlurDepthCutoff * ( this.camera.far - this.camera.near );
+		this.vBlurMaterial.uniforms[ 'depthCutoff' ].value = depthCutoff;
+		this.hBlurMaterial.uniforms[ 'depthCutoff' ].value = depthCutoff;
+
+		this.vBlurMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
+		this.vBlurMaterial.uniforms[ 'cameraFar' ].value = this.camera.far;
+		this.hBlurMaterial.uniforms[ 'cameraNear' ].value = this.camera.near;
+		this.hBlurMaterial.uniforms[ 'cameraFar' ].value = this.camera.far;
+
+		this.params.saoBlurRadius = Math.floor( this.params.saoBlurRadius );
+		if ( ( this.prevStdDev !== this.params.saoBlurStdDev ) || ( this.prevNumSamples !== this.params.saoBlurRadius ) ) {
+
+			BlurShaderUtils.configure( this.vBlurMaterial, this.params.saoBlurRadius, this.params.saoBlurStdDev, new Vector2( 0, 1 ) );
+			BlurShaderUtils.configure( this.hBlurMaterial, this.params.saoBlurRadius, this.params.saoBlurStdDev, new Vector2( 1, 0 ) );
+			this.prevStdDev = this.params.saoBlurStdDev;
+			this.prevNumSamples = this.params.saoBlurRadius;
+
+		}
+
+		// Rendering scene to depth texture
+		renderer.setClearColor( 0x000000 );
+		renderer.setRenderTarget( this.beautyRenderTarget );
+		renderer.clear();
+		renderer.render( this.scene, this.camera );
+
+		// Re-render scene if depth texture extension is not supported
+		if ( ! this.supportsDepthTextureExtension ) {
+
+			// Clear rule : far clipping plane in both RGBA and Basic encoding
+			this.renderOverride( renderer, this.depthMaterial, this.depthRenderTarget, 0x000000, 1.0 );
+
+		}
+
+		if ( this.supportsNormalTexture ) {
+
+			// Clear rule : default normal is facing the camera
+			this.renderOverride( renderer, this.normalMaterial, this.normalRenderTarget, 0x7777ff, 1.0 );
+
+		}
+
+		// Rendering SAO texture
+		this.renderPass( renderer, this.saoMaterial, this.saoRenderTarget, 0xffffff, 1.0 );
+
+		// Blurring SAO texture
+		if ( this.params.saoBlur ) {
+
+			this.renderPass( renderer, this.vBlurMaterial, this.blurIntermediateRenderTarget, 0xffffff, 1.0 );
+			this.renderPass( renderer, this.hBlurMaterial, this.saoRenderTarget, 0xffffff, 1.0 );
+
+		}
+
+		let outputMaterial = this.materialCopy;
+		// Setting up SAO rendering
+		if ( this.params.output === 3 ) {
+
+			if ( this.supportsDepthTextureExtension ) {
+
+				this.materialCopy.uniforms[ 'tDiffuse' ].value = this.beautyRenderTarget.depthTexture;
+				this.materialCopy.needsUpdate = true;
+
+			} else {
+
+				this.depthCopy.uniforms[ 'tDiffuse' ].value = this.depthRenderTarget.texture;
+				this.depthCopy.needsUpdate = true;
+				outputMaterial = this.depthCopy;
+
+			}
+
+		} else if ( this.params.output === 4 ) {
+
+			this.materialCopy.uniforms[ 'tDiffuse' ].value = this.normalRenderTarget.texture;
+			this.materialCopy.needsUpdate = true;
+
+		} else {
+
+			this.materialCopy.uniforms[ 'tDiffuse' ].value = this.saoRenderTarget.texture;
+			this.materialCopy.needsUpdate = true;
+
+		}
+
+		// Blending depends on output, only want a CustomBlending when showing SAO
+		if ( this.params.output === 0 ) {
+
+			outputMaterial.blending = CustomBlending;
+
+		} else {
+
+			outputMaterial.blending = NoBlending;
+
+		}
+
+		// Rendering SAOPass result on top of previous pass
+		this.renderPass( renderer, outputMaterial, this.renderToScreen ? null : readBuffer );
+
+		renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
+		renderer.autoClear = oldAutoClear;
+
+	}
+
+	renderPass( renderer, passMaterial, renderTarget, clearColor, clearAlpha ) {
+
+		// save original state
+		renderer.getClearColor( this.originalClearColor );
+		const originalClearAlpha = renderer.getClearAlpha();
+		const originalAutoClear = renderer.autoClear;
+
+		renderer.setRenderTarget( renderTarget );
+
+		// setup pass state
+		renderer.autoClear = false;
+		if ( ( clearColor !== undefined ) && ( clearColor !== null ) ) {
+
+			renderer.setClearColor( clearColor );
+			renderer.setClearAlpha( clearAlpha || 0.0 );
+			renderer.clear();
+
+		}
+
+		this.fsQuad.material = passMaterial;
+		this.fsQuad.render( renderer );
+
+		// restore original state
+		renderer.autoClear = originalAutoClear;
+		renderer.setClearColor( this.originalClearColor );
+		renderer.setClearAlpha( originalClearAlpha );
+
+	}
+
+	renderOverride( renderer, overrideMaterial, renderTarget, clearColor, clearAlpha ) {
+
+		renderer.getClearColor( this.originalClearColor );
+		const originalClearAlpha = renderer.getClearAlpha();
+		const originalAutoClear = renderer.autoClear;
+
+		renderer.setRenderTarget( renderTarget );
+		renderer.autoClear = false;
+
+		clearColor = overrideMaterial.clearColor || clearColor;
+		clearAlpha = overrideMaterial.clearAlpha || clearAlpha;
+		if ( ( clearColor !== undefined ) && ( clearColor !== null ) ) {
+
+			renderer.setClearColor( clearColor );
+			renderer.setClearAlpha( clearAlpha || 0.0 );
+			renderer.clear();
+
+		}
+
+		this.scene.overrideMaterial = overrideMaterial;
+		renderer.render( this.scene, this.camera );
+		this.scene.overrideMaterial = null;
+
+		// restore original state
+		renderer.autoClear = originalAutoClear;
+		renderer.setClearColor( this.originalClearColor );
+		renderer.setClearAlpha( originalClearAlpha );
+
+	}
+
+	setSize( width, height ) {
+
+		this.beautyRenderTarget.setSize( width, height );
+		this.saoRenderTarget.setSize( width, height );
+		this.blurIntermediateRenderTarget.setSize( width, height );
+		this.normalRenderTarget.setSize( width, height );
+		this.depthRenderTarget.setSize( width, height );
+
+		this.saoMaterial.uniforms[ 'size' ].value.set( width, height );
+		this.saoMaterial.uniforms[ 'cameraInverseProjectionMatrix' ].value.copy( this.camera.projectionMatrixInverse );
+		this.saoMaterial.uniforms[ 'cameraProjectionMatrix' ].value = this.camera.projectionMatrix;
+		this.saoMaterial.needsUpdate = true;
+
+		this.vBlurMaterial.uniforms[ 'size' ].value.set( width, height );
+		this.vBlurMaterial.needsUpdate = true;
+
+		this.hBlurMaterial.uniforms[ 'size' ].value.set( width, height );
+		this.hBlurMaterial.needsUpdate = true;
+
+	}
+
+}
+
+SAOPass.OUTPUT = {
+	'Beauty': 1,
+	'Default': 0,
+	'SAO': 2,
+	'Depth': 3,
+	'Normal': 4
+};
+
 //Creates the Three.js scene
 const scene = new Scene();
 
@@ -81824,10 +82053,25 @@ const controls = new OrbitControls(camera, threeCanvas);
 // controls.enableDamping = true;
 controls.target.set(-2, 0, 0);
 
-//Postprocessing
-const composer = new EffectComposer(renderer);
-const renderPass = new RenderPass(scene, camera);
-const fxaaPass = new ShaderPass(FXAAShader);
+// Set up post processing
+// Create a render target that holds a depthTexture so we can use it in the postproduction pass
+// See: https://threejs.org/docs/index.html#api/en/renderers/WebGLRenderTarget.depthBuffer
+const depthTexture = new DepthTexture();
+const renderTarget = new WebGLRenderTarget(
+    window.innerWidth,
+    window.innerHeight,
+    {
+      depthTexture: depthTexture,
+      depthBuffer: true
+    }
+);
+
+// Initial render pass.
+const composer = new EffectComposer(renderer, renderTarget);
+const pass = new RenderPass(scene, camera);
+composer.addPass(pass);
+
+// const fxaaPass = new ShaderPass(FXAAShader);
 const saoPass = new SAOPass(scene, camera, false, true);
 
 saoPass.enabled = true;
@@ -81835,51 +82079,84 @@ saoPass.params.saoIntensity = 0.02;
 saoPass.params.saoBias = 0.5;
 saoPass.params.saoBlurRadius = 8;
 saoPass.params.saoBlurDepthCutoff = 0.0015;
-saoPass.params.saoScale = 50;
-saoPass.params.kernelRadius = 50;
+saoPass.params.saoScale = 30;
+saoPass.params.saoKernelRadius = 30;
 
-composer.addPass(renderPass);
-composer.addPass(fxaaPass);
+// composer.addPass(fxaaPass);
 composer.addPass(saoPass);
 
-// Show AO only when the user is not moving the camera
-let activateAO = true;
-let pointerDown = false;
-window.onmousedown = () => {
-  activateAO = false;
-  pointerDown = true;
-};
-window.onmouseup = () => {
-  activateAO = true;
-  pointerDown = false;
-};
+// Outline pass.
+const customOutline = new CustomOutlinePass(
+    new Vector2(window.innerWidth, window.innerHeight),
+    scene,
+    camera
+);
+composer.addPass(customOutline);
 
-let lastWheeled = 0;
-let wheelDelayAO = 500; // milliseconds
-window.onwheel = () => {
-  activateAO = false;
-  lastWheeled = performance.now();
-};
+// Antialias pass.
+const effectFXAA = new ShaderPass(FXAAShader);
+effectFXAA.uniforms["resolution"].value.set(
+    1 / window.innerWidth,
+    1 / window.innerHeight
+);
+composer.addPass(effectFXAA);
 
-// //Animation loop
+
+// Animation loop
 const animate = () => {
   controls.update();
   renderer.render(scene, camera);
-
-  if(activateAO) {
-    composer.render();
-  } else if (!pointerDown) {
-    const now = performance.now();
-    if(now - lastWheeled > wheelDelayAO) {
-      activateAO = true;
-    }
-  }
+  // composer.render();
 
   stats.update();
   requestAnimationFrame(animate);
 };
 
 animate();
+
+const img = document.getElementById('overlay');
+
+let isMouseDown = false;
+onmousedown = () => {
+  isMouseDown = true;
+  hideSaoPass();
+};
+
+onmouseup = () => {
+  isMouseDown = false;
+  updateSaoPass();
+};
+
+let lastWheeled = 0;
+let waitingTime = 500;
+onwheel = () => {
+  hideSaoPass();
+  lastWheeled = performance.now();
+  setTimeout(() => {
+    const userStoppedWheeling = performance.now() - lastWheeled >= waitingTime;
+    if(userStoppedWheeling && !isMouseDown) {
+      updateSaoPass();
+    }
+  }, waitingTime);
+};
+
+function hideSaoPass() {
+  img.classList.add('collapsed');
+}
+
+function updateSaoPass() {
+  grid.visible = false;
+  composer.render();
+  img.src = renderer.domElement.toDataURL();
+  grid.visible = true;
+  img.classList.remove('collapsed');
+}
+
+setTimeout(() => updateSaoPass(), 300);
+
+
+// const plane = new Plane(new Vector3(0, -2, 0), 1.5);
+// renderer.clippingPlanes = [plane];
 
 //Adjust the viewport to the size of the browser
 window.addEventListener("resize", () => {
@@ -81914,35 +82191,51 @@ async function loadIfc() {
 loadIfc();
 
 
-
 //GUI
 const gui = new g();
 
-const saoFolder = gui.addFolder("SAO");
-saoFolder
-  .add(saoPass.params, "output", {
-    Beauty: SAOPass.OUTPUT.Beauty,
-    "Beauty+SAO": SAOPass.OUTPUT.Default,
-    SAO: SAOPass.OUTPUT.SAO,
-    Normal: SAOPass.OUTPUT.Normal,
-  })
-  .onChange(function (value) {
-    saoPass.params.output = parseInt(value);
-  });
+const params = {
+  mode: { Mode: 0 },
+  FXAA: true,
+  outlineColor: 0xffffff,
+  depthBias: 16,
+  depthMult: 83,
+  normalBias: 5,
+  normalMult: 1.0
+};
+const uniforms = customOutline.fsQuad.material.uniforms;
+gui
+    .add(params.mode, "Mode", {
+      Outlines: 0,
+      "Original scene": 1,
+      "Depth buffer": 2,
+      "Normal buffer": 3,
+      "Outlines only": 4
+    })
+    .onChange(function (value) {
+      uniforms.debugVisualize.value = value;
+    });
 
-const fxaaFolder = gui.addFolder("FXAA");
-fxaaFolder.add(fxaaPass, "enabled");
+// Initial values
+uniforms.outlineColor.value.set(0x6b6b6b);
+uniforms.multiplierParameters.value.x = params.depthBias;
+uniforms.multiplierParameters.value.y = params.depthMult;
+uniforms.multiplierParameters.value.z = params.normalBias;
+uniforms.multiplierParameters.value.w = params.normalMult;
 
-const plane = new Plane(new Vector3(0, -1, 0), 1.5);
-let clippingPlaneControls = {enabled: false};
+gui.addColor(params, "outlineColor").onChange(function (value) {
+  uniforms.outlineColor.value.set(value);
+});
 
-const clippingPlaneFolder = gui.addFolder("Clipping planes");
-clippingPlaneFolder.add(clippingPlaneControls, "enabled").listen().onChange(
-    () => {
-      if(clippingPlaneControls.enabled) {
-        renderer.clippingPlanes = [plane];
-      } else {
-        renderer.clippingPlanes = [];
-      }
-    }
-);
+gui.add(params, "depthBias", 0.0, 500).onChange(function (value) {
+  uniforms.multiplierParameters.value.x = value;
+});
+gui.add(params, "depthMult", 0.0, 500).onChange(function (value) {
+  uniforms.multiplierParameters.value.y = value;
+});
+gui.add(params, "normalBias", 0.0, 500).onChange(function (value) {
+  uniforms.multiplierParameters.value.z = value;
+});
+gui.add(params, "normalMult", 0.0, 500).onChange(function (value) {
+  uniforms.multiplierParameters.value.w = value;
+});
