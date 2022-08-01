@@ -6,8 +6,12 @@ let viewer = new IfcViewerAPI({ container });
 
 //memory visualization
 const stats = new Stats();
-stats.showPanel(2);
-document.body.append(stats.dom);
+addStats();
+function addStats() {
+    stats.showPanel(2);
+    document.body.append(stats.dom);
+    viewer.context.stats = stats;
+};
 
 //release function
 function releaseMemory() {
@@ -15,7 +19,7 @@ function releaseMemory() {
     viewer = null;
     viewer = new IfcViewerAPI({ container });
     viewer.IFC.setWasmPath('../../../');
-    
+    addStats();
     // if multiple models are stored in an array, reset.
     // models.length = 0;
 }
@@ -36,14 +40,6 @@ input_button.addEventListener('input',
     (input) => { loadIfcFromFile(input.target.files[0]) },
     false
 );
-
-//hook stats into render loop
-function animate() {
-    stats.begin();
-    stats.end();
-    requestAnimationFrame(animate);
-};
-animate();
 
 //inital model load from url
 async function loadIfcUrl(url) {
