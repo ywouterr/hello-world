@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" href="../../../favicon.ico">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="static/style.css">
+    <title>IFC.js Socket.io</title>
+</head>
+<body>
+    <div id="viewer-container"></div>
+
+
+    <div id="socket-connection-form">
+        <label for="initials-name">Enter Your Initials</label><br>
+        <input maxlength="2" type="text" id="initials-name" name="initials-name"><br>
+        <button id="socket-Connect-Button" onclick="connectToSocket()">Connect</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <script src="static/bundle.js"></script>
+</body>
+</html>
