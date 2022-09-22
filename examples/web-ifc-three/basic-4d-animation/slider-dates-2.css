@@ -1,0 +1,83 @@
+  :root {
+    --sliderControl: #2f55ff;
+    --secondaryColor: #ffc250;
+    --thirdColor: #3f8311;
+    --fourthColor: #251c1c;
+    --sliderBackground: #ffc25056;
+    --heightSlider: 30px;
+    --rulerNumbersColor: #4d422e;
+    --rulerFontSize: 0.9rem;
+  }
+
+  .slidercontainer {
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Ruler Numbers Style */
+  .ruler-x{
+    overflow: hidden;
+    display: flex;
+    height: var(--heightSlider);
+    position: absolute;
+    color: var(--rulerNumbersColor);
+    font-size: var(--rulerFontSize);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+  }
+
+   /* Ruler Options */
+  .ruler-x {
+    height: var(--heightSlider);
+    
+  }
+  
+  .ruler-x li {
+    align-self: flex-end;
+    border-right: #221a1a solid 0.1rem;
+    text-align: right;
+    /* height: var(--heightSlider); */
+    position: relative;
+
+  }
+  .ruler-x li{
+    flex: 0 0 calc(var(--rulerUnit) * var(--rulerSpacing));
+  }
+
+  /* Slider BackGround */
+  .slider {
+    -webkit-appearance: none;
+    width: 100%;
+    height:  var(--heightSlider);
+    background: var(--sliderBackground);
+    z-index: 2;
+  }
+
+  .ruler-x ul {
+    margin-block-end: 0px;
+    margin-block-start: 0px;
+    padding-inline-start: 0px;
+    width: 100%;
+  }
+  
+  /* Slider Control Input */
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    position: relative;
+    height: var(--heightSlider);
+    width: calc(var(--heightSlider)/4);
+    border-radius: 10%;
+    background: var(--sliderControl);
+    z-index: 3;
+    cursor: grab;
+    text-indent: 20px;
+  }
+  
+  input[type="range"]::-ms-fill-lower {
+    background: blue;
+  }
+  input[type="range"]::-ms-fill-upper {
+    background: red;
+  }

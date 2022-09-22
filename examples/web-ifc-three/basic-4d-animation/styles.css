@@ -1,0 +1,151 @@
+@import "slider-dates-2.css";
+
+:root {
+--side-offset: 5vw;
+--border-radius: 0.5vw;
+}
+
+*{
+    margin: 0;
+    padding: 0;
+    font-family: system-ui,-apple-system,system-ui,"Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size: 1rem;
+    font-weight: 300;
+}
+
+html, body {
+    overflow: hidden;
+}
+#three-canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    outline: none;
+}
+
+#file-input {
+    z-index: 1;
+    position: absolute;
+}
+
+#rowSchedules {
+    top: 50%;
+    bottom: 50%;
+    left: 50%;
+    right: 50%;
+    z-index: 5;
+}
+
+.animationOptions {
+    position: fixed;
+    width: 50vh;
+    top: var(--side-offset);
+    right:var(--side-offset);
+}
+
+.animationOptions {
+    padding: 0.25rem;
+    border-radius: var(--border-radius);   
+    background: var(--sliderBackground);
+}
+
+.row {
+    margin: 0;
+    display: inline-flex;
+    text-align: center;
+    align-items: center;
+    width: 100%;
+    height: fit-content;
+    padding: 0;
+}
+
+.row label {
+    padding: 0.5vw;
+}
+
+#animationType {
+    border: 1px solid;
+    border-radius: var(--border-radius);
+    padding: 0.5rem;
+    margin: 0.5rem;
+    z-index: 2;
+    width: 20vh;
+    text-align: center;
+}
+
+input[type="date"], input[type="select"],input[type="number"],input[type="file"] {
+    border: 1px solid;
+    border-radius: var(--border-radius);
+    padding: 0.5rem;
+    margin: 0.5rem;
+    z-index: 2;
+    width: 20vh;
+    text-align: center;
+}
+
+input[type="date"] {
+    border: 1px solid;
+    border-radius: var(--border-radius);
+    padding: 0.5rem;
+    margin: 0.5rem;
+    z-index: 2;
+    width: fit-content;
+}
+
+
+.displayResults {
+    display: none;
+    position: absolute;
+    top: var(--side-offset);
+    left:var(--side-offset);
+    border-radius: var(--border-radius);
+    padding: 0.5rem;
+    background: var(--sliderBackground);
+}
+
+
+/* CSS */
+.button-6 {
+  align-items: center;
+  background-color: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: var(--border-radius);
+  box-shadow: rgba(0, 0, 0, 0.02) 0 1px 3px 0;
+  box-sizing: border-box;
+  color: rgba(0, 0, 0, 0.85);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: system-ui,-apple-system,system-ui,"Helvetica Neue",Helvetica,Arial,sans-serif;
+  justify-content: center;
+  line-height: 1.25;
+  margin: 0.7rem;
+  padding: 0.25rem;
+  position: relative;
+  transition: all 250ms;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  vertical-align: baseline;
+  min-width: 7rem;
+  max-width: 7rem;
+  height: 2.5rem;
+}
+
+.button-6:hover,
+.button-6:focus {
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: rgba(0, 0, 0, 0.1) 0 4px 12px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.button-6:hover {
+  transform: translateY(-1px);
+}
+
+.button-6:active {
+  background-color: var(--sliderBackground);
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: rgba(0, 0, 0, 0.06) 0 2px 4px;
+  color: rgba(0, 0, 0, 0.65);
+  transform: translateY(0);
+}
