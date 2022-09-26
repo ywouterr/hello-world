@@ -213,6 +213,9 @@ function startAnimation(tasks, settings, model){
 	gui.setupKeyFrameTimeline(settings, taskProcessor.getTotalFrames()); 
 	let timeLineData = taskProcessor.getKeyFramesTimeLine()
 
+	// Allow for slider/GUI space
+	threeCanvas.style.top = "30px";
+
 	//Give The Slider the power to Toggle Product Visibility
 	setSliderControls(gui.slider, settings.animationType, timeLineData, productVisibility)
 
