@@ -4,12 +4,15 @@ const fs = require("fs");
 
 const ifcapi = new WebIFC.IfcAPI();
 
+/* update IFC File path here; there are a few samples at ../../../../IFC */
 LoadFile("../../../../IFC/7/Tungasletta10_R01.ifc");
 
 async function LoadFile(filename)
 {
     const modelID = await OpenIfc(filename);
     const allItems = GetAllItems(modelID);
+
+    /* Update destination filename here */
     fs.writeFileSync('../../../../IFC/7/Tungasletta10_R01.json', JSON.stringify(allItems));
     ifcapi.CloseModel(modelID);
 }
@@ -28,7 +31,7 @@ function GetAllItems(modelID, excludeGeometry = true) {
 }
 
 function getAllItemsFromLines(modelID, lines, allItems, excludeGeometry) {
-    for(let i = 1; i <= lines.size(); i++) {
+    for(let i = 0; i < lines.size(); i++) {
         try {
             saveProperties(modelID, lines, allItems, excludeGeometry, i);
         } catch (e) {
