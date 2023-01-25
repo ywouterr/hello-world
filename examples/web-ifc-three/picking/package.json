@@ -1,6 +1,7 @@
 {
-  "name": "webifc_hello",
+  "name": "picking",
   "version": "1.0.0",
+  "description": "",
   "main": "app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -9,13 +10,13 @@
   },
   "author": "",
   "license": "ISC",
+  "dependencies": {
+    "web-ifc": "^0.0.36",
+    "web-ifc-three": "^0.0.121"
+  },
   "devDependencies": {
     "@open-wc/building-rollup": "^2.2.1",
-    "@rollup/plugin-node-resolve": "^13.3.0",
+    "@rollup/plugin-node-resolve": "^15.0.1",
     "rollup": "^2.79.1"
-  },
-  "dependencies": {
-    "web-ifc": "^0.0.35"
-  },
-  "description": ""
+  }
 }

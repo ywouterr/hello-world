@@ -2,7 +2,7 @@ import {IfcAPI,IFCSPACE} from "web-ifc/web-ifc-api";
 const ifcFileLocation = "sample.ifc"; // dont forget to modify for your ifc filename
 let modelID = 0;
 const ifcapi = new IfcAPI();
-//ifcapi.SetWasmPath("./wasm/"); only if the wasm file are note at the same level as app.js
+ifcapi.SetWasmPath("../../../"); //only if the wasm file are note at the same level as app.js
 
 /**
  * resolve a Uint8Array().

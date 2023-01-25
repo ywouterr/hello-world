@@ -1,11 +1,11 @@
 import resolve from '@rollup/plugin-node-resolve';
 
 export default {
-	input: 'examples/web-ifc-viewer/spatial-tree/app.js',
+	input: 'app.js',
 	output: [
 		{
 			format: 'esm',
-			file: 'examples/web-ifc-viewer/spatial-tree/bundle.js'
+			file: 'bundle.js'
 		},
 	],
 	plugins: [

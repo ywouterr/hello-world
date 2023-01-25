@@ -81,14 +81,41 @@ window.addEventListener("resize", () => {
     renderer.setSize(size.width, size.height);
 });
 
+
+
 //Sets up the IFC loading
 const ifcModels = [];
 const ifcLoader = new IFCLoader();
+
+//Sets up the IFC loading
+
+
 ifcLoader.ifcManager.setWasmPath("../../../");
-ifcLoader.load("../../../IFC/01.ifc", (ifcModel) => {
-    ifcModels.push(ifcModel);
-    scene.add(ifcModel)
-});
+
+function loadIFC() {
+  const input = document.getElementById("file-input");
+  input.addEventListener(
+    "change",
+    (changed) => {
+      const ifcURL = URL.createObjectURL(changed.target.files[0]);
+      ifcLoader.load(ifcURL, async (ifcModel) => {
+        ifcModels.push(ifcModel);
+        scene.add(ifcModel)
+        // await setupAllCategories();
+      }
+      );
+    },
+    false
+  );
+}
+
+loadIFC();
+
+// ifcLoader.ifcManager.setWasmPath("../../../");
+// ifcLoader.load("01.ifc", (ifcModel) => {
+//     ifcModels.push(ifcModel);
+//     scene.add(ifcModel)
+// });
 
 
 // Sets up optimized picking
