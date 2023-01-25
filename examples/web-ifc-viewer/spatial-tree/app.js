@@ -139,7 +139,7 @@ const selectMat = new MeshLambertMaterial({
 // console.log(model)
 
 // // 	// Creates subset
-// viewer.IFC.loader.ifcManager.createSubset({
+// IfcViewerAPI.IFC.loader.ifcManager.createSubset({
 // // //	ifcLoader.ifcManager.createSubset({
 // 		modelID: model.modelID,
 // 		ids: [id],
