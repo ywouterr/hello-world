@@ -144,7 +144,6 @@ const selectMat = new MeshLambertMaterial({
 // 		modelID: model.modelID,
 // 		ids: [id],
 // 		material: material,
-// 		applyBVH: true,    
 // 		scene: model.parent,//viewer.scene,
 // 		removePrevious: true
 // 	})
